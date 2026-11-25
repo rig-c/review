@@ -130,7 +130,7 @@ test('closed declaration keys, required fields, null/undefined, duplicate IDs, a
   const {packet, files} = evidence(temp());
   const plan = {steps: [{id: 'step-one', hash: '1'.repeat(64)}]}, subjects = [{kind: 'checkpoint' as const, checkpointId: 'step-one'}];
   for (const raw of [undefined, null, [], [packet, packet], [{...packet, routes: []}],
-    [{...packet, routesText: undefined}], [{...packet, checkpointId: 'other'}], [{...packet, planStepId: 'other'}],
+    [{...packet, routesText: undefined}], [{...packet, planStepId: 'other'}],
     [{...packet, tiles: [packet.tiles[0], packet.tiles[0]]}], [{...packet, table: {...packet.table, rows: []}}],
     [{...packet, table: {...packet.table, label: undefined}}], [{...packet, table: {...packet.table, label: null}}],
     [{...packet, recommendationText: 'x'.repeat(4097)}]]) {
@@ -144,6 +144,20 @@ test('closed declaration keys, required fields, null/undefined, duplicate IDs, a
     expect(() => checkpointEvidenceFields({checkpointEvidence: [copy]}, plan, subjects, files)).toThrow();
   }
   expect(() => checkpointEvidenceFields({checkpointEvidence: [packet]}, plan, subjects, [])).toThrow();
+});
+
+test('#1229 a packet is an ordinary comparison: admitted without a checkpoint subject, refused only on a contradicting one', () => {
+  const {packet, files} = evidence(temp());
+  const plan = {steps: [{id: 'step-one', hash: '1'.repeat(64)}]};
+  for (const subjects of [[], [{kind: 'signoff' as const, stage: 'plan-approved'}], [{kind: 'checkpoint' as const, checkpointId: 'other'}]]) {
+    expect(checkpointEvidenceFields({checkpointEvidence: [packet]}, plan, subjects, files)).toEqual({checkpointEvidence: [packet]});
+  }
+  const alias = {...packet, checkpointId: 'alias'};
+  expect(checkpointEvidenceFields({checkpointEvidence: [alias]}, plan, [], files)).toEqual({checkpointEvidence: [alias]});
+  expect(() => checkpointEvidenceFields({checkpointEvidence: [alias]}, plan,
+    [{kind: 'checkpoint' as const, checkpointId: 'alias', planStepId: 'step-two'}], files)).toThrow('CHECKPOINT_EVIDENCE_INVALID');
+  expect(() => checkpointEvidenceFields({checkpointEvidence: [alias]}, plan, [], files, true)).toThrow('CHECKPOINT_EVIDENCE_INVALID');
+  expect(checkpointEvidenceFields({checkpointEvidence: [packet]}, plan, [], files, true)).toEqual({checkpointEvidence: [packet]});
 });
 
 test('package checkpoint aliases follow admitted subject mapping and daemon derives planStepId', async () => {

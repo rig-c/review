@@ -1458,10 +1458,12 @@ The trusted `JobPublicationReader` package context and the record reader's
 `PlanContext` may declare `checkpointEvidence`. Package-only API@2, API@3 package
 publications in record-and-package mode, and model-free record plan publications
 share this declaration. It is admitted only through the trusted reader and its
-exact work-root-relative file closure. Each packet binds an admitted checkpoint
-subject to an existing plan step. Package aliases use the subject's
-`planStepId ?? checkpointId`. Record checkpoints use the same checkpoint and plan
-step ID. Option-set publications refuse this extension.
+exact work-root-relative file closure. Each packet binds to an existing plan
+step and does not need a declared checkpoint subject ([Review #1229](https://github.com/rig-c/review/issues/1229)).
+When the publication does declare a checkpoint subject with the packet's
+checkpoint ID, its `planStepId ?? checkpointId` must equal the packet's
+`planStepId`. Record packets use the same checkpoint and plan step ID.
+Option-set publications refuse this extension.
 
 The collection contains ordered packets with exactly these fields.
 

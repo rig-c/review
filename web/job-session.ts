@@ -1138,9 +1138,9 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
             checkpointEvidencePair(packet);
             const projection = metadata.checkpointEvidence?.[index];
             const tableUrl = `/api/checkpoint-evidence/${packet.checkpointId}/table`;
+            // #1229: the pair is an ordinary comparison; a record packet names its plan step as its checkpoint.
             if (!projection?.table || !source.plan?.steps.some(step => step.id === packet.planStepId) ||
-                source.subject === 'plan' && !source.subjects.some(subject => subject.kind === 'checkpoint' &&
-                    subject.checkpointId === packet.checkpointId && packet.planStepId === packet.checkpointId) ||
+                source.subject === 'plan' && packet.planStepId !== packet.checkpointId ||
                 sourceSnapshot(projection) !== sourceSnapshot({...packet,
                     tiles: packet.tiles.map((tile, tileIndex) => ({...tile,
                         url: `/api/checkpoint-evidence/${packet.checkpointId}/tiles/${tileIndex}`})),
