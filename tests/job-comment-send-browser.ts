@@ -1,13 +1,17 @@
 /** #1226 direct Bun script; ordinary Nova only. Synthetic scripted job window fixture, owned headless Chromium.
  * Send comments with no ask records one act@10 with no askId; sent rows stay listed as Submitted;
  * a later Request changes carries only rows that were not already sent on their own (CONTRACT §1). EN and KO.
- * Run: bun tests/job-comment-send-browser.ts --out artifacts/job-comment-send-1226
+ * #1242: the direction, parts and record screens carry the same control, headline, hint and save states, and send act@10.
+ * Run: bun tests/job-comment-send-browser.ts --out artifacts/job-comment-send-1226 [--screens rig,direction,parts,record]
  */
 import assert from 'node:assert/strict';
 import {mkdir, mkdtemp, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
+import {finalizeCommentOnlyAct} from '../src/job-act.ts';
+import type {UISubmissionV3} from '../src/job-contract.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
@@ -115,7 +119,85 @@ async function run(lang: 'en' | 'ko') {
   } finally {await page.close?.(); await fixture.close();}
 }
 
-const results = [];
-for (const lang of ['en', 'ko'] as const) results.push(await run(lang));
+type Screen = 'direction' | 'parts' | 'record';
+const hintTail = 'Drafts save locally as you type · nothing is sent until you press Send comments';
+/** #1242: one screen's bar in its no-ask state, one general comment written and sent as act@10. */
+async function runScreen(screen: Screen, lang: 'en' | 'ko') {
+  const catalog = lang === 'en' ? enCatalog : koCatalog;
+  const scripted = screen === 'record' ? null : await scriptedJobWindowFixture({c5Parts: 'mesh'});
+  const record = screen === 'record' ? await recordScreenFixture('checkpoint', false, undefined, undefined, false, true, undefined, false, true) : null;
+  const recordActs: Act[] = [];
+  if (record) {
+    // The record fixture writes asked record acts only; a comment-only act goes through the real act@10 writer.
+    const asked = record.ports.commitUIAct.bind(record.ports);
+    record.ports.commitUIAct = async (job: string, request: Request) => {
+      const input = await request.clone().json() as UISubmissionV3;
+      if (input.kind !== 'comments') return asked(job, request);
+      const act = finalizeCommentOnlyAct({jobId: record.session.jobId, submission: input as never,
+        retained: record.session.retainedSourceV3(input.publicationId) as never, reviewer: {id: 'synthetic-owner', role: 'owner'}});
+      recordActs.push(act as unknown as Act);
+      return {ok: true as const, value: act as never};
+    };
+  }
+  let control: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
+  const page = await launchCdpSession(await mkdtemp(join(tmpdir(), 'review-1242-')), {sendDeadlineMs: 20_000,
+    onEvent(event, send) {if (event.sessionId) control = send;}});
+  try {
+    if (scripted) await scripted.publish(screen as 'direction' | 'parts', screen);
+    const url = new URL(scripted ? scripted.host.ownerUrl : record!.ownerUrl); url.searchParams.set('lang', lang);
+    await page.setViewport(1440, 900);
+    await page.goto(url.href);
+    if (record) record.fake.publish(record.display);
+    await wait(page, `document.body?.dataset.ready==='true'`, 30_000);
+    await wait(page, `!!document.getElementById('send-comments')&&!document.getElementById('send-comments').hidden`);
+    const bar = () => page.evaluate<Record<string, unknown>>(`(()=>{const b=document.getElementById('send-comments'),s=document.getElementById('review-draft-state');
+      const order=[...b.parentElement.children].filter(n=>!n.hidden&&n.tagName==='BUTTON').map(n=>n.id);
+      return {text:b.textContent,disabled:b.disabled,primary:b.classList.contains('primary'),state:s?.textContent,saveState:s?.dataset.saveState,
+        headline:document.getElementById('workspace-ask-headline').textContent,order,
+        hint:document.querySelector('#workspace-communication .review-dialog-header .hint, .review-dialog-header .hint')?.textContent};})()`);
+    const idle = await bar();
+    assert.equal(idle.text, catalog['Send comments'], screen);
+    assert.equal(idle.headline, catalog["We're looking at the work together. Leave your thoughts as comments."], screen);
+    assert.equal(idle.primary, true, screen + ' Send comments leads with no ask');
+    assert.equal(idle.disabled, true, screen + ' nothing to send yet');
+    // One general comment.
+    await wait(page, `!!document.querySelector('[data-comment-general]:not(:disabled)')`);
+    await page.evaluate(`document.querySelector('[data-comment-general]').click()`);
+    await wait(page, `!!document.querySelector('.stage-comment-composer input')`);
+    await page.evaluate(`(()=>{const field=document.querySelector('.stage-comment-composer input');field.focus();field.select();})()`);
+    assert.ok(control, 'CDP page session');
+    await control('Input.insertText', {text: words[lang][1]});
+    await page.evaluate(`document.querySelector('.stage-comment-composer').requestSubmit()`);
+    await wait(page, `!document.querySelector('.stage-comment-composer')`);
+    await wait(page, `!document.getElementById('send-comments').disabled`);
+    const written = await bar();
+    assert.equal(written.state, catalog['Not submitted'], screen + ' ' + JSON.stringify(written));
+    assert.equal(written.hint, catalog[hintTail], screen + ' hint tail');
+    await writeFile(join(output, `${screen}-${lang}-idle.png`), await page.screenshot());
+    await page.evaluate(`document.getElementById('send-comments').click()`);
+    await wait(page, `document.getElementById('review-draft-state')?.dataset.saveState==='saved'`);
+    const sentBar = await bar();
+    assert.equal(sentBar.state, catalog['Submitted'], screen);
+    assert.equal(sentBar.disabled, true, screen + ' nothing left to send');
+    const sent = record ? recordActs : (await acts(scripted!)).filter(act => act.kind === 'comments');
+    assert.equal(sent.length, 1, screen + ' ' + JSON.stringify(sent.map(act => act.schema)));
+    assert.equal(sent[0]!.schema, 'rig-review/act@10');
+    assert.equal('askId' in sent[0]!, false);
+    assert.deepEqual((sent[0]!.value.comments as {text: string}[]).map(comment => comment.text), [words[lang][1]]);
+    const submitted = await page.evaluate<boolean>(`[...document.querySelectorAll('[data-comment-id]')].some(row=>row.textContent.includes(${JSON.stringify(words[lang][1])})&&
+      [...row.querySelectorAll('span')].some(span=>span.textContent===${JSON.stringify(catalog['Submitted'])}))`);
+    assert.equal(submitted, true, screen + ' COMMENT_ROW_NOT_SUBMITTED');
+    await writeFile(join(output, `${screen}-${lang}-sent.png`), await page.screenshot());
+    return {screen, lang, act10: sent[0]!.schema, idle: {...idle, hint: undefined}, written, sent: sentBar};
+  } finally {await page.close?.(); await scripted?.close(); await record?.close();}
+}
+
+const screensAt = Bun.argv.indexOf('--screens');
+const screens = (screensAt < 0 ? 'rig,direction,parts,record' : Bun.argv[screensAt + 1]!).split(',');
+const results: unknown[] = [];
+for (const lang of ['en', 'ko'] as const) {
+  if (screens.includes('rig')) results.push(await run(lang));
+  for (const screen of ['direction', 'parts', 'record'] as const) if (screens.includes(screen)) results.push(await runScreen(screen, lang));
+}
 await writeFile(join(output, 'report.json'), JSON.stringify(results, null, 2) + '\n');
 console.log('JOB_COMMENT_SEND_1226 ' + JSON.stringify(results));

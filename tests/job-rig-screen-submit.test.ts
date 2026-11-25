@@ -644,3 +644,48 @@ test('#1231 Send comments carries pending Edit Mesh and chest drafts as act@10 c
     await f.close();
   }
 });
+
+test('#1242 the parts and record screens send act@10: parts pins keep their anchor, a record host exposes Send comments', async () => {
+  const savedDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {configurable: true, writable: true,
+    value: {title: '', body: null, getElementById: () => null, querySelector: () => null, createElement: () => ({style: {}, dataset: {}})}});
+  try {
+    const issue = {schema: 'rig-review-parts-issue/1', id: 'pin-1', summary: 'The left sleeve edge is ragged.'};
+    for (const kind of ['parts', 'record'] as const) {
+      const {publication} = fixturePublication(), requests: UISubmissionV3[] = [];
+      const receipt = {displayedNonce: 'nonce-1242'};
+      const prepared = {jobRigScreen: true, display: {publication} as unknown as DisplayPublicationV3,
+        entry: 'http://127.0.0.1:4318/jobs/window-fixture/', checkpoints: new Set<string>(),
+        ...kind === 'parts' ? {parts: {mode: 'parts', sourceHash: publication.source.sourceHash}} :
+          {record: {inspection: {checkpointEvidence: []}, forms: new Map(), picture: null}}} as unknown as JobRigScreenPrepared;
+      const screen = createJobRigScreen({host: {classList: {remove() {}}, replaceChildren() {}} as unknown as HTMLElement,
+        pageId: 'page-1242', access: {capability: 'synthetic-ui', headers: () => new Headers()},
+        window: {
+          state: () => ({pending: [], receipt, generation: 3, preparing: false, closed: false}) as never,
+          async submit(input) {requests.push(structuredClone(input)); return {ok: true, value: {schema: 'rig-review/act@10', value: {comments: []}}} as never;},
+        }, routes: () => ({entry: prepared.entry, api: path => path}), refusal: error => String(error), translate: key => key,
+        async load() {rigHost()!.attach({message() {}} as unknown as JobRigMeshScreen); rigHost()!.displayed();}});
+      screen.commit(prepared);
+      await screen.painted(prepared, new AbortController().signal);
+      const host = rigHost()!;
+      expect(typeof host.submitComments).toBe('function');
+      // A parts host with no ask takes general comments; the record binds its own publication.
+      if (kind === 'parts') expect((host as {verdictComments?: {available(): boolean}}).verdictComments!.available()).toBe(true);
+      else expect(host.record?.publicationId).toBe(publication.publicationId);
+      expect(await host.submitComments!([], ['General note.'], kind === 'parts' ? [issue as never] : [])).toBe('job.saved');
+      expect(requests).toHaveLength(1);
+      const request = requests[0] as Extract<UISubmissionV3, {kind: 'comments'}>;
+      expect(request.kind).toBe('comments');
+      expect('askId' in request).toBe(false);
+      expect(request.publicationId).toBe(publication.publicationId);
+      expect(request.displayedNonce).toBe('nonce-1242');
+      expect(request.value.comments as unknown).toEqual(kind === 'parts' ?
+        [{text: issue.summary, anchor: {schema: issue.schema, id: issue.id}}, {text: 'General note.'}] : [{text: 'General note.'}]);
+      setRigHost(null);
+    }
+  } finally {
+    setRigHost(null);
+    if (savedDocument) Object.defineProperty(globalThis, 'document', savedDocument);
+    else Reflect.deleteProperty(globalThis, 'document');
+  }
+});
