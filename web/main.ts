@@ -2131,10 +2131,7 @@ async function showCheckpointPair(mode:CheckpointPairMode):Promise<void> {
    }));
   }catch(error){
    state.difference=null;
-   if(checkpointPair===state&&generation===state.generation){
-    if(state.mode==='difference')void showCheckpointPair('after');
-    message(errorText(error),true);renderLayout();
-   }
+   if(checkpointPair===state&&generation===state.generation){message(errorText(error),true);renderLayout();}
    return;
   }
  }
