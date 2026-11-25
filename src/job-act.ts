@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
-  JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
+  JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS,
   type ActV3, type JobAct, type JobComment, type JobCommentsAct, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
   type JobMeshEdit, type PendingAskV3, type RecordUIAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
@@ -141,12 +141,6 @@ export function bindJobRecordAsk(subject: unknown, retained: JobRetainedRecordSo
       }
       return source;
     }
-    case 'signoff': {
-      if (source.subject !== 'plan' || !source.plan.steps.length) {
-        throw new JobError('JOB_ASK_INVALID');
-      }
-      return source;
-    }
   }
   throw new JobError('JOB_ASK_INVALID');
 }
@@ -189,9 +183,6 @@ export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRet
         source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ASK_INVALID');
       return source;
     case 'signoff':
-      if (!declared) throw new JobError('JOB_ASK_INVALID');
-      if ((JOB_PLAN_BOUND_SIGNOFF_STAGES as readonly string[]).includes(subject.stage)) requirePlan(source);
-      return source;
     case 'reopen':
       throw new JobError('JOB_ASK_INVALID');
   }
@@ -371,7 +362,7 @@ export function prepareJobRecordAct(options: {
   ) {
     throw new JobError('JOB_REQUEST_INVALID');
   }
-  if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(rawSubmission.kind)) {
+  if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(rawSubmission.kind) || rawSubmission.kind === 'signoff') {
     throw new JobError('JOB_ACT_KIND_DISABLED');
   }
   if (ask.status !== 'pending') throw new JobError('JOB_ASK_SUPERSEDED');
@@ -507,29 +498,8 @@ export function prepareJobRecordAct(options: {
         },
       });
     }
-    case 'signoff': {
-      if (boundSource.subject !== 'plan') throw new JobError('JOB_ACT_SOURCE_STALE');
-      const value = actObject(submission.value, ['stage', 'decision', 'words']);
-      if (
-        !('stage' in value) ||
-        !('decision' in value) ||
-        !('words' in value) ||
-        value.stage !== askSubject.stage ||
-        value.decision !== 'approved'
-      ) {
-        throw new JobError('JOB_ACT_INVALID');
-      }
-      return parseRecordAct({
-        ...envelope,
-        kind: 'signoff',
-        source: actSource,
-        value: {
-          stage: askSubject.stage,
-          decision: 'approved',
-          words: words(value.words),
-        },
-      });
-    }
+    case 'signoff':
+      throw new JobError('JOB_ACT_KIND_DISABLED');
   }
   throw new JobError('JOB_ACT_INVALID');
 }
@@ -594,6 +564,9 @@ export function finalizeJobAct(options: {
       actId: options.actId,
       at: options.at,
     });
+  }
+  if ((kind as string) === 'signoff' || (options.ask.subject.kind as string) === 'signoff') {
+    throw new JobError('JOB_ACT_KIND_DISABLED');
   }
   const { submission, ask, retained, reviewer } = options as {
     readonly jobId: string;
@@ -735,13 +708,7 @@ export function finalizeJobAct(options: {
         stage: ask.subject.stage, verdict, comments: submittedComments(value, true),
       } });
     }
-    case 'signoff': {
-      const value = jobObject(submission.value, ['stage', 'decision', 'words']);
-      if (ask.subject.kind !== 'signoff' || value.stage !== ask.subject.stage || value.decision !== 'approved') {
-        throw new JobError('JOB_ACT_INVALID');
-      }
-      return commentsAct({ ...comments, kind: 'signoff', source,
-        value: { stage: ask.subject.stage, decision: 'approved', comments: noteComments(words(value.words)) } });
-    }
+    case 'signoff':
+      throw new JobError('JOB_ACT_KIND_DISABLED');
   }
 }

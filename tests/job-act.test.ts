@@ -168,17 +168,22 @@ test('pending checkpoint and browser-supplied authority/plan mapping are refused
   if (failed.ok) { expect(failed.value.kind).toBe('checkpoint'); expect(failed.value.value).toHaveProperty('outcome', 'fail'); }
 });
 
-test('all three plan sign-off stages require published IDs/hashes and accept only approval with exact words', async () => {
-  const f = await fixture(), publication = await f.publish();
+test('#1227 fresh package sign-off asks refuse JOB_ASK_INVALID and page submissions refuse JOB_ACT_KIND_DISABLED while historical act@2 plan bounds stay', async () => {
+  const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
+  const verdictAsk = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
   for (const stage of ['plan-approved', 'rigging-interview', 'post-interview']) {
-    const ask = await f.ask(publication, { kind: 'signoff', stage }), page = await f.display(publication);
-    const input = { ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-      submissionId: stage, kind: 'signoff', value: { stage, decision: 'approved', words: '' } };
-    const rejected = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, value: { ...input.value, decision: 'changes-requested' } }));
-    expect(rejected.ok).toBe(false);
-    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-    expect(saved.ok).toBe(true);
-    if (saved.ok) expect(saved.value.source.plan?.steps).toEqual([{ id: 'step-one', hash: '1'.repeat(64) }]);
+    const asked = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+      idempotencyKey: 'refused-' + stage, publicationId: publication.publicationId, subject: { kind: 'signoff', stage } })).json();
+    expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+    const submitted = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: verdictAsk.askId,
+      expectedGeneration: f.session.status().generation, submissionId: stage, kind: 'signoff',
+      value: { stage, decision: 'approved', words: '' } }));
+    expect(submitted).toMatchObject({ ok: false, error: { code: 'JOB_ACT_KIND_DISABLED' } });
+    const historical = commentsAct();
+    historical.kind = 'signoff';
+    historical.value = { stage, decision: 'approved', comments: [] };
+    expect(parseCommentsAct(historical).source.plan?.steps).toEqual([{ id: 'step-one', hash: '1'.repeat(64) }]);
+    expect(() => parseCommentsAct({ ...historical, source: { ...historical.source, plan: null } })).toThrow('JOB_ACT_INVALID');
   }
   const missing = f.getContext();
   f.setContext({ ...missing, plan: null });
@@ -766,49 +771,43 @@ for (const [field, value] of [['sourceHash', 'wrong-source'], ['askId', 'other-a
 }
 
 
-test('#794 package direction signoff without a plan remains valid and its historical act parses byte-identically', async () => {
+test('#794 / #1227 package direction signoff still parses on publish and historical acts while fresh asks and submissions refuse', async () => {
   const f = await fixture(), context = f.getContext();
   f.setContext({...context, plan: null, subjects: [{kind: 'signoff', stage: 'direction-review'}]});
-  const publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'signoff', stage: 'direction-review'}), page = await f.display(publication);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
+  const publication = await f.publish(), page = await f.display(publication);
+  expect(publication.source.plan).toBeNull();
+  const asked = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+    idempotencyKey: 'direction-signoff-ask', publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'direction-review'}})).json();
+  expect(asked).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: '00000000-0000-4000-8000-000000000001',
     expectedGeneration: f.session.status().generation, submissionId: 'direction-signoff', kind: 'signoff',
     value: {stage: 'direction-review', decision: 'approved', words: '  Original direction approval\n'}}));
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error(saved.error.code);
-  expect(saved.value.source.plan).toBeNull();
-  expect(saved.value.value).toEqual({stage: 'direction-review', decision: 'approved', comments: [{text: '  Original direction approval\n'}]});
-  const bytes = f.session.readActExport(saved.value.actId, false).toString();
-  expect(bytes).toBe(JSON.stringify(saved.value));
-  expect(JSON.stringify(parseCommentsAct(JSON.parse(bytes)))).toBe(bytes);
+  expect(saved).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
 
-  // A pre-existing act@6 package signoff is independent of the new record allowlist.
+  // A pre-existing act@6 package signoff is independent of the new record allowlist and still parses byte-identically.
   const historical = {...commentsAct(), kind: 'signoff',
-    value: {stage: 'direction-review', decision: 'approved', comments: []}};
+    value: {stage: 'direction-review', decision: 'approved', comments: [{text: '  Original direction approval\n'}]}};
   historical.source.plan = null;
   const historicalBytes = JSON.stringify(historical);
   expect(JSON.stringify(parseCommentsAct(JSON.parse(historicalBytes)))).toBe(historicalBytes);
 });
 
-test('#800 package interview signoff without a plan remains valid and its historical act parses byte-identically', async () => {
+test('#800 / #1227 package interview signoff still parses on publish and historical acts while fresh asks and submissions refuse', async () => {
   const f = await fixture(), context = f.getContext();
   f.setContext({...context, plan: null, subjects: [{kind: 'signoff', stage: 'interview'}]});
-  const publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'signoff', stage: 'interview'}), page = await f.display(publication);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
+  const publication = await f.publish(), page = await f.display(publication);
+  expect(publication.source.plan).toBeNull();
+  const asked = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+    idempotencyKey: 'interview-signoff-ask', publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'interview'}})).json();
+  expect(asked).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: '00000000-0000-4000-8000-000000000002',
     expectedGeneration: f.session.status().generation, submissionId: 'interview-signoff', kind: 'signoff',
     value: {stage: 'interview', decision: 'approved', words: '  Original interview approval\n'}}));
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error(saved.error.code);
-  expect(saved.value.source.plan).toBeNull();
-  expect(saved.value.value).toEqual({stage: 'interview', decision: 'approved', comments: [{text: '  Original interview approval\n'}]});
-  const bytes = f.session.readActExport(saved.value.actId, false).toString();
-  expect(bytes).toBe(JSON.stringify(saved.value));
-  expect(JSON.stringify(parseCommentsAct(JSON.parse(bytes)))).toBe(bytes);
+  expect(saved).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
 
-  // A pre-existing act@6 package signoff is independent of the new record allowlist.
+  // A pre-existing act@6 package signoff is independent of the new record allowlist and still parses byte-identically.
   const historical = {...commentsAct(), kind: 'signoff',
-    value: {stage: 'interview', decision: 'approved', comments: []}};
+    value: {stage: 'interview', decision: 'approved', comments: [{text: '  Original interview approval\n'}]}};
   historical.source.plan = null;
   const historicalBytes = JSON.stringify(historical);
   expect(JSON.stringify(parseCommentsAct(JSON.parse(historicalBytes)))).toBe(historicalBytes);

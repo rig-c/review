@@ -95,10 +95,12 @@ async function rawAct(f: Awaited<ReturnType<typeof fixture>>, actId: string) {
   return payload;
 }
 
-test('checkpoint and signoff UI acts are written as act@6 and read back through the public decoder', async () => {
+test('checkpoint UI acts are written as act@6 while fresh signoff asks/acts refuse and historical act@6 signoff decodes', async () => {
   const f = await fixture(), publication = await f.publish();
   const checkpointAsk = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
-  const signoffAsk = await f.ask(publication, {kind: 'signoff', stage: 'plan-approved'});
+  const refusedAsk = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+    idempotencyKey: 'act6-signoff-ask', publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'plan-approved'}})).json();
+  expect(refusedAsk).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
   const page = await f.display(publication);
   const checkpoint = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: checkpointAsk.askId,
     expectedGeneration: f.session.status().generation, submissionId: 'act6-checkpoint', kind: 'checkpoint',
@@ -108,13 +110,13 @@ test('checkpoint and signoff UI acts are written as act@6 and read back through 
     checkpointId: 'step-one', planStepId: 'step-one', outcome: 'fail',
     comments: [{text: '  Exact 한글\n', anchor: {checkpointId: 'step-one', planStepId: 'step-one'}}]}});
   roundTrip(f, checkpoint.value);
-  const signoff = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: signoffAsk.askId,
+  const signoff = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: checkpointAsk.askId,
     expectedGeneration: f.session.status().generation, submissionId: 'act6-signoff', kind: 'signoff',
     value: {stage: 'plan-approved', decision: 'approved', words: ' \n원문 그대로\t '}}));
-  if (!signoff.ok) throw new Error(signoff.error.code);
-  expect(signoff.value).toMatchObject({schema: 'rig-review/act@6', kind: 'signoff',
+  expect(signoff).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+  const historicalSignoff = parseCommentsAct({...checkpoint.value, actId: 'historical-act6-signoff', kind: 'signoff',
     value: {stage: 'plan-approved', decision: 'approved', comments: [{text: ' \n원문 그대로\t '}]}});
-  roundTrip(f, signoff.value);
+  expect(JSON.stringify(parseCommentsAct(JSON.parse(JSON.stringify(historicalSignoff))))).toBe(JSON.stringify(historicalSignoff));
 });
 
 test('rig verdict keeps its still under act@6 and reads back through the public decoder', async () => {
