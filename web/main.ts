@@ -243,7 +243,7 @@ const recordComments:CommentRow[]=[];
 let recordCommentKey='';
 const submittedDirectionComments=new Set<string>();
 /** #1242: record rows as an answered record act carried them, by id; a row written or edited after it is unsent. */
-const answeredRecordRows=new Map<string,string>();let lastRecordSubmission:'sending'|'submitted'|null=null;
+const answeredRecordRows=new Map<string,string>();let recordAnswered=false;
 /** #1242: pinned parts issues an answered parts verdict carried (startParts owns the set). */
 let partsSubmittedIssues:ReadonlySet<string>=new Set();
 let view: 'compare' | 'reference' | 'rig' = 'compare';
@@ -440,9 +440,10 @@ sendComments.onclick=async()=>{
 function renderDraftState(): void {
   const recordSubmission=host?.recordSubmission?.();
   // #1242: the rows an answered record act carried are not sent again by Send comments.
-  if(typeof answeredRecordRows!=='undefined'){
-    if(recordSubmission==='submitted'&&lastRecordSubmission!=='submitted')for(const row of recordComments)answeredRecordRows.set(row.id,JSON.stringify(row));
-    lastRecordSubmission=recordSubmission??null;
+  if(typeof answeredRecordRows!=='undefined'&&host?.record){
+    const answered=recordSubmission==='submitted'||answerSaved;
+    if(answered&&!recordAnswered)for(const row of recordComments)answeredRecordRows.set(row.id,JSON.stringify(row));
+    recordAnswered=answered;
   }
   if(recordSubmission&&!(recordSubmission==='submitted'&&typeof commentHost==='function'&&commentHost()&&hasUnsentContent())){
     rigInspector.actBar.setSaveState(recordSubmission==='sending'?{kind:'saving',text:'Sending'}:{kind:'saved',text:'Submitted'});
@@ -459,7 +460,9 @@ function renderDraftState(): void {
   // "Saving…", and an answered verdict keeps its outcome until a new comment is written.
   if(typeof commentHost==='function'&&commentHost()&&!(saving&&!commentSending)&&!draftConflict&&!actReadOnly&&!(draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus))){
     const unsent=hasUnsentContent();
+    // A saved record answer keeps its outcome until a new comment is written, as an answered verdict does.
     rigInspector.actBar.setSaveState(saving?{kind:'saving',text:'Sending'}:!unsent&&live&&host?.verdictAnswered?.()?{kind:'saved',text:live}:
+      !unsent&&typeof answerSaved!=='undefined'&&answerSaved?{kind:'saved',text:'Answer saved'}:
       !unsent&&(commentSendState==='sent'||!!session?.updatedAt||Object.keys(sentAloneRows()).length>0)?{kind:'saved',text:'Submitted'}:{kind:'unsaved',text:'Not submitted'});
     return;
   }

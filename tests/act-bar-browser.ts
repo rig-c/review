@@ -177,17 +177,12 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    }
    await until(page,`document.querySelector('#save').hidden&&document.querySelector('#workspace-pending-ask').hidden`);
    const done=await page.evaluate<any>(`({question:document.querySelector('#workspace-ask-headline').textContent,primary:[...document.querySelectorAll('#workspace-review-act button.primary')].filter(n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])')).map(n=>n.id)})`);
-   if(mode==='rig'){
-    // #1226 owner ruling: with no ask the live rig row stays, with the no-ask line and Send comments as its one answer.
-    assert.deepEqual(done.primary,['send-comments']);
-    assert.equal(done.question,lang==='ko'?'작업물을 같이 보고 있어요. 의견은 코멘트로 남겨 주세요.':"We're looking at the work together. Leave your thoughts as comments.");
-    assert.equal(await page.evaluate(`document.getElementById('workspace-act-row').hidden`),false);
-    assert.deepEqual(await page.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['review-draft-state']);
-   }else{
-    assert.deepEqual(done.primary,[]);
-    assert.equal(await page.evaluate(`document.getElementById('workspace-act-row').hidden`),true);
-    assert.deepEqual(await page.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty']);
-   }
+   // #1226 owner ruling: with no ask the live rig row stays, with the no-ask line and Send comments as its one answer.
+   // #1242 owner ruling: the direction, parts and record screens hold the same row.
+   assert.deepEqual(done.primary,['send-comments']);
+   assert.equal(done.question,lang==='ko'?'작업물을 같이 보고 있어요. 의견은 코멘트로 남겨 주세요.':"We're looking at the work together. Leave your thoughts as comments.");
+   assert.equal(await page.evaluate(`document.getElementById('workspace-act-row').hidden`),false);
+   assert.deepEqual(await page.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['review-draft-state']);
    await writeFile(join(out,`${mode}-${lang}-submitted.png`),await page.screenshot());
   }
   observations.push({mode,...state});
