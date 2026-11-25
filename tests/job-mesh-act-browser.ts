@@ -562,7 +562,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       assert.equal(carrier.publicationId, fixture.publication.publicationId);
       assert.deepEqual(carrier.source, fixture.publication.source);
       assert.equal(carrier.value.carriers?.length, 1);
-      const verdict = parseCommentsAct(finalized);
+      const verdict = finalized.schema === JOB_COMMENT_CONTEXT_ACT_SCHEMA ? parseContextCommentsAct(finalized) : parseCommentsAct(finalized);
       assert.equal(verdict.kind === 'review-verdict' && verdict.value.verdict, 'changes-requested');
     }
     if (chestSeed) {
