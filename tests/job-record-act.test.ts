@@ -166,13 +166,19 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       bindJobRecordAsk({ kind: 'mesh-edit' }, optRetained),
     ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
 
-    // Binds declared checkpoints and plan-bound signoffs on plan source
+    // Binds declared checkpoints; declared signoffs still parse on the source but refuse fresh asks (#1227)
     expect(bindJobRecordAsk({ kind: 'checkpoint', checkpointId: 'step_layout' }, planRetained)).toEqual(
       planRetained.source,
     );
-    expect(bindJobAsk({ kind: 'signoff', stage: 'plan-approved' }, planRetained)).toEqual(planRetained.source);
-    expect(bindJobAsk({ kind: 'signoff', stage: 'rigging-interview' }, planRetained)).toEqual(planRetained.source);
-    expect(bindJobAsk({ kind: 'signoff', stage: 'post-interview' }, planRetained)).toEqual(planRetained.source);
+    for (const stage of ['plan-approved', 'rigging-interview', 'post-interview'] as const) {
+      expect(planRetained.source.subjects).toContainEqual({ kind: 'signoff', stage });
+      expect(() => bindJobRecordAsk({ kind: 'signoff', stage }, planRetained)).toThrow(
+        expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
+      );
+      expect(() => bindJobAsk({ kind: 'signoff', stage }, planRetained)).toThrow(
+        expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
+      );
+    }
 
     // Refuses checkpoint planStepId alias and non-record signoff stages
     expect(() =>
@@ -482,40 +488,55 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
         'pub_plan_1',
         `ask_${stage}`,
         signoffSubject,
-        bindJobRecordAsk(signoffSubject, retained),
+        retained.source,
       );
-      const signoffAct = prepareJobRecordAct({
-        jobId: 'job_plan_1',
-        submission: {
-          publicationId: 'pub_plan_1',
-          askId: `ask_${stage}`,
-          pageId: 'page_1',
-          displayedNonce: 'nonce_1',
-          expectedGeneration: 2,
-          submissionId: `sub_${stage}`,
-          kind: 'signoff',
-          value: {
-            stage,
-            decision: 'approved',
-            words: `Approved ${stage}`,
+      expect(() =>
+        prepareJobRecordAct({
+          jobId: 'job_plan_1',
+          submission: {
+            publicationId: 'pub_plan_1',
+            askId: `ask_${stage}`,
+            pageId: 'page_1',
+            displayedNonce: 'nonce_1',
+            expectedGeneration: 2,
+            submissionId: `sub_${stage}`,
+            kind: 'signoff',
+            value: {
+              stage,
+              decision: 'approved',
+              words: `Approved ${stage}`,
+            },
           },
-        },
-        ask: signoffAsk,
-        retained,
-        reviewer: { id: 'delegate_reviewer', role: 'delegate' },
+          ask: signoffAsk,
+          retained,
+          reviewer: { id: 'delegate_reviewer', role: 'delegate' },
+          actId: `act_${stage}`,
+          at: '2026-11-08T12:10:00.000Z',
+        }),
+      ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
+
+      const { directionReview: _directionReview, ...actSource } = retained.source;
+      const storedSignoffAct = {
+        schema: JOB_RECORD_ACT_SCHEMA,
         actId: `act_${stage}`,
+        jobId: 'job_plan_1',
+        askId: `ask_${stage}`,
+        publicationId: 'pub_plan_1',
+        kind: 'signoff' as const,
+        authority: {
+          actor: 'human' as const,
+          channel: 'review-ui' as const,
+          reviewer: { id: 'delegate_reviewer', role: 'delegate' as const },
+        },
         at: '2026-11-08T12:10:00.000Z',
-      });
-      expect(signoffAct.schema).toBe(JOB_RECORD_ACT_SCHEMA);
-      expect(signoffAct.kind).toBe('signoff');
-      if (signoffAct.kind === 'signoff') {
-        expect(signoffAct.value).toEqual({
+        source: actSource,
+        value: {
           stage,
-          decision: 'approved',
+          decision: 'approved' as const,
           words: `Approved ${stage}`,
-        });
-      }
-      expect(JSON.stringify(parseRecordAct(signoffAct))).toBe(JSON.stringify(signoffAct));
+        },
+      };
+      expect(JSON.stringify(parseRecordAct(storedSignoffAct))).toBe(JSON.stringify(storedSignoffAct));
     }
   });
 

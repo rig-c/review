@@ -1,6 +1,7 @@
 import { expect, spyOn, test } from 'bun:test';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createJobHostPorts } from '../src/job-api.ts';
+import { createJobHostPorts, jobHash } from '../src/job-api.ts';
 import { createJobFront } from '../src/job-front.ts';
 import { JOB_API_SCHEMA, JOB_API_V3_SCHEMA, type EventV3 } from '../src/job-contract.ts';
 import { startJobHost, type JobHostOptions, type JobProgressLineV3, type JobProgressV3 } from '../src/job-host.ts';
@@ -11,17 +12,27 @@ import { createSyntheticPlanRecordWorkspace, createSyntheticRecordReader } from 
 
 async function progressFixture() {
   const f = await jobFixture();
-  // #1235: the plan's sample subjects are its signoffs; checkpoint is no longer a sample subject.
-  const workspace = createSyntheticPlanRecordWorkspace(f.root, { subjects: [
-    { kind: 'signoff', stage: 'plan-approved' }, { kind: 'signoff', stage: 'rigging-interview' },
-    { kind: 'signoff', stage: 'post-interview' }] });
-  const reader = createSyntheticRecordReader({ onPlan: () => workspace.context });
+  const packageRecord = { path: 'record.json', sha256: jobHash(await readFile(join(f.root, 'record.json'))) } as const;
+  const packageResult = { kind: 'package' as const, path: 'out', selector: { kind: 'rig' as const, version: 1 } };
+  let planContext: ReturnType<typeof createSyntheticPlanRecordWorkspace>['context'] | undefined;
+  const reader = createSyntheticRecordReader({ onPlan: () => planContext! });
   const stateDir = join(f.scratch, 'v3-progress');
   const options: JobHostOptions = {
-    root: f.root, stateDir, fingerprint: '987-progress', reviewer: { id: 'declared-owner', role: 'owner' },
+    root: f.root, stateDir, fingerprint: '9'.repeat(64), reviewer: { id: 'declared-owner', role: 'owner' },
+    readPublished: async () => f.getContext(), readerId: 'synthetic-progress-pkg-reader/1',
+    partsEnumerator: f.partsEnumerator, partsEnumeratorId: 'synthetic-progress-parts/1',
     readRecordPublished: reader.reader, recordReaderId: 'synthetic-progress-reader/1',
   };
-  return { f, workspace, options };
+  return {
+    f, packageRecord, packageResult, options,
+    // #1227: checkpoint until #1229 retires record asks
+    writePlanRecord() {
+      const workspace = createSyntheticPlanRecordWorkspace(f.root, { subjects: [
+        { kind: 'checkpoint', checkpointId: 'step_layout' }, { kind: 'checkpoint', checkpointId: 'step_weights' }] });
+      planContext = workspace.context;
+      return workspace;
+    },
+  };
 }
 
 function agentClient(session: JobSession, origin: string, ports = createJobHostPorts(session, origin)) {
@@ -109,7 +120,7 @@ test('#987 V3 progress closes the request shape and enforces the 1024-byte HTTP 
 });
 
 test('#987 only committed publish, ask, ask-batch and close clear the progress slot', async () => {
-  const { f, options, workspace } = await progressFixture();
+  const { f, packageRecord, packageResult, options, writePlanRecord } = await progressFixture();
   const session = new JobSession(options);
   const api = agentClient(session, f.origin);
   const store = new JobStore<{ progress?: JobProgressV3; events: EventV3[]; replays: object }>(options.stateDir, { readonly: true });
@@ -136,8 +147,8 @@ test('#987 only committed publish, ask, ask-batch and close clear the progress s
     expectProgress(await pageSnapshot(), session.jobId,
       { seq: 2, phase: 'build', text: 'reading', step: { i: 1, n: 3 }, at, generation: 0 });
 
-    const publish = { verb: 'publish', expectedGeneration: 0, idempotencyKey: 'progress-publish', result: workspace.result,
-      freeze: { kind: 'producer-held', holdId: 'progress-test', record: workspace.record } };
+    const publish = { verb: 'publish', expectedGeneration: 0, idempotencyKey: 'progress-publish', result: packageResult,
+      freeze: { kind: 'producer-held', holdId: 'progress-test', record: packageRecord } };
     const published = await api.call(publish);
     expect(published.ok).toBe(true);
     expect(snapshot().data.progress).toBeUndefined();
@@ -149,8 +160,8 @@ test('#987 only committed publish, ask, ask-batch and close clear the progress s
     expect((await api.call(publish)).value).toEqual(published.value);
     expect(snapshot().data.progress?.seq).toBe(3);
     const publicationId = published.value.publicationId;
-    const [subject, ...subjects] = workspace.context.subjects;
-    const ask = { verb: 'ask', expectedGeneration: 1, idempotencyKey: 'progress-ask', publicationId, subject };
+    const ask = { verb: 'ask', expectedGeneration: 1, idempotencyKey: 'progress-ask', publicationId,
+      subject: { kind: 'review-verdict', stage: 'rig-review' } };
     expect((await api.call({ ...ask, expectedGeneration: 0 })).error.code).toBe('JOB_GENERATION_STALE');
     expect(snapshot().data.progress?.at).toBe(newer.value.at);
     const asked = await api.call(ask);
@@ -164,19 +175,28 @@ test('#987 only committed publish, ask, ask-batch and close clear the progress s
       submissionId: 'progress-act', kind: 'comments', value: { comments: [{ text: 'progress comment' }] } });
     expect(act.kind).toBe('comments');
     expect(snapshot().data.progress?.seq).toBe(4);
-    const batch = { verb: 'ask-batch', expectedGeneration: 3, idempotencyKey: 'progress-batch', publicationId, subjects };
+
+    // #1227: checkpoint until #1229 retires record asks (`ask-batch` is record-only in production).
+    const workspace = writePlanRecord();
+    const recordPublished = await api.call({ verb: 'publish', expectedGeneration: 3, idempotencyKey: 'progress-record-publish',
+      result: workspace.result, freeze: { kind: 'producer-held', holdId: 'progress-record', record: workspace.record } });
+    expect(recordPublished.ok).toBe(true);
+    expect(snapshot().data.progress).toBeUndefined();
+    await api.progress(5);
+    const batch = { verb: 'ask-batch', expectedGeneration: 4, idempotencyKey: 'progress-batch',
+      publicationId: recordPublished.value.publicationId, subjects: workspace.context.subjects };
     const batched = await api.call(batch);
     expect(batched.ok).toBe(true);
     expect(snapshot().data.progress).toBeUndefined();
-    await api.progress(5);
+    await api.progress(6);
     expect((await api.call(batch)).value).toEqual(batched.value);
-    expect(snapshot().data.progress?.seq).toBe(5);
+    expect(snapshot().data.progress?.seq).toBe(6);
 
     const beforeClose = await api.next();
     const close = { verb: 'close', expectedGeneration: beforeClose.generation, idempotencyKey: 'progress-close', reason: 'test complete' };
     expect((await api.call(close)).ok).toBe(true);
+    expect(await api.progress(7)).toMatchObject({ ok: false, error: { code: 'JOB_CLOSED' } });
     expect(await api.progress(6)).toMatchObject({ ok: false, error: { code: 'JOB_CLOSED' } });
-    expect(await api.progress(5)).toMatchObject({ ok: false, error: { code: 'JOB_CLOSED' } });
     expectProgress(await pageSnapshot(beforeClose.value.cursor), session.jobId, null);
     const next = await api.next(beforeClose.value.cursor);
     expect(next.value.events.map((event: EventV3) => event.type)).toEqual(['closed']);
@@ -185,7 +205,7 @@ test('#987 only committed publish, ask, ask-batch and close clear the progress s
 });
 
 test('#987 a progress commit racing the publication transaction preserves semantic CAS', async () => {
-  const { f, options, workspace } = await progressFixture();
+  const { f, packageRecord, packageResult, options } = await progressFixture();
   const session = new JobSession(options);
   const attached = JobSession.openReadOnly(options, session.jobId);
   const api = agentClient(session, f.origin);
@@ -198,7 +218,7 @@ test('#987 a progress commit racing the publication transaction preserves semant
   });
   try {
     const published = await api.call({ verb: 'publish', expectedGeneration: 0, idempotencyKey: 'concurrent-publish',
-      result: workspace.result, freeze: { kind: 'producer-held', holdId: 'progress-test', record: workspace.record } });
+      result: packageResult, freeze: { kind: 'producer-held', holdId: 'progress-test', record: packageRecord } });
     expect(await progress).toMatchObject({ status: 'accepted', seq: 1 });
     expect(published).toMatchObject({ ok: true, generation: 1 });
     expect(store.get(session.jobId).data).not.toHaveProperty('progress');
@@ -207,7 +227,7 @@ test('#987 a progress commit racing the publication transaction preserves semant
 });
 
 test('#987 an attached publisher persists into the owner stream, including a coalesced trailing update', async () => {
-  const { f, options, workspace } = await progressFixture();
+  const { f, packageRecord, packageResult, options } = await progressFixture();
   const owner = await startJobHost(options);
   const jobId = owner.session.jobId;
   const api = agentClient(owner.session, owner.origin, owner.ports);
@@ -260,7 +280,7 @@ test('#987 an attached publisher persists into the owner stream, including a coa
     const event = iterator.next();
     try {
       const published = await resumed.call({ verb: 'publish', expectedGeneration: 0, idempotencyKey: 'new-painting',
-        result: workspace.result, freeze: { kind: 'producer-held', holdId: 'synthetic-progress', record: workspace.record } });
+        result: packageResult, freeze: { kind: 'producer-held', holdId: 'synthetic-progress', record: packageRecord } });
       expect(published.ok).toBe(true);
       expectProgress(await current.read(), jobId, null);
       const actual = await current.read();

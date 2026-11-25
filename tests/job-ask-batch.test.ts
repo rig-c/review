@@ -17,10 +17,14 @@ async function batchFixture(prefix: string) {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), prefix));
   const root = join(scratch, 'input');
   await mkdir(root);
-  // #1235: the batch asks the plan's signoffs; checkpoint is no longer a sample subject.
-  const workspace = createSyntheticPlanRecordWorkspace(root, { subjects: [
-    { kind: 'signoff', stage: 'plan-approved' }, { kind: 'signoff', stage: 'rigging-interview' },
-    { kind: 'signoff', stage: 'post-interview' }] });
+  // #1227: checkpoint until #1229 retires record asks
+  const steps = [
+    { id: 'step_layout', hash: '1'.repeat(64) },
+    { id: 'step_weights', hash: '2'.repeat(64) },
+    { id: 'step_motion', hash: '3'.repeat(64) },
+  ];
+  const workspace = createSyntheticPlanRecordWorkspace(root, { steps, subjects: steps.map(step => ({
+    kind: 'checkpoint' as const, checkpointId: step.id })) });
   const reader = createSyntheticRecordReader({ onPlan: () => workspace.context });
   const session = new JobSession({ root, stateDir: join(scratch, 'state'), fingerprint: 'a'.repeat(64),
     reviewer: { id: 'synthetic-owner', role: 'owner' }, publicationMode: 'record-and-package', readRecordPublished: reader.reader });
@@ -96,7 +100,7 @@ test('#963 an invalid subject refuses the whole batch under its index and leaves
     const subjects = fixture.workspace.context.subjects;
     const before = fixture.snapshot(), calls = fixture.reader.calls.length;
 
-    const undeclared = await fixture.batch([subjects[0]!, subjects[1]!, { kind: 'signoff', stage: 'undeclared-stage' }, subjects[2]!]);
+    const undeclared = await fixture.batch([subjects[0]!, subjects[1]!, { kind: 'checkpoint', checkpointId: 'undeclared_step' }, subjects[2]!]);
     expect(undeclared).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
     expect(undeclared.error.message).toBe('subjects[2]: JOB_ASK_INVALID');
     expect(fixture.snapshot()).toEqual(before);
@@ -110,7 +114,7 @@ test('#963 an invalid subject refuses the whole batch under its index and leaves
     const duplicate = await fixture.batch([subjects[0]!, subjects[1]!, subjects[0]!], 'duplicate');
     expect(duplicate).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'subjects[2]: duplicate of subjects[0]' } });
     for (const count of [0, jobAskBatchLimit + 1]) {
-      const sized = await fixture.batch(Array.from({ length: count }, (_, index) => ({ kind: 'signoff', stage: 'stage_' + index })), 'size-' + count);
+      const sized = await fixture.batch(Array.from({ length: count }, (_, index) => ({ kind: 'checkpoint', checkpointId: 'step_' + index })), 'size-' + count);
       expect(sized).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'JOB_REQUEST_INVALID' } });
     }
     expect(fixture.snapshot()).toEqual(before);
@@ -203,8 +207,9 @@ test('#963 next reports askBatch among the V3 capabilities and ask-batch parses 
     expect(next.value.capabilities.askBatch).toBe(true);
     expect(next.value.capabilities.progress).toBe(true);
   } finally { await fixture.dispose(); }
+  // #1227: checkpoint until #1229 retires record asks
   const request = { schema: JOB_API_V3_SCHEMA, jobId: 'job-1', requestId: 'request-1', verb: 'ask-batch',
-    expectedGeneration: 0, idempotencyKey: 'key', publicationId: 'publication-1', subjects: [{ kind: 'signoff', stage: 'plan-approved' }] };
+    expectedGeneration: 0, idempotencyKey: 'key', publicationId: 'publication-1', subjects: [{ kind: 'checkpoint', checkpointId: 'step_layout' }] };
   expect(parseJobRequestV3(request)).toEqual(request as never);
   expect(() => parseJobRequestV3({ ...request, subject: request.subjects[0] })).toThrow('JOB_REQUEST_INVALID');
   expect(() => parseJobRequestV3({ ...request, subjects: request.subjects[0] })).toThrow('JOB_REQUEST_INVALID');

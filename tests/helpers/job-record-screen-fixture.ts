@@ -5,6 +5,7 @@ import {cp, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {JobSession} from '../../src/job-session.ts';
+import {JobError} from '../../src/job-store.ts';
 import {createJobHostPorts} from '../../src/job-api.ts';
 import {prepareJobRecordAct} from '../../src/job-act.ts';
 import type {JobRetainedRecordSource} from '../../src/job-source.ts';
@@ -59,7 +60,7 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
    const act=prepareJobRecordAct({jobId:session.jobId,submission:input,ask,retained:session.retainedSourceV3(ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-'+kind,at:'2026-11-08T12:00:00.000Z'});
    const path=join(writeRoot,mode+'.json');await mkdir(writeRoot,{recursive:true});await writeFile(path,JSON.stringify(act));files.push(path);
    return {ok:true as const,value:act};
-  }catch(error){await mkdir(writeRoot,{recursive:true});await writeFile(join(writeRoot,mode+'.refusal.json'),JSON.stringify({error:String(error),input},null,2)+'\n');return {ok:false as const,error:{code:'JOB_ACT_INVALID',message:String(error)}};}
+  }catch(error){await mkdir(writeRoot,{recursive:true});await writeFile(join(writeRoot,mode+'.refusal.json'),JSON.stringify({error:String(error),input},null,2)+'\n');const code=error instanceof JobError?error.code:'JOB_ACT_INVALID';return {ok:false as const,error:{code,message:String(error)}};}
  }};
  const routes=retainedPublicationRoutes(session);
  let rigPictureSuppressed=false;

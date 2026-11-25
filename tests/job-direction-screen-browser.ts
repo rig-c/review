@@ -165,14 +165,12 @@ try{
    const workspace=createSyntheticPlanRecordWorkspace(builder.input.root,{subjects:[{kind:'signoff',stage:'direction-review'}]});
    recordContext=workspace.context;
    const signoffPublication=await api('publish',{result:workspace.result,freeze:{kind:'producer-held',holdId:'signoff-held',record:workspace.record}});
-   const signoff=await askSubject(signoffPublication,{kind:'signoff',stage:'direction-review'});
-   await wait(`!!document.querySelector('form[data-job-ask="${signoff.askId}"] fieldset:not(:disabled)')`);
-   await click('#workspace-pending-ask');await wait(`document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden]) form[data-job-ask="${signoff.askId}"] fieldset:not(:disabled)')`);
-   await writeFile(join(output,language+'-signoff.png'),await page!.screenshot());
-   await click(`form[data-job-ask="${signoff.askId}"] button[type=submit]`);
-   let signed:any;const end=Date.now()+20000;while(Date.now()<end){const next=await api('next',{after:null,waitMs:0});signed=next.events.find((e:any)=>e.type==='act'&&e.act.askId===signoff.askId)?.act;if(signed)break;await Bun.sleep(25);}
-   assert.ok(signed,'record direction signoff committed after verdict');assert.equal(signed.schema,'rig-review/act@4');assert.equal(signed.value.stage,'direction-review');assert.equal(signed.kind,'signoff');
-   observations.push({kind:'record-signoff-after-verdict',language,act:signed,verdictActId:act.actId});
+   const signoffAskRes=await fetch(host.origin+'/jobs/'+host.session.jobId+'/api',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+host.session.hostCredentials().agent},body:JSON.stringify({schema:JOB_API_V3_SCHEMA,jobId:host.session.jobId,requestId:randomUUID(),verb:'ask',expectedGeneration:generation,idempotencyKey:randomUUID(),publicationId:signoffPublication.publicationId,subject:{kind:'signoff',stage:'direction-review'}})});
+   assert.equal(signoffAskRes.status,409);
+   const signoffAskBody=await signoffAskRes.json();
+   assert.equal(signoffAskBody.ok,false);
+   assert.equal(signoffAskBody.error.code,'JOB_ASK_INVALID');
+   observations.push({kind:'record-signoff-refused-after-verdict',language,code:signoffAskBody.error.code,verdictActId:act.actId});
 
   }catch(error){await writeFile(join(output,'original-error.json'),JSON.stringify({error:String(error),stack:error instanceof Error?error.stack:undefined,observations,errors},null,2));await writeFile(join(output,'inner-failure-state.json'),await page.evaluate<string>(`JSON.stringify({text:document.body.innerText,ready:document.body.dataset.ready,forms:[...document.querySelectorAll('form[data-job-ask]')].map(f=>({id:f.dataset.jobAsk,disabled:f.querySelector('fieldset')?.disabled})),dialogs:[...document.querySelectorAll('dialog')].map(d=>({id:d.id,open:d.open}))})`));await writeFile(join(output,'inner-failure.png'),await page.screenshot()).catch(()=>{});throw error;}finally{await page.goto('about:blank');host.stop();await builder.close();}
  }

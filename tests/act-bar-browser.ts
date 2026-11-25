@@ -29,7 +29,7 @@ const sampleActBar=`(()=>{
 })()`;
 
 async function until(page:InputCdpSession,expression:string){const end=Date.now()+20000;while(Date.now()<end){if(await page.evaluate<boolean>(expression))return;await Bun.sleep(100);}throw Error('ACT_BAR_WAIT: '+expression);}
-for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','parts','signoff-model','signoff-record','checkpoint-pass','checkpoint-fail','interview','interview-rig','interview-parts','joined-interview','standalone'] as const){
+for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','parts','checkpoint-pass','checkpoint-fail','interview','interview-rig','interview-parts','joined-interview','standalone'] as const){
  if(saveRetryOnly&&!['rig','parts'].includes(mode))continue;
  const profile=await mkdtemp(join(tmpdir(),'review809-browser-'));let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
@@ -41,14 +41,14 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    const f=await interviewOpenFixture(2);const capability='a'.repeat(64);
    const server=await startServer(null,{port:0,capability,joined:joinProject(null,f.inputs.project),stateDir:f.stateDir});
    close=async()=>{server.stop(true);await f.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
-  }else if(['rig','direction','parts','signoff-model'].includes(mode)){
+  }else if(['rig','direction','parts'].includes(mode)){
    const f=await scriptedJobWindowFixture({c5Parts:'mesh'});close=()=>f.close();
-   const stage=mode==='signoff-model'?'rig':mode as 'rig'|'direction'|'parts';
+   const stage=mode as 'rig'|'direction'|'parts';
    const p=await f.publish(stage);draftKey=`rig-review-draft/1:single:${p.source.package.id}:${p.source.sourceHash}:${p.source.sourceHash}`;
-   await f.ask(p,mode==='signoff-model'?{kind:'signoff',stage:'plan-approved'}:mode==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:mode==='rig'?'rig-review':'direction-review'});
+   await f.ask(p,mode==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:mode==='rig'?'rig-review':'direction-review'});
    url=f.locator+'/#cap='+f.credentials.ui;
   }else{
-   const f=await recordScreenFixture(mode.startsWith('interview')?'interview-picks':mode==='signoff-record'?'signoff':'checkpoint',mode==='interview-rig'?true:mode==='interview-parts'?'parts':false);close=()=>f.close();url=f.ownerUrl;
+   const f=await recordScreenFixture(mode.startsWith('interview')?'interview-picks':'checkpoint',mode==='interview-rig'?true:mode==='interview-parts'?'parts':false);close=()=>f.close();url=f.ownerUrl;
   }
   const localized=new URL(url);localized.searchParams.set('lang',lang);url=localized.href;
   let control:((method:string,params?:Record<string,unknown>)=>Promise<any>)|undefined;let held=0,actSaveStep=0,heldActRequest:string|undefined;
@@ -114,7 +114,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    if(interview)await page.evaluate<void>(scrollToSubmit);
    await click(page,selector);
    if(interview)await until(page,`${questionSaved}&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
-   else await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`,mode==='signoff-model');
+   else await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`);
    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
    if(mode==='joined-interview'){
     assert.equal(await page.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false,'saved first answer leaves the opener enabled');
