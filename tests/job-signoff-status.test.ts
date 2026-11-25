@@ -233,7 +233,7 @@ for (const order of ['response first', 'stream first'] as const) test(`#1205 sig
     const {response, act} = await signed(post);
     let afterDifferentStage: ScreenReadback | null = null;
     if (order === 'stream first') {
-      const wrongStage: ActV3 = {...act, actId: 'other-stage', value: {...act.value, stage: 'plan-approved'}};
+      const wrongStage = {...act, actId: 'other-stage', value: {...act.value, stage: 'plan-approved'}} as ActV3;
       h.event({type: 'act', act: wrongStage});
       afterDifferentStage = h.read();
       h.event({type: 'act', act});

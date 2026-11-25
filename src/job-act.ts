@@ -5,13 +5,14 @@ import {
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
   type JobMeshEdit, type PendingAskV3, type RecordUIAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
   type JobCommentContext, type JobContextComment,
-  type JobChestLandmarkEdit,
+  type JobChestLandmarkEdit, type JobCommentCarrier, type JobCommentOnlyAct, type JobCommentUISubmission,
+  JOB_COMMENT_ONLY_ACT_SCHEMA,
 } from './job-contract.ts';
 import { parsePartsIssue, type PartsIssue } from './parts-comment.ts';
 import {
   isRecordSource, isRigDraftVerdictSource, parseJobSelector, commentsObject, jobHash, jobId, jobInteger, jobObject,
   commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, recordActSource, requestDigest, validateRecordAskSubject,
-  chestLandmarkIdentity, parseChestLandmarkEdits, parseChestLandmarksAct,
+  chestLandmarkIdentity, parseChestLandmarkEdits, parseChestLandmarksAct, parseCommentOnlyAct,
 } from './job-api.ts';
 import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueComments } from './feedback-export.ts';
 import { hasStageComment, parseStageComment } from './stage-comment.ts';
@@ -241,6 +242,19 @@ export function parseUISubmission(
   return item as unknown as UISubmissionV3;
 }
 
+/** #1226: the comment-only submission answers no ask and carries no still; `parseUISubmission` keeps refusing it. */
+export function isCommentUISubmission(value: unknown): boolean {
+  return !!value && typeof value === 'object' && (value as {kind?: unknown}).kind === 'comments';
+}
+
+export function parseCommentUISubmission(value: unknown): JobCommentUISubmission {
+  const item = jobObject(value, ['publicationId', 'askId', 'pageId', 'displayedNonce', 'expectedGeneration', 'submissionId', 'kind', 'value', 'capture']);
+  if (item.kind !== 'comments' || Object.hasOwn(item, 'askId') || Object.hasOwn(item, 'capture')) throw new JobError('JOB_ACT_INVALID');
+  jobId(item.publicationId); jobId(item.pageId); jobId(item.displayedNonce); jobId(item.submissionId);
+  jobInteger(item.expectedGeneration);
+  return item as unknown as JobCommentUISubmission;
+}
+
 /** The browser supplies pixels and draw provenance, never a trusted hash or path. */
 export function prepareJobStill(input: UISubmissionV3, ask: JobPendingAsk, retained: JobRetainedSource): {
   readonly still: JobRigStill;
@@ -305,6 +319,46 @@ function actIdField(value: unknown): string {
   } catch {
     throw new JobError('JOB_ACT_INVALID');
   }
+}
+
+/** #1226: the act@10 writer. The daemon has already matched the page receipt to the head publication; the source is
+ * the retained, sealed source of that publication. Carriers are re-checked against the retained model like @8/@9. */
+export function finalizeCommentOnlyAct(options: {
+  readonly jobId: string;
+  readonly submission: JobCommentUISubmission;
+  readonly retained: JobRetainedSourceV3;
+  readonly reviewer: JobReviewerBinding;
+}): JobCommentOnlyAct {
+  const {submission, retained, reviewer} = options;
+  if (!reviewer.id || !['owner', 'delegate'].includes(reviewer.role)) throw new JobError('JOB_AUTHORITY_REFUSED');
+  const value = commentsObject(submission.value, ['comments'], ['carriers']);
+  let source: SourceV3;
+  if (isRetainedRecordSource(retained)) {
+    const {directionReview: _directionReview, ...record} = structuredClone(parseRecordSource(retained.source));
+    source = record;
+  } else {
+    source = structuredClone(retained.source);
+  }
+  if (Object.hasOwn(value, 'carriers')) {
+    const model = isRetainedRecordSource(retained) ? null : retained.source.model;
+    if (!Array.isArray(value.carriers) || !model) throw new JobError('JOB_ACT_INVALID');
+    const carriers = value.carriers as readonly Partial<JobCommentCarrier>[];
+    // A carrier edits the displayed model file; any other file is a stale view.
+    if (carriers.some(carrier => carrier?.file?.path !== model.path || carrier.file.sha256 !== model.sha256)) {
+      throw new JobError('JOB_ACT_SOURCE_STALE');
+    }
+    const retainedPackage = retained as JobRetainedSource;
+    const edits = readJobEditModel(retainedPackage.snapshotRoot, model, 'JOB_ACT_SOURCE_STALE');
+    for (const carrier of carriers) {
+      if (carrier.kind === 'mesh-edits') validateRetainedMeshEdits(edits, parseMeshEdits(carrier.meshEdits));
+      if (carrier.kind === 'chest-landmarks') validateRetainedChestLandmarks(retainedPackage, edits, parseChestLandmarkEdits(carrier.chestLandmarks));
+    }
+  }
+  return parseCommentOnlyAct({
+    schema: JOB_COMMENT_ONLY_ACT_SCHEMA, actId: randomUUID(), jobId: options.jobId, publicationId: submission.publicationId,
+    kind: 'comments', authority: {actor: 'human', channel: 'review-ui', reviewer: structuredClone(reviewer)},
+    at: new Date().toISOString(), source, value: structuredClone(value),
+  });
 }
 
 export function prepareJobRecordAct(options: {

@@ -55,6 +55,7 @@ import { isRigDraftVerdictSource,
   requestDigest,
   stripPackageResultKind,
   validateRecordAskSubject,
+  commitFields,
 } from './job-api.ts';
 import { JobError, type JobSnapshotOwner } from './job-store.ts';
 
@@ -69,6 +70,8 @@ export interface JobRootIdentity {
  * enumeration belongs to the public Parts #1163 surface.
  */
 export interface JobPublishedContext {
+  /** #1226: optional 40-hex commit the producer declares; sealed into the source and echoed as `source.commit`. */
+  readonly commit?: string;
   readonly answeredDirectionFeedback?: readonly JobAnsweredDirectionFeedbackReference[];
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
   readonly previousDraft?: JobPreviousDraft;
@@ -1487,7 +1490,7 @@ function jobPreviousBuildFiles(build: JobPreviousBuild, root: string, packageRoo
 /** Preserve the existing composite preimage, conditionally appending the declaration. */
 function packageSourceDigest(packageSourceHash: string, record: JobFileIdentity | null,
   source: Pick<JobModelSourceBinding, 'selector' | 'plan' | 'parts'>, files: readonly JobFileIdentity[],
-  evidence: Pick<JobModelSourceBinding, 'checkpointEvidence' | 'previousDraft'> & Pick<JobPublication, 'chestLandmarks'> & Pick<JobRetainedSource, 'previousBuild'>): string {
+  evidence: Pick<JobModelSourceBinding, 'checkpointEvidence' | 'previousDraft' | 'commit'> & Pick<JobPublication, 'chestLandmarks'> & Pick<JobRetainedSource, 'previousBuild'>): string {
   return jobHash(JSON.stringify({schema: 'rig-review-job-source/2', packageSourceHash, record,
     selector: source.selector, plan: source.plan, parts: source.parts, files, ...evidence}));
 }
@@ -1624,6 +1627,7 @@ export async function prepareJobSource(options: {
   const chestLandmarks = 'chestLandmarks' in context ? parsePublishedChestLandmarks(context.chestLandmarks) : undefined;
   if (chestLandmarks && context.selector?.kind !== 'rig') throw new JobError('JOB_SOURCE_MISMATCH');
   const chest = chestLandmarks ? {chestLandmarks} : {};
+  const commit = commitFields(context);
   checkpointEvidenceMetadata(root.path, evidence.checkpointEvidence);
   let review: Awaited<ReturnType<typeof loadJobReview>>;
   try {
@@ -1733,8 +1737,8 @@ export async function prepareJobSource(options: {
       assertPublishedChestLandmarks(snapshotRoot, model, handoffConfig ? [handoffConfig] : declared, chestLandmarks);
     }
     const modelSource: JobModelSourceBinding = {
-      sourceHash: project || context.plan || context.parts || chestLandmarks || previousBuild ? packageSourceDigest(review.sourceHash, record,
-        {selector: context.selector, plan: context.plan, parts: parts.identity}, seals, {...evidence, ...previous, ...chest, ...build}) : review.sourceHash,
+      sourceHash: project || context.plan || context.parts || chestLandmarks || previousBuild || commit.commit ? packageSourceDigest(review.sourceHash, record,
+        {selector: context.selector, plan: context.plan, parts: parts.identity}, seals, {...evidence, ...previous, ...chest, ...build, ...commit}) : review.sourceHash,
       projectHash: project?.hash ?? null,
       package: { id: review.manifest.id, revision: review.manifest.revision },
       selector: context.selector,
@@ -1742,7 +1746,8 @@ export async function prepareJobSource(options: {
       direction: originalIdentity(review.direction?.file ?? null),
       optionSet: null, appliedResult: null, plan: context.plan, parts: parts.identity,
     };
-    const source: JobSourceBinding = {...modelSource, ...evidence, ...previous};
+    // #1226: last, and only when declared, so a publication without it keeps its bytes.
+    const source: JobSourceBinding = {...modelSource, ...evidence, ...previous, ...commit};
     const boundReview = { ...review, sourceHash: source.sourceHash };
     const sealedByPath = new Map(seals.map(seal => [seal.path, seal.sha256]));
     const retainedInterview = project

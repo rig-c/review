@@ -38,6 +38,8 @@ export const JOB_COMMENT_CONTEXT_ACT_SCHEMA = 'rig-review/act@7' as const;
 export const JOB_MESH_EDITS_ACT_SCHEMA = 'rig-review/act@8' as const;
 /** A compiled rig's Request changes carrying chest landmarks (#990). */
 export const JOB_CHEST_LANDMARKS_ACT_SCHEMA = 'rig-review/act@9' as const;
+/** A person's comments on the displayed publication, sent without an ask (#1226). */
+export const JOB_COMMENT_ONLY_ACT_SCHEMA = 'rig-review/act@10' as const;
 export const REVIEW_COMMENTS_SESSION_SCHEMA = 'rig-review-session/2' as const;
 export const REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA = 'rig-review-compare-session/2' as const;
 export const PARTS_COMMENTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/5' as const;
@@ -173,6 +175,31 @@ export type JobChestLandmarksAct = Omit<JobRigMeshEditsAct, 'schema' | 'value'> 
     readonly chestLandmarks: readonly JobChestLandmarkEdit[];
   };
 };
+/** act@10: an act@8 or act@9 payload unchanged, bound to the file it edits (always `source.model`). */
+export type JobCommentCarrier =
+  | {readonly kind: 'mesh-edits'; readonly file: JobFileIdentity; readonly meshEdits: readonly JobMeshEdit[]}
+  | {readonly kind: 'chest-landmarks'; readonly file: JobFileIdentity; readonly chestLandmarks: readonly JobChestLandmarkEdit[]};
+
+/** act@10 (#1226): comments, and optional carriers, on the head publication that was on screen. It answers no ask,
+ * so it has no `askId`, no still and no verdict, outcome, decision or selections. Comment context carries no `subject`. */
+export interface JobCommentOnlyAct {
+  readonly schema: typeof JOB_COMMENT_ONLY_ACT_SCHEMA;
+  readonly actId: string;
+  readonly jobId: string;
+  readonly publicationId: string;
+  /** Absent: the act answers no ask. Readers narrow by `schema` before using `askId`. */
+  readonly askId?: never;
+  readonly still?: never;
+  readonly kind: 'comments';
+  readonly authority: JobHumanAuthority;
+  readonly at: string;
+  readonly source: SourceV3;
+  readonly value: {
+    readonly comments: readonly JobContextComment[];
+    readonly carriers?: readonly JobCommentCarrier[];
+  };
+}
+
 export type ReviewCommentsSession = Omit<ReviewSession, 'schema' | 'feedback' | 'checkpoints'> & {
   schema: typeof REVIEW_COMMENTS_SESSION_SCHEMA;
   checkpoints: Record<string, { outcome: 'pending' | 'pass' | 'fail' }>;
@@ -524,6 +551,8 @@ export interface JobModelSourceBinding {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
   readonly previousDraft?: JobPreviousDraft;
   readonly subject?: never;
+  /** #1226: the producer's declared 40-hex commit, echoed unchanged; absent when not declared. */
+  readonly commit?: string;
   readonly sourceHash: JobSha256;
   readonly projectHash: JobSha256 | null;
   readonly package: { readonly id: string; readonly revision: string };
@@ -718,7 +747,8 @@ export type JobPartsVerdictAct = Omit<Extract<JobLegacyAct, {kind: 'parts-verdic
 
 /** Historical @2 acts remain readable without being backfilled or relabelled.
  * Fresh comments use @6, live rig comments carrying context use @7, and rig verdicts carrying mesh edits use @8. */
-export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct | JobCommentsAct | JobContextCommentsAct | JobRigMeshEditsAct | JobChestLandmarksAct;
+export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct | JobCommentsAct | JobContextCommentsAct | JobRigMeshEditsAct | JobChestLandmarksAct
+  | JobCommentOnlyAct;
 
 /** Authenticated browser provenance. The daemon validates identity and hashes PNG bytes. */
 export interface JobRigCapture {
@@ -1012,6 +1042,19 @@ export type JobUISubmission = {
   };
 }[JobEnabledActKind];
 
+/** #1226: the comment-only submission names the displayed publication and no ask. */
+export interface JobCommentUISubmission {
+  readonly publicationId: JobPublicationId;
+  readonly askId?: never;
+  readonly pageId: string;
+  readonly displayedNonce: string;
+  readonly expectedGeneration: number;
+  readonly submissionId: string;
+  readonly kind: 'comments';
+  readonly value: {readonly comments: readonly JobContextComment[]; readonly carriers?: readonly JobCommentCarrier[]};
+  readonly capture?: never;
+}
+
 export interface JobDisplayAcknowledgment {
   readonly publicationId: JobPublicationId;
   readonly pageId: string;
@@ -1239,6 +1282,8 @@ export interface RecordPartsIdentity {
 }
 
 export interface RecordContextBase {
+  /** #1226: optional 40-hex commit the producer declares; sealed into the source and echoed as `source.commit`. */
+  readonly commit?: string;
   readonly label: string;
   readonly parts: RecordPartsIdentity;
   readonly inputs: readonly JobFileIdentity[];
@@ -1302,6 +1347,8 @@ export interface RecordSourceBase {
   readonly parts?: never;
   readonly sourceHash: JobSha256;
   readonly projectHash: JobSha256;
+  /** #1226: the producer's declared 40-hex commit, echoed unchanged; absent when not declared. */
+  readonly commit?: string;
   readonly record: ProjectRecord;
   readonly inputs: readonly JobFileIdentity[];
   readonly files: readonly JobFileIdentity[];

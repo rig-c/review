@@ -60,6 +60,7 @@ import {
  startJobHost, JOB_CAPABILITIES, JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_PREVIOUS_DRAFT_SCHEMA, JOB_ENABLED_ACT_KINDS,
  JOB_RESERVED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_CONSUMER_AUTH_MODE, JOB_ERROR_CODES,
  JOB_CHEST_LANDMARKS_ACT_SCHEMA, parseChestLandmarksAct, parseMeshEditsAct, parseCheckpointEvidencePacket,
+ JOB_COMMENT_ONLY_ACT_SCHEMA, parseCommentOnlyAct, type JobCommentOnlyAct,
  type CheckpointEvidencePacketResult,
  type JobHostOptions, type JobOwnerHost, type JobSessionOptions, type JobSession, type JobWorkerOptions,
  type JobActWaitOptions, type JobActWaitOutcome,
@@ -139,7 +140,7 @@ const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', '
  'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'projectSelectedCommentsFeedback',
  'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
  'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct', 'waitForJobAct', 'JOB_CHEST_LANDMARKS_ACT_SCHEMA', 'parseChestLandmarksAct',
- 'parseCheckpointEvidencePacket'];
+ 'parseCheckpointEvidencePacket', 'JOB_COMMENT_ONLY_ACT_SCHEMA', 'parseCommentOnlyAct'];
 assert(JSON.stringify(Object.keys(publicHost).sort()) === JSON.stringify(expectedExports.sort()), 'EXPORTS');
 assert(JOB_API_SCHEMA === 'rig-review/job-api@2' && JOB_ACT_SCHEMA === 'rig-review/act@2' &&
  JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <3.0.0' && JOB_PREVIOUS_DRAFT_SCHEMA === 'rig-review-previous-draft/1', 'SCHEMAS');
@@ -283,6 +284,12 @@ try {
  try {parseMeshEditsAct(act);}
  catch (error) {legacyRefused = error instanceof Error && error.message === 'JOB_ACT_INVALID';}
  assert(legacyRefused, 'CHEST_ACT_REFUSED_BY_MESH_DECODER');
+ // #1226: a comment-only act names the publication and no ask.
+ const comment: JobCommentOnlyAct = {schema: JOB_COMMENT_ONLY_ACT_SCHEMA, actId: 'smoke-comment', jobId: base.jobId,
+  publicationId: published.value.publicationId, kind: 'comments', authority: act.authority, at: act.at,
+  source: published.value.source, value: {comments: [{text: 'installed comment'}]}};
+ assert(JOB_COMMENT_ONLY_ACT_SCHEMA === 'rig-review/act@10' &&
+  JSON.stringify(parseCommentOnlyAct(JSON.parse(JSON.stringify(comment)))) === JSON.stringify(comment), 'COMMENT_ACT_ROUND_TRIP');
  const next = await call({...base, verb: 'next', requestId: 'public-next', after: null, waitMs: 0});
  assert(next.ok && next.verb === 'next' && next.value.events[0]?.type === 'published', 'NEXT');
  assert(Object.keys(JOB_CAPABILITIES).length === 0, 'CAPABILITIES');

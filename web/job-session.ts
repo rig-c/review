@@ -407,7 +407,7 @@ export function createJobWindow<Prepared>(options: {
             pending.set(value.ask.askId, previous?.act ? {...value.ask, status: 'answered', act: previous.act} : value.ask);
         }
         else if (value.type === 'act') {
-            const ask = pending.get(value.act?.askId);
+            const ask = value.act.askId === undefined ? undefined : pending.get(value.act.askId);
             if (ask && !isRecordAnswer(ask.subject.kind) && !isRecordAnswer(value.act.kind))
                 pending.set(ask.askId, { ...ask, status: 'answered', act: value.act });
             else if (ask && !ask.act && matchesJobRecordAct(ask, value.act, options.jobId))

@@ -5,7 +5,8 @@ import {
   JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PARTS_ENUMERATOR_RANGE,
   JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RECORD_SIGNOFF_STAGES, JOB_RECORD_ACT_SCHEMA, JOB_RECORD_INSTANCE_SCHEMA, JOB_RECORD_SOURCE_SCHEMA,
   JOB_RESERVED_ACT_KINDS,
-  JOB_MESH_EDITS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA,
+  JOB_MESH_EDITS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA,
+  type JobCommentCarrier, type JobCommentOnlyAct,
   type AgentRequestV3, type FetchActRequestV3, type JobAgentRequest, type JobApiSchema,
   type JobCheckpointEvidence, type JobDisplayAcknowledgment, type JobErrorCode, type JobFetchActRequest, type JobFileIdentity,
   type JobHostPorts, type JobHumanAuthority, type JobInterviewDiagnostic, type JobInterviewDiagnostics, type JobProgressRequestV3,
@@ -708,8 +709,17 @@ export function parseRecordPartsIdentity(
   };
 }
 
+/** #1226: a producer's optional commit, 40 lowercase hex. Absent stays absent; it is never written as null. */
+export function commitFields(holder: object, code: JobErrorCode = 'JOB_SOURCE_INVALID'): {readonly commit?: string} {
+  if (!Object.hasOwn(holder, 'commit')) return {};
+  const commit = (holder as {commit?: unknown}).commit;
+  if (typeof commit !== 'string' || !/^[0-9a-f]{40}$/.test(commit)) throw new JobError(code);
+  return {commit};
+}
+
 type ParsedRecordPayload =
   | {
+      readonly commit?: string;
       readonly kind: 'option-set';
       readonly inputs: readonly JobFileIdentity[];
       readonly files: readonly JobFileIdentity[];
@@ -717,6 +727,7 @@ type ParsedRecordPayload =
       readonly subjects: readonly RecordPicksSubject[];
     }
   | {
+      readonly commit?: string;
       readonly kind: 'plan';
       readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
       readonly directionReview?: PlanContext['directionReview'];
@@ -757,13 +768,13 @@ function parseRecordClosureAndSubjects(
   if (selection.kind === 'option-set') {
     if (rawPlan !== null || 'checkpointEvidence' in evidenceHolder || 'planPicture' in evidenceHolder) throw new JobError('JOB_SOURCE_MISMATCH');
     const subjects = parseOptionSubjects(rawSubjects, selection, 'JOB_SOURCE_MISMATCH');
-    return { kind: 'option-set', inputs, files, plan: null, subjects };
+    return { kind: 'option-set', inputs, files, plan: null, subjects, ...commitFields(evidenceHolder) };
   }
   if (rawPlan === null) throw new JobError('JOB_SOURCE_MISMATCH');
   const { plan, stepIds } = parsePlanIdentity(rawPlan, 'JOB_SOURCE_MISMATCH');
   const subjects = parsePlanSubjects(rawSubjects, stepIds, hasDirectionReview ? 'JOB_SOURCE_INVALID' : 'JOB_SOURCE_MISMATCH');
   return { kind: 'plan', inputs, files, plan, subjects, ...checkpointEvidenceFields(evidenceHolder, plan, subjects, files),
-    ...planPictureFields(evidenceHolder, plan, files), ...directionReviewFields(evidenceHolder, subjects) };
+    ...planPictureFields(evidenceHolder, plan, files), ...directionReviewFields(evidenceHolder, subjects), ...commitFields(evidenceHolder) };
 }
 
 export function parseRecordPublishedContext(
@@ -792,7 +803,7 @@ export function parseRecordPublishedContext(
     if (Object.hasOwn(value, 'previousBuild')) throw new JobError('JOB_PREVIOUS_BUILD_INVALID');
     previousDraftFields(value, null);
   }
-  const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH', ['checkpointEvidence', 'planPicture', 'directionReview']);
+  const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH', ['checkpointEvidence', 'planPicture', 'directionReview', 'commit']);
   const label = asCode(() => jobText(item.label), 'JOB_SOURCE_MISMATCH');
   const parts = parseRecordPartsIdentity(item.parts, 'JOB_SOURCE_MISMATCH');
   const body = parseRecordClosureAndSubjects(
@@ -804,13 +815,14 @@ export function parseRecordPublishedContext(
     checkedRecord,
     item,
   );
+  const commit = body.commit === undefined ? {} : {commit: body.commit};
   if (body.kind === 'option-set') {
-    return { label, parts, inputs: body.inputs, files: body.files, plan: null, subjects: body.subjects };
+    return { label, parts, inputs: body.inputs, files: body.files, plan: null, subjects: body.subjects, ...commit };
   }
   return { label, parts, inputs: body.inputs, files: body.files, plan: body.plan, subjects: body.subjects,
     ...(body.checkpointEvidence ? {checkpointEvidence: body.checkpointEvidence} : {}),
     ...(body.planPicture ? {planPicture: body.planPicture} : {}),
-    ...(body.directionReview ? {directionReview: body.directionReview} : {}) };
+    ...(body.directionReview ? {directionReview: body.directionReview} : {}), ...commit };
 }
 
 export function assertEqualRecordContexts(
@@ -842,6 +854,7 @@ export interface RecordSourceDigestInput {
   readonly schema?: typeof JOB_RECORD_SOURCE_SCHEMA;
   readonly sourceHash?: JobSha256;
   readonly projectHash?: JobSha256;
+  readonly commit?: string;
   readonly subject?: 'option-set' | 'plan';
   readonly record: ProjectRecord;
   readonly selection: RecordResult;
@@ -874,6 +887,7 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
         'optionSets',
         'planPicture',
         'directionReview',
+        'commit',
       ]),
     'JOB_SOURCE_MISMATCH',
   );
@@ -929,6 +943,8 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
       subjects,
       files,
       ...(optionSets ? { optionSets } : {}),
+      // #1226: last, and only when declared, so a record without it keeps its source hash.
+      ...commitFields(item),
     });
   }
 
@@ -952,6 +968,7 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
     ...checkpointEvidenceFields(item, plan, subjects, files),
     // #983: last, and only when present, so a record without it keeps its source hash.
     ...planPictureFields(item, plan, files),
+    ...commitFields(item),
   });
 }
 
@@ -1008,6 +1025,7 @@ function assembleRecordSource(
   rawOptionSetFile?: unknown,
   rawOptionSets?: unknown,
 ): OptionSource | PlanSource {
+  const commit = body.commit === undefined ? {} : {commit: body.commit};
   if (selection.kind === 'option-set') {
     if (body.kind !== 'option-set' || !rawOptionSetFile) throw new JobError('JOB_SOURCE_MISMATCH');
     const optionSetFile = parseFileRow(rawOptionSetFile, 'JOB_SOURCE_MISMATCH');
@@ -1024,6 +1042,7 @@ function assembleRecordSource(
       subjects: body.subjects,
       files: body.files,
       ...(optionSets ? { optionSets } : {}),
+      ...commit,
     });
     return {
       sourceHash,
@@ -1039,6 +1058,7 @@ function assembleRecordSource(
       plan: null,
       subjects: body.subjects,
       ...(optionSets ? { optionSets } : {}),
+      ...commit,
     };
   }
   if (rawOptionSets !== undefined) throw new JobError('JOB_SOURCE_MISMATCH');
@@ -1056,6 +1076,7 @@ function assembleRecordSource(
     files: body.files,
     ...(body.checkpointEvidence ? {checkpointEvidence: body.checkpointEvidence} : {}),
     ...(body.planPicture ? {planPicture: body.planPicture} : {}),
+    ...commit,
   });
   return {
     sourceHash,
@@ -1072,6 +1093,7 @@ function assembleRecordSource(
     plan: body.plan,
     subjects: body.subjects,
     ...(body.directionReview ? {directionReview: body.directionReview} : {}),
+    ...commit,
   };
 }
 
@@ -1107,6 +1129,7 @@ export function buildRecordSource(input: {
           files: context.files,
           plan: null,
           subjects: context.subjects,
+          ...(context.commit === undefined ? {} : {commit: context.commit}),
         }
       : {
           kind: 'plan',
@@ -1117,6 +1140,7 @@ export function buildRecordSource(input: {
           ...(context.checkpointEvidence ? {checkpointEvidence: context.checkpointEvidence} : {}),
           ...(context.planPicture ? {planPicture: context.planPicture} : {}),
           ...(context.directionReview ? {directionReview: context.directionReview} : {}),
+          ...(context.commit === undefined ? {} : {commit: context.commit}),
         };
   const sets = selection.kind === 'option-set' ? selection.sets : undefined;
   if ((sets === undefined) !== (input.optionSetFiles === undefined)) throw new JobError('JOB_SOURCE_MISMATCH');
@@ -1144,7 +1168,7 @@ export function parseRecordSource(value: unknown): RecordSource {
       'subjects',
     ],
     'JOB_SOURCE_MISMATCH',
-    ['checkpointEvidence', 'optionSets', 'planPicture', 'directionReview'],
+    ['checkpointEvidence', 'optionSets', 'planPicture', 'directionReview', 'commit'],
   );
   const record = parseProjectRecord(item.record, 'JOB_SOURCE_MISMATCH');
   const projectHash = asCode(() => jobSha(item.projectHash), 'JOB_SOURCE_MISMATCH');
@@ -1571,16 +1595,20 @@ function parseCommentContext(raw: unknown, source?: SourceV3 | string): JobComme
   return out as JobCommentContext;
 }
 
-function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
+function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource>;
+function commentsSource(raw: unknown, optionSets: true): SourceV3;
+function commentsSource(raw: unknown, optionSets = false): SourceV3 {
   if (isRecordSource(raw)) {
     if (Object.hasOwn(raw, 'directionReview')) throw new JobError('JOB_ACT_INVALID');
     const record = parseRecordSource(raw);
-    if (record.subject !== 'plan') throw new JobError('JOB_ACT_INVALID');
+    // Option-set records carry decisions only through picks; act@10 comments on them as well (#1226).
+    if (record.subject !== 'plan' && !optionSets) throw new JobError('JOB_ACT_INVALID');
     return record;
   }
   const common = ['sourceHash', 'projectHash', 'package', 'direction', 'optionSet', 'appliedResult', 'plan', 'parts'];
-  const item = commentsObject(raw, [...common, 'selector', 'model'], ['checkpointEvidence', 'previousDraft']);
+  const item = commentsObject(raw, [...common, 'selector', 'model'], ['checkpointEvidence', 'previousDraft', 'commit']);
   jobSha(item.sourceHash); if (item.projectHash !== null) jobSha(item.projectHash);
+  commitFields(item, 'JOB_ACT_INVALID');
   const pkg = commentsObject(item.package, ['id', 'revision']); jobText(pkg.id); jobText(pkg.revision);
   for (const key of ['direction', 'model']) if (item[key] !== null) parseFileRow(item[key], 'JOB_ACT_INVALID');
   const selector = parseJobSelector(item.selector);
@@ -1632,6 +1660,45 @@ export function parseMeshEditsAct(raw: unknown): JobMeshEditsAct {
 
 export function parseChestLandmarksAct(raw: unknown): JobChestLandmarksAct {
   return decodeCommentsAct(raw, JOB_CHEST_LANDMARKS_ACT_SCHEMA) as JobChestLandmarksAct;
+}
+
+/** Public @10 decoder (#1226): comments and optional carriers on a publication, with no ask. Model freshness,
+ * topology and declared chest seeds are checked by the writer, as for @8 and @9. */
+export function parseCommentOnlyAct(raw: unknown): JobCommentOnlyAct {
+  return asCode(() => {
+    const item = commentsObject(raw, ['schema', 'actId', 'jobId', 'publicationId', 'kind', 'authority', 'at', 'source', 'value']);
+    if (item.schema !== JOB_COMMENT_ONLY_ACT_SCHEMA || item.kind !== 'comments') throw new JobError('JOB_ACT_INVALID');
+    for (const key of ['actId', 'jobId', 'publicationId']) jobId(item[key]);
+    parseHumanAuthority(item.authority, 'JOB_ACT_INVALID');
+    if (typeof item.at !== 'string' || !Number.isFinite(Date.parse(item.at))) throw new JobError('JOB_ACT_INVALID');
+    const source = commentsSource(item.source, true);
+    const value = commentsObject(item.value, ['comments'], ['carriers']);
+    const comments = decodeComments(value.comments, source, true);
+    // Checkpoint pins, question-image pins (no content hash until #1230), compare sides and ask subjects stay with asks.
+    if (comments.some(({anchor, context}) => context?.subject || (anchor && ('checkpointId' in anchor || 'side' in anchor ||
+        ('name' in anchor && !('schema' in anchor)))))) throw new JobError('JOB_ACT_INVALID');
+    const carriers = Object.hasOwn(value, 'carriers') ? commentCarriers(value.carriers, source) : undefined;
+    if (!comments.length && !carriers) throw new JobError('JOB_ACT_INVALID');
+    return {...structuredClone(item), source, value: {comments, ...(carriers ? {carriers} : {})}} as unknown as JobCommentOnlyAct;
+  }, 'JOB_ACT_INVALID');
+}
+
+/** act@10 carriers: the act@8/@9 payload unchanged, each kind once, bound to the displayed model file. */
+function commentCarriers(raw: unknown, source: SourceV3): readonly JobCommentCarrier[] {
+  if (!Array.isArray(raw) || !raw.length || raw.length > 2) throw new JobError('JOB_ACT_INVALID');
+  const model = 'record' in source ? null : source.model;
+  const kinds = new Set<unknown>();
+  return raw.map(entry => {
+    const kind = (entry as {kind?: unknown} | null)?.kind;
+    if (kind !== 'mesh-edits' && kind !== 'chest-landmarks') throw new JobError('JOB_ACT_INVALID');
+    const payload = kind === 'mesh-edits' ? 'meshEdits' : 'chestLandmarks';
+    const item = commentsObject(entry, ['kind', 'file', payload]);
+    const file = parseFileRow(item.file, 'JOB_ACT_INVALID');
+    if (kinds.has(kind) || !model || file.path !== model.path || file.sha256 !== model.sha256) throw new JobError('JOB_ACT_INVALID');
+    kinds.add(kind);
+    return kind === 'mesh-edits' ? {kind, file, meshEdits: parseMeshEdits(item.meshEdits)}
+      : {kind, file, chestLandmarks: parseChestLandmarkEdits(item.chestLandmarks)};
+  });
 }
 
 export function meshEditDigest(edit: JobMeshEditValue): JobSha256 {

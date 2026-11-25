@@ -42,6 +42,8 @@ test('#557/#588 control public job-host retains its runtime exports, record-mode
     'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
     'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct',
     'JOB_CHEST_LANDMARKS_ACT_SCHEMA', 'parseChestLandmarksAct',
+    // #1226: the act@10 comment-only decoder and its schema constant.
+    'JOB_COMMENT_ONLY_ACT_SCHEMA', 'parseCommentOnlyAct',
     // #914: the publisher's previous-draft support marker.
     'JOB_PREVIOUS_DRAFT_SCHEMA',
     // #1005: the host-bound finalized-act waiter.

@@ -757,7 +757,7 @@ test('the new displayed source accepts a new verdict while the old draft keeps i
     const receipt = h.window.state().receipt!;
     const result = await h.window.submit({ kind: 'review-verdict', publicationId: receipt.publicationId,
         pageId: receipt.pageId, displayedNonce: receipt.displayedNonce,
-        expectedGeneration: h.window.state().generation, submissionId: 'new-verdict', askId: act.askId,
+        expectedGeneration: h.window.state().generation, submissionId: 'new-verdict', askId: act.askId!,
         value: { stage: 'rig-review', verdict: 'approved', words: '' } });
     expect(result).toEqual({ ok: true, value: act });
     expect(h.fixture.submissions[0]!.body).toMatchObject({ publicationId: 'publication-2', displayedNonce: receipt.displayedNonce });

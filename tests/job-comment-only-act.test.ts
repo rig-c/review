@@ -32,7 +32,7 @@ const chestEdit: JobChestLandmarkValue = {
   bust: {apex_r: [16 + 1 / 256, 20], apex_l: [56, 20], alpha: 0.22},
 };
 const bind = <T>(edit: T) => ({edit, sha256: api.jobHash(canonicalJson(edit))});
-const context = {mode: 'animate', tab: 'playback', frame: {index: 3, basis: 'producer'}};
+const context = {mode: 'animate', tab: 'playback', frame: {index: 3, basis: 'producer'}} as const;
 
 async function live() {
   const f = await jobFixture();
@@ -61,7 +61,8 @@ test('#1226 a person sends comments with no ask; next and fetch-act deliver the 
     const original = await jobInputHashes(f.root);
     const pinned = feedbackItemComments(syntheticPinnedFeedback(publication.source as never, 1));
     const value = {comments: [{text: 'The motion reads a little fast.', context}, ...pinned]};
-    const saved = await submit(value);
+    const shown = {expectedGeneration: f.session.status().generation};
+    const saved = await submit(value, 'comments-1226', shown);
     expect(saved).toMatchObject({ok: true, value: {schema, kind: 'comments', publicationId: publication.publicationId}});
     if (!saved.ok) throw new Error(saved.error.code);
     const act = host.parseCommentOnlyAct(saved.value);
@@ -71,8 +72,8 @@ test('#1226 a person sends comments with no ask; next and fetch-act deliver the 
     expect(act.value.comments).toEqual(value.comments);
     expect(act.authority).toEqual({actor: 'human', channel: 'review-ui', reviewer: {id: 'declared-owner', role: 'owner'}});
     // The retried submission returns the same immutable act; a changed payload under the same id refuses.
-    expect(await submit(value)).toEqual(saved);
-    expect(await submit({comments: [{text: 'changed'}]})).toMatchObject({ok: false, error: {code: 'JOB_IDEMPOTENCY_CONFLICT'}});
+    expect(await submit(value, 'comments-1226', shown)).toEqual(saved);
+    expect(await submit({comments: [{text: 'changed'}]}, 'comments-1226', shown)).toMatchObject({ok: false, error: {code: 'JOB_IDEMPOTENCY_CONFLICT'}});
     // `next` carries the ordinary act event; nothing else is asked or answered.
     const next = await (await f.call({...f.base(), verb: 'next', after: null, waitMs: 0})).json();
     const events = next.value.events as {type: string; act?: unknown}[];
@@ -123,7 +124,7 @@ test('#1226 carriers ride without a verdict, bound to the displayed model file',
   const {f, publication, submit} = await live();
   try {
     const file = publication.source.model!;
-    const mesh = {kind: 'mesh-edits', file, meshEdits: [bind(meshEdit)]};
+    const mesh = {kind: 'mesh-edits' as const, file, meshEdits: [bind(meshEdit)]};
     const saved = await submit({comments: [], carriers: [mesh]});
     expect(saved).toMatchObject({ok: true, value: {schema}});
     if (!saved.ok) throw new Error(saved.error.code);
@@ -150,7 +151,7 @@ test('#1226 chest landmark carriers need the declared seed and keep the act@9 pa
     f.setContext({...f.getContext(), files: [config], chestLandmarks: [{...chestEdit, source: {...chestEdit.source, configHash: config.sha256}}]});
     const publication = await f.publish();
     const page = await f.display(publication);
-    const chest = {kind: 'chest-landmarks', file: publication.source.model!, chestLandmarks: [bind(chestEdit)]};
+    const chest = {kind: 'chest-landmarks' as const, file: publication.source.model!, chestLandmarks: [bind(chestEdit)]};
     const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, expectedGeneration: f.session.status().generation,
       submissionId: 'chest-1226', kind: 'comments', value: {comments: [{text: 'apex sits low'}], carriers: [chest]}}));
     expect(saved).toMatchObject({ok: true, value: {schema}});
@@ -183,5 +184,59 @@ test('#1226 the decoder is closed, refuses older schemas and is refused by them'
   refuse({...good, source: {...good.source, model: null}});
   for (const decode of [host.parseCommentsAct, host.parseContextCommentsAct, host.parseMeshEditsAct, host.parseChestLandmarksAct]) {
     expect(() => decode(JSON.parse(bytes))).toThrow('JOB_ACT_INVALID');
+  }
+});
+
+test('#1226 an act@10 with no comments and no carriers is refused by the writer and the decoder', async () => {
+  const {f, publication, submit} = await live();
+  try {
+    expect(await submit({comments: []}, 'empty-1226')).toMatchObject({ok: false, error: {code: 'JOB_ACT_INVALID'}});
+    expect(f.session.status().generation).toBe(publication.generation);
+    expect(() => host.parseCommentOnlyAct(sampleAct(publication, {comments: []}))).toThrow('JOB_ACT_INVALID');
+  } finally { await f.close(); }
+});
+
+test('#1226 a declared commit is validated, sealed and echoed as source.commit; absent stays absent', async () => {
+  const commit = '0123456789abcdef0123456789abcdef01234567';
+  const f = await jobFixture();
+  try {
+    const plain = await f.publish();
+    expect('commit' in plain.source).toBe(false);
+    f.setContext({...f.getContext(), commit});
+    const declared = await f.publish();
+    expect(declared.source.commit).toBe(commit);
+    // Sealed: the commit is part of the publication's source hash.
+    expect(declared.source.sourceHash).not.toBe(plain.source.sourceHash);
+    const page = await f.display(declared);
+    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, expectedGeneration: f.session.status().generation,
+      submissionId: 'commit-1226', kind: 'comments', value: {comments: [{text: 'at this commit'}]}}));
+    if (!saved.ok) throw new Error(saved.error.code);
+    expect(host.parseCommentOnlyAct(saved.value).source.commit).toBe(commit);
+    for (const bad of [commit.toUpperCase(), commit.slice(1), null, 7]) {
+      f.setContext({...f.getContext(), commit: bad as string});
+      await expect(f.publish()).rejects.toThrow('JOB_SOURCE_INVALID');
+    }
+  } finally { await f.close(); }
+});
+
+test('#1226 record sources carry a declared commit, and act@10 comments on option-set and plan records', async () => {
+  const {mkdtemp} = await import('node:fs/promises');
+  const {tmpdir} = await import('node:os');
+  const rec = await import('./helpers/job-record-fixture.ts');
+  const commit = 'fedcba9876543210fedcba9876543210fedcba98';
+  const option = rec.createSyntheticOptionRecordWorkspace(await mkdtemp(join(tmpdir(), 'review-1226-')));
+  const plan = rec.createSyntheticPlanRecordWorkspace(await mkdtemp(join(tmpdir(), 'review-1226-')));
+  for (const w of [{...option, optionSetFile: option.optionSetFile}, {...plan, optionSetFile: undefined}]) {
+    const build = (context: unknown) => api.buildRecordSource({record: w.record, selection: w.result, context, optionSetFile: w.optionSetFile} as never);
+    const plain = build(w.context), declared = build({...w.context, commit});
+    expect('commit' in plain).toBe(false);
+    expect(declared.commit).toBe(commit);
+    expect(declared.sourceHash).not.toBe(plain.sourceHash);
+    expect(api.parseRecordSource(structuredClone(declared))).toEqual(declared);
+    expect(() => api.parseRecordSource({...declared, commit: commit.slice(2)})).toThrow();
+    expect(() => api.parseRecordSource({...plain, commit})).toThrow('JOB_SOURCE_MISMATCH');
+    expect(() => build({...w.context, commit: null})).toThrow('JOB_SOURCE_INVALID');
+    const act = sampleAct({publicationId: 'publication-1226', source: declared} as never, {comments: [{text: 'on the record'}]});
+    expect(host.parseCommentOnlyAct(act).source).toEqual(declared);
   }
 });
