@@ -167,7 +167,7 @@ const requestChangesReason=panelMake('span',{id:'request-changes-reason',hidden:
 rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requestChangesReason,requestChanges);
 // #1226: Send comments sits in the act bar, leftmost of the answers; it sends a comment-only act that answers no ask.
 const sendComments=panelMake('button',{id:'send-comments',type:'button',hidden:true});setSourceText(sendComments,'Send comments');button('save').before(sendComments);
-let commentSendState:'idle'|'sent'='idle';
+let commentSendState:'idle'|'sent'='idle';let commentSending=false;
 let sentAloneCache:{key:string;rows:Record<string,string>}|null=null;
 let pendingAnswers:readonly {kind:string;stage?:string}[]=[],answerSaved=false;
 let recordSaveStateShown=false;
@@ -404,9 +404,12 @@ function renderDraftState(): void {
   }
   const live=host?.reviewState?.(liveIssueCount(),saving);
   renderAnswerControls();
-  // #1226: the save state stands in for "Reviewing · N issues" beside Send comments.
-  if(typeof commentHost==='function'&&commentHost()&&!draftConflict&&!actReadOnly&&!(draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus))){
-    rigInspector.actBar.setSaveState(saving?{kind:'saving',text:'Sending'}:!hasUnsentComments()&&(commentSendState==='sent'||!!session?.updatedAt||Object.keys(sentAloneRows()).length>0)?{kind:'saved',text:'Submitted'}:{kind:'unsaved',text:'Not submitted'});
+  // #1226: the save state stands in for "Reviewing · N issues" beside Send comments. A verdict being saved keeps
+  // "Saving…", and an answered verdict keeps its outcome until a new comment is written.
+  if(typeof commentHost==='function'&&commentHost()&&!(saving&&!commentSending)&&!draftConflict&&!actReadOnly&&!(draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus))){
+    const unsent=hasUnsentComments();
+    rigInspector.actBar.setSaveState(saving?{kind:'saving',text:'Sending'}:!unsent&&live&&host?.verdictAnswered?.()?{kind:'saved',text:live}:
+      !unsent&&(commentSendState==='sent'||!!session?.updatedAt||Object.keys(sentAloneRows()).length>0)?{kind:'saved',text:'Submitted'}:{kind:'unsaved',text:'Not submitted'});
     return;
   }
   if (draftStatus === null && !live && !answerSaved && !dirty && !saving && !draftConflict && !actReadOnly && !session?.updatedAt) return;
@@ -1473,7 +1476,7 @@ function bind(): void {
     if(comments?.hasPendingComment?.()&&!await comments.commitDraft())return;
     const generalRows=host!.verdictComments!.rows.filter(row=>!isSentAlone(row)),feedback=unsentFeedback(),general=generalRows.map(row=>row.summary);
     if(!feedback.length&&!general.length)return;
-    saving=true;updateSavedState();
+    saving=true;commentSending=true;updateSavedState();
     let failure:ReturnType<typeof jobSubmissionRefusal>|null=null;
     try{
       const sent=await host!.submitComments!(structuredClone(feedback),general);
@@ -1483,7 +1486,7 @@ function bind(): void {
       comments?.refresh();renderProposals();if(sent)message(sent);
     }catch(error){failure=jobSubmissionRefusal(error);message(failure.text,true);}
     finally{
-      saving=false;updateSavedState();
+      saving=false;commentSending=false;updateSavedState();
       if(failure)rigInspector.actBar.setSaveState({kind:'failed',text:failure.text,title:failure.title});
     }
   };
@@ -2391,7 +2394,8 @@ function renderAnswerControls():void {
  if(typeof sendComments!=='undefined'){
   sendComments.hidden=!commentHost()||!!host?.jobClosed?.();
   sendComments.disabled=blocked||!!readOnly||!hasUnsentComments()&&!pendingStageComment;
-  sendComments.classList.toggle('primary',!verdict);
+  // One emphasised answer: Send comments leads only when no ask of any kind is waiting.
+  sendComments.classList.toggle('primary',!subjects.length);
  }rigAsk.hidden=!dialog||firstPublicationPrompt||!questionPending&&recordTrigger!==rigAsk;
  recordAsk.hidden=!dialog||firstPublicationPrompt||recordTrigger!==recordAsk||!recordKind;
  if(host?.verdictComments){

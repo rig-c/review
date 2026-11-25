@@ -20,6 +20,8 @@ export async function expectRecordActSubmitted(
   wait: (expression: string, label: string) => Promise<void>,
   language: 'en' | 'ko',
   label: string,
+  /** #1226 owner ruling: a live rig screen with no ask keeps its row with the no-ask line and Send comments. */
+  liveRig = false,
 ): Promise<{statusText: string; statusKey: string | null}> {
   const catalog = language === 'en' ? enCatalog : koCatalog;
   const submitted = catalog['Submitted'];
@@ -40,14 +42,14 @@ export async function expectRecordActSubmitted(
       rowVisible: visible(row), statusInRow: row.contains(status),
       headline: visible(headline) ? headline.textContent : null,
       visibleStates: shown(['review-draft-state', 'dirty', 'draft-state']),
-      visibleControls: shown(['save', 'request-changes', 'workspace-pending-ask', 'workspace-pending-record-ask']),
+      visibleControls: shown(['send-comments', 'save', 'request-changes', 'workspace-pending-ask', 'workspace-pending-record-ask']),
       recordPanelVisible: visible(document.getElementById('job-record-asks')),
     };
   })()`);
   assert.deepEqual(readback, {
     statusText: submitted, statusKey: 'saved', rowVisible: true, statusInRow: true,
-    headline: catalog['Nothing is waiting for your answer.'], visibleStates: ['review-draft-state'],
-    visibleControls: [], recordPanelVisible: false,
+    headline: catalog[liveRig ? "We're looking at the work together. Leave your thoughts as comments." : 'Nothing is waiting for your answer.'],
+    visibleStates: ['review-draft-state'], visibleControls: liveRig ? ['send-comments'] : [], recordPanelVisible: false,
   }, label);
   return {statusText: readback.statusText, statusKey: readback.statusKey};
 }

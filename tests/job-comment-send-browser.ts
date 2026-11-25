@@ -38,7 +38,9 @@ async function acts(fixture: Awaited<ReturnType<typeof scriptedJobWindowFixture>
 async function run(lang: 'en' | 'ko') {
   const catalog = lang === 'en' ? enCatalog : koCatalog;
   const fixture = await scriptedJobWindowFixture({c5Parts: 'mesh'});
-  const page = await launchCdpSession(await mkdtemp(join(tmpdir(), 'review-1226-')), {sendDeadlineMs: 20_000});
+  let control: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
+  const page = await launchCdpSession(await mkdtemp(join(tmpdir(), 'review-1226-')), {sendDeadlineMs: 20_000,
+    onEvent(event, send) {if (event.sessionId) control = send;}});
   try {
     const publication = await fixture.publish('rig', 'rig');
     const url = new URL(fixture.host.ownerUrl); url.searchParams.set('lang', lang);
@@ -47,7 +49,11 @@ async function run(lang: 'en' | 'ko') {
     await wait(page, `document.body?.dataset.ready==='true'`, 30_000);
     const save = async (text: string) => {
       await wait(page, `!!document.querySelector('.stage-comment-composer input')`);
-      await page.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(text)};f.requestSubmit();})()`);
+      // The text reaches the field as typed input data, never spliced into evaluated code.
+      await page.evaluate(`(()=>{const field=document.querySelector('.stage-comment-composer input');field.focus();field.select();})()`);
+      assert.ok(control, 'CDP page session');
+      await control('Input.insertText', {text});
+      await page.evaluate(`document.querySelector('.stage-comment-composer').requestSubmit()`);
       await wait(page, `!document.querySelector('.stage-comment-composer')`);
     };
     const general = async (text: string) => {

@@ -310,7 +310,8 @@ export function createJobRigScreen(options: {
     if(!result.ok)throw new Error(result.error.code,{cause:(result.error as {cause?:unknown}).cause});
     partsAttempts.delete(ask.askId);return options.translate('job.saved');
   }
-  let commentAttempt:{key:string;submissionId:string}|null=null;
+  // The daemon's idempotency digest covers the whole submission, so a retry after a lost response replays the cached request unchanged.
+  let commentAttempt:{key:string;request:Extract<UISubmissionV3,{kind:'comments'}>}|null=null;
   /** #1226: one comment-only act (act@10) bound by the page receipt; it answers no ask and leaves a pending one pending. */
   async function submitComments(feedback:readonly Feedback[], general:readonly string[]):Promise<string>{
     const prepared=mounted,state=options.window.state();
@@ -319,10 +320,11 @@ export function createJobRigScreen(options: {
     if(!options.access.capability)throw new Error('JOB_CAPABILITY_REQUIRED');
     const comments=[...feedbackContextComments(feedback),...general.map(text=>({text}))];
     if(!comments.length)throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
-    const value={comments},key=JSON.stringify(value);
-    if(commentAttempt?.key!==key)commentAttempt={key,submissionId:crypto.randomUUID()};
-    const result=await options.window.submit({kind:'comments',publicationId:prepared.display.publication.publicationId,pageId:options.pageId,
-      displayedNonce:state.receipt.displayedNonce,expectedGeneration:state.generation,submissionId:commentAttempt.submissionId,value});
+    const value={comments},publicationId=prepared.display.publication.publicationId,displayedNonce=state.receipt.displayedNonce;
+    const key=JSON.stringify([publicationId,displayedNonce,value]);
+    if(commentAttempt?.key!==key)commentAttempt={key,request:{kind:'comments',publicationId,pageId:options.pageId,
+      displayedNonce,expectedGeneration:state.generation,submissionId:crypto.randomUUID(),value}};
+    const result=await options.window.submit(commentAttempt.request);
     if(!result.ok)throw new Error(result.error.code,{cause:(result.error as {cause?:unknown}).cause});
     commentAttempt=null;return options.translate('job.saved');
   }
@@ -380,6 +382,14 @@ export function createJobRigScreen(options: {
     if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
     const {publicationId,source,answeredDirectionFeedback}=prepared.display.publication;
     const binding={...(jobId?{jobId}:{}),draftId,publicationId,previousPublicationId,sourceHash:source.sourceHash};
+    /** The verdict this page's latest rig/direction or parts verdict ask was answered with, or null. */
+    const answeredVerdict=()=>{
+      const kind=prepared.parts?'parts-verdict':'review-verdict';
+      const ask=options.window.state().pending.filter(ask=>ask.publicationId===prepared.display.publication.publicationId&&
+        ask.subject.kind===kind&&(ask.subject.kind!=='review-verdict'||(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review'))).at(-1);
+      const act=ask?.status==='answered'?ask.act:undefined;
+      return act?.kind===kind&&(act.kind==='parts-verdict'||act.kind==='review-verdict')?act.value.verdict:null;
+    };
     return {...evidencePair,access,pendingSubjects,recordSubmission,navigation,jobClosed:()=>options.window.state().closed,...prepared.refusal?{unavailable:prepared.refusal}:{},
       chestLandmarks:prepared.display.publication.chestLandmarks,
       ...(source.direction?{direction:{...binding,answeredDirectionFeedback}}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>{const subjects=pendingSubjects();
@@ -388,14 +398,11 @@ export function createJobRigScreen(options: {
         prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review');}}}:{}),
       reviewState(issues,sending) {
         if(sending)return options.translate('job.parts.sending');
-        const kind=prepared.parts?'parts-verdict':'review-verdict';
-        const ask=options.window.state().pending.filter(ask=>ask.publicationId===prepared.display.publication.publicationId&&
-          ask.subject.kind===kind&&(ask.subject.kind!=='review-verdict'||(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review'))).at(-1);
-        const act=ask?.status==='answered'?ask.act:undefined;
-        const verdict=act?.kind===kind&&(act.kind==='parts-verdict'||act.kind==='review-verdict')?act.value.verdict:null;
+        const verdict=answeredVerdict();
         return verdict==='changes-requested'?options.translate('job.parts.sent'):verdict==='approved'?options.translate('job.review.approved'):
           options.translate('job.parts.reviewing',[issues]);
-      },...prepared.parts?{subject:'parts' as const,submitParts}: {},
+      },
+      verdictAnswered:()=>answeredVerdict()!==null,...prepared.parts?{subject:'parts' as const,submitParts}: {},
       read(path, method) {
         if (method !== 'GET') return prepared.parts?undefined:Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
         if(prepared.parts){

@@ -114,7 +114,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    if(interview)await page.evaluate<void>(scrollToSubmit);
    await click(page,selector);
    if(interview)await until(page,`${questionSaved}&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
-   else await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`);
+   else await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`,mode==='signoff-model');
    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
    if(mode==='joined-interview'){
     assert.equal(await page.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false,'saved first answer leaves the opener enabled');
@@ -176,10 +176,18 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
     await click(page,'#save');
    }
    await until(page,`document.querySelector('#save').hidden&&document.querySelector('#workspace-pending-ask').hidden`);
-   const done=await page.evaluate<any>(`({question:document.querySelector('#workspace-ask-headline').textContent,primary:[...document.querySelectorAll('#workspace-review-act button.primary')].filter(n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])')).length})`);
-   assert.equal(done.primary,0);
-   assert.equal(await page.evaluate(`document.getElementById('workspace-act-row').hidden`),true);
-   assert.deepEqual(await page.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty']);
+   const done=await page.evaluate<any>(`({question:document.querySelector('#workspace-ask-headline').textContent,primary:[...document.querySelectorAll('#workspace-review-act button.primary')].filter(n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])')).map(n=>n.id)})`);
+   if(mode==='rig'){
+    // #1226 owner ruling: with no ask the live rig row stays, with the no-ask line and Send comments as its one answer.
+    assert.deepEqual(done.primary,['send-comments']);
+    assert.equal(done.question,lang==='ko'?'작업물을 같이 보고 있어요. 의견은 코멘트로 남겨 주세요.':"We're looking at the work together. Leave your thoughts as comments.");
+    assert.equal(await page.evaluate(`document.getElementById('workspace-act-row').hidden`),false);
+    assert.deepEqual(await page.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['review-draft-state']);
+   }else{
+    assert.deepEqual(done.primary,[]);
+    assert.equal(await page.evaluate(`document.getElementById('workspace-act-row').hidden`),true);
+    assert.deepEqual(await page.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty']);
+   }
    await writeFile(join(out,`${mode}-${lang}-submitted.png`),await page.screenshot());
   }
   observations.push({mode,...state});
