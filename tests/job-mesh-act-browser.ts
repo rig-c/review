@@ -475,7 +475,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       await click(screen, '#mesh-edit');
       await wait("!document.querySelector('#mesh-editor-bar').hidden");
       assert.equal(await screen.evaluate<boolean>("document.querySelector('#mesh-apply').disabled"), true);
-      const hint = catalog['In a job, press Request changes to send this edit; the producer rebuilds it.'];
+      const hint = catalog['In a job, press Send comments to send this edit; the producer rebuilds it.'];
       if (mode === 'stale-draft') {
         await wait(`document.querySelector('#mesh-editor-status').innerText.includes(${JSON.stringify(catalog['job.mesh.staleDraft'])})`);
       }
