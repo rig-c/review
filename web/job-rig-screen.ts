@@ -154,8 +154,8 @@ export function createJobRigScreen(options: {
         const {entry} = options.routes(display);
         const {manifest, reviewedSource} = inspection.metadata;
         // #983: a declared plan picture ranks first; the walk below runs only without it.
-        const checkpoint = options.window.state().pending.find(ask=>ask.publicationId===display.publication.publicationId&&ask.status==='pending'&&ask.subject.kind==='checkpoint')?.subject;
-        const paired = checkpoint?.kind==='checkpoint'&&inspection.checkpointEvidence?.some(({packet})=>packet.checkpointId===checkpoint.checkpointId&&!!packet.pair);
+        // #1229: a declared Before / After pair is the record's comparison, with or without a checkpoint ask.
+        const paired = !!inspection.checkpointEvidence?.some(({packet})=>!!packet.pair);
         let picture: JobRigScreenPrepared | null = !paired && !inspection.planPicture && manifest?.model && reviewedSource?.rig
           ? {jobRigScreen:true, display, entry, checkpoints:new Set(), review:{...inspection.metadata, manifest, reviewedSource}}
           : null;
@@ -384,10 +384,13 @@ export function createJobRigScreen(options: {
       pairs.set(packet.checkpointId,{checkpointId:packet.checkpointId,before:imageFor(pair.before),after:imageFor(pair.after),
         differenceUrl:options.routes(prepared.display).api(`checkpoint-evidence/${packet.checkpointId}/difference`)});
     }
-    const evidencePair=pairs.size?{checkpointPairs:pairs,checkpointPair:()=>{
+    // #1229: a pending checkpoint ask selects its pair on a record; without one, a record shows its first declared pair.
+    // Packages keep checkpointPairs for tile-bound pins and pin replay without mounting the pair view.
+    const firstPair=prepared.record?pairs.values().next().value:undefined;
+    const evidencePair=pairs.size?{checkpointPairs:pairs,...(prepared.record?{checkpointPair:()=>{
       const ask=pendingSubjects().find(subject=>subject.kind==='checkpoint');
-      return ask?.kind==='checkpoint'?pairs.get(ask.checkpointId):undefined;
-    }}:{};
+      return ask?.kind==='checkpoint'?pairs.get(ask.checkpointId)??firstPair:firstPair;
+    }}:{})}:{};
     if(prepared.record){
       const record=prepared.record,backdrop=record.picture?host(record.picture,ready):null;
       const question=record.inspection.interview?.questions[0];

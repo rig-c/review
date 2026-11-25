@@ -278,7 +278,7 @@ let idleHeld=false;
 let suspendedPreview=false;
 let controlDispose:(()=>void)|null=null;
 const viewDisposers:(()=>void)[]=[];
-if(host)viewDisposers.push(onLanguageChange(()=>{if(host?.checkpointPair&&checkpointPair)renderLayout();if(jobProgress&&!pendingAnswers.length)renderAskHeadline();}));
+if(host)viewDisposers.push(onLanguageChange(()=>{if(host?.checkpointPairs&&checkpointPair)renderLayout();if(jobProgress&&!pendingAnswers.length)renderAskHeadline();}));
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let chestMapping:CropWorldMapping={available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn'};
 let setupChestWorld:{x:number;y:number}|null=null;
@@ -2088,22 +2088,10 @@ function checkpointPairTile(path:string|null,sha256:string|null):CheckpointPairT
   if(side)return {pair,side};
  }
 }
-function packageCheckpointWords(checkpointId:string|undefined):string {
- const rows=feedbackItemComments(session.feedback),pair=host?.checkpointPair?.();
- if(!pair||pair.checkpointId!==checkpointId)return projectComments(rows);
- const pictures=[pair.before,pair.after];
- return projectCommentLabels(rows,mark=>{
-  const {selection}=parseBookmark(mark.bookmark,inspectionBinding());
-  if(manifestReferenceMatches(mark,selection.reference))return undefined;
-  const picture=pictures.find(item=>item.path===mark.referenceId&&item.sha256===mark.referenceHash);
-  if(!picture||mark.sourceHash!==data.sourceHash||selection.reference!==mark.referenceId)throw new Error('COMMENT_REFERENCE_MISMATCH');
-  return picture;
- });
-}
 /** The sealed plan picture or question image while it is the reference view's shown image, with or without a retained
  * backdrop (#1068); null otherwise (#1048). */
 function shownPlanPicture():{name:string;path:string;sha256:string}|null {
- if(host?.checkpointPair&&checkpointPair){
+ if(host?.checkpointPairs&&checkpointPair){
   const before=checkpointPair.mode==='before'||checkpointPair.mode==='compare';
   return {...(before?checkpointPair.pair.before:checkpointPair.pair.after),name:before?'Before':'After'};
  }
@@ -2186,7 +2174,7 @@ async function showCheckpointPair(mode:CheckpointPairMode):Promise<void> {
 }
 
 function syncCheckpointPair(keepReplay=true):void {
- const pair=host?.checkpointPair?.();
+ const pair=host?.record?host.checkpointPair?.():undefined;
  if(keepReplay&&checkpointPair?.replayFor===(pair??null))return;
  if(pair===checkpointPair?.pair){
   if(checkpointPair)checkpointPair.replayFor=undefined;
@@ -2305,7 +2293,7 @@ function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
  for(const form of recordForms())if(!forms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
  if(!standalone&&forms[0])restoreRecordComments(forms[0] as HTMLFormElement);
  for(const form of forms){
-  if(!standalone)(form as JobForm['form']).commentWords=()=>host?.record||host?.direction?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):packageCheckpointWords(form.dataset.checkpointId);
+  if(!standalone)(form as JobForm['form']).commentWords=()=>host?.record||host?.direction?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):projectComments(feedbackItemComments(session.feedback));
   if(!recordPanel.contains(form))recordPanel.append(form);
  }
  setSourceText(recordTitle,'Checkpoint');
@@ -2329,7 +2317,7 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  // #1226: the comments hint names the button that actually sends them.
  const commentsHint=typeof commentHost==='function'&&commentHost()?rigInspector.comments.panel.querySelector('.review-dialog-header .hint'):null;
  if(commentsHint)setSourceText(commentsHint,'Drafts save locally as you type · nothing is sent until you press Send comments');
- if(host?.checkpointPair)syncCheckpointPair();
+ if(host?.record&&host.checkpointPair)syncCheckpointPair();
  if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
  if(host?.recordSubmission?.()==='submitted')firstPublicationPrompt=false;
  // #1228: a displayed record publication takes the comment line where the first-publication waiting line stood;
@@ -4031,7 +4019,7 @@ function commentCaptureRefusal():string|null {
  * so `world` is the picture's natural pixels; the identity is the sealed `files` entry. */
 function sealedReferenceCamera(){
  const camera=numericView().cameras.reference;
- return host?.checkpointPair&&checkpointPair&&camera?{...camera,zoom:clampZoom(camera.zoom)}:camera;
+ return host?.checkpointPairs&&checkpointPair&&camera?{...camera,zoom:clampZoom(camera.zoom)}:camera;
 }
 function planPicturePose(view:StageComment['viewport']):CommentPose|null {
  const picture=shownPlanPicture(),pane=el('reference-viewport'),camera=sealedReferenceCamera();
@@ -4073,7 +4061,7 @@ function setupComments():void {
  }:undefined,listHost:el('comments-list-host'),openList:openReview,hasPicture:()=>checkpointPair?.replayFor===undefined&&(!hasTransientQuestionImage(screenRoot)||!!shownPlanPicture()),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?(recordPictures()?{reference:el('reference-viewport')}:{}):{rig:el('rig-viewport'),reference:el('reference-viewport')},
   viewportAvailable:view=>view!=='reference'||!previousBuildView?.active(),
   pose:view=>{
-   if(host?.checkpointPair&&checkpointPair||host?.record&&(!host.record.hasPicture||shownPlanPicture()))return planPicturePose(view);
+   if(host?.checkpointPairs&&checkpointPair||host?.record&&(!host.record.hasPicture||shownPlanPicture()))return planPicturePose(view);
    if(hasTransientQuestionImage(screenRoot))return null;
    if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;
    const renderer=player?.renderer;const current=time,index=frameAtTime(activeFrameClock(),current),referenceId=view==='reference'?select('reference-select').value||null:null,referenceHash=referenceId?data.referenceHashes?.[referenceId]??(data.explicitReference?.id===referenceId?data.explicitReference.sha256:null):null;
@@ -4088,7 +4076,7 @@ function setupComments():void {
    const record=host?.record,pictures=record?[...record.planPicture?[record.planPicture]:[],...record.questionPictures??[]]:[];
    return pictures.find(picture=>mark.referenceId===picture.path&&mark.referenceHash===picture.sha256)?.name??null;},
   refusal:()=>{
-   if(host?.checkpointPair&&checkpointPair)return shownPlanPicture()!.path.length>512?'COMMENT_PICTURE_LABEL_INVALID: picture identity':null;
+   if(host?.checkpointPairs&&checkpointPair)return shownPlanPicture()!.path.length>512?'COMMENT_PICTURE_LABEL_INVALID: picture identity':null;
    return host?.record&&(!host.record.hasPicture||shownPlanPicture())?null:commentCaptureRefusal();
   },blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
  });

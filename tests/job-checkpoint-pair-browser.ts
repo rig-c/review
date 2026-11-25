@@ -13,7 +13,7 @@ import {JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_READER_ID,
 import {startJobHost} from '../src/job-front.ts';
 import {differencePixels} from '../src/parts-comparison.ts';
 import {parseFeedback, validatePackageFeedback, type Feedback} from '../src/session.ts';
-import {feedbackItemComments, parsePictureCommentLabel, projectComments, type StageComment} from '../src/stage-comment.ts';
+import {feedbackItemComments, parsePictureCommentLabel, projectComments, timeOnlyBasis, type StageComment} from '../src/stage-comment.ts';
 import {loadRetainedJobReview} from '../src/job-source.ts';
 import type {InspectionBookmark} from '../web/inspection-persistence.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -83,8 +83,8 @@ async function call<T>(host: Host, schema: typeof JOB_API_SCHEMA | typeof JOB_AP
 
 async function openFixture(scratch: string, route: Route, variant: Variant, language?: Language, deferAsk = false) {
     const pkg = route === 'package' ? await realJobWindowFixture({scratchParent: scratch}) : null;
-    const name = variant + (language ? '-' + language : '');
-    const root = pkg?.input.root ?? join(scratch, 'plan-' + name);
+    const name = variant + (language ? '-' + language : '') + (deferAsk ? '-no-ask' : '');
+    const root = pkg?.input.root ?? join(scratch, 'plan-' + name + '-' + randomUUID().slice(0, 8));
     const subject = {kind: 'checkpoint' as const, checkpointId};
     let host: Host | undefined = pkg?.host;
     const close = async () => {if (pkg) await pkg.close(); else host?.stop();};
@@ -105,7 +105,7 @@ async function openFixture(scratch: string, route: Route, variant: Variant, lang
         } else {
             const context = {...plan.context, files, checkpointEvidence: [evidence.packet]};
             const {reader} = createSyntheticRecordReader({onPlan: () => structuredClone(context)});
-            host = await startJobHost({root, stateDir: join(scratch, 'state-' + name), fingerprint: 'a'.repeat(64),
+            host = await startJobHost({root, stateDir: join(scratch, 'state-' + name + '-' + randomUUID().slice(0, 8)), fingerprint: 'a'.repeat(64),
                 reviewer: {id: 'synthetic-owner', role: 'owner'}, publicationMode: 'record-and-package',
                 readRecordPublished: reader, recordReaderId: JOB_RECORD_READER_ID, bindingId: 'synthetic-checkpoint-pair/1',
                 installWriterBinding: () => {}});
@@ -203,8 +203,8 @@ async function observe(page: InputCdpSession, evidence: ReturnType<typeof create
     })()`);
 }
 
-async function waitFor<T>(label: string, check: () => Promise<T | false | undefined>): Promise<T> {
-    const deadline = Date.now() + 25_000;
+async function waitFor<T>(label: string, check: () => Promise<T | false | undefined>, timeoutMs = 25_000): Promise<T> {
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         const value = await check();
         if (value) return value;
@@ -217,30 +217,34 @@ async function settle(page: InputCdpSession) {
     await page.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))');
 }
 
-async function showFixture(page: InputCdpSession, fixture: Awaited<ReturnType<typeof openFixture>>, language: Language) {
+async function showFixture(page: InputCdpSession, fixture: Awaited<ReturnType<typeof openFixture>>, language: Language, hasAsk = true) {
     const owner = new URL(fixture.host.ownerUrl);
     owner.searchParams.set('lang', language);
     await page.goto(owner.href, language);
-    await waitFor('checkpoint mounted', () => page.evaluate<boolean>(`(() => {
-        const form = [...document.querySelectorAll('form[data-job-ask]')].find(f => f.querySelector('select[name=outcome]'));
-        const fields = form?.querySelector('fieldset'), submit = form?.querySelector('button[type=submit]');
-        return document.body.dataset.ready === 'true' && !!fields && !fields.disabled && !!submit &&
-            !submit.matches(':disabled') && typeof form.commentWords === 'function';
-    })()`));
+    if (hasAsk) {
+        await waitFor('checkpoint mounted', () => page.evaluate<boolean>(`(() => {
+            const form = [...document.querySelectorAll('form[data-job-ask]')].find(f => f.querySelector('select[name=outcome]'));
+            const fields = form?.querySelector('fieldset'), submit = form?.querySelector('button[type=submit]');
+            return document.body.dataset.ready === 'true' && !!fields && !fields.disabled && !!submit &&
+                !submit.matches(':disabled') && typeof form.commentWords === 'function';
+        })()`));
+    } else {
+        await waitFor('ready without ask', () => page.evaluate<boolean>(`document.body.dataset.ready === 'true'`));
+    }
     await settle(page);
 }
 
 type Fixture = Awaited<ReturnType<typeof openFixture>>;
 let command: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
 
-async function showSeededDraft(page: InputCdpSession, fixture: Fixture, key: string, draft: unknown) {
+async function showSeededDraft(page: InputCdpSession, fixture: Fixture, key: string, draft: unknown, hasAsk = true) {
     assert.ok(command);
     const origin = new URL(fixture.host.ownerUrl).origin;
     const source = `if(location.origin===${JSON.stringify(origin)})localStorage.setItem(${JSON.stringify(key)},${JSON.stringify(JSON.stringify(draft))});`;
     const {identifier} = await command('Page.addScriptToEvaluateOnNewDocument', {source}) as {identifier: string};
     try {
         await page.goto('about:blank');
-        await showFixture(page, fixture, 'en');
+        await showFixture(page, fixture, 'en', hasAsk);
     } finally {
         await command('Page.removeScriptToEvaluateOnNewDocument', {identifier});
     }
@@ -267,7 +271,7 @@ async function chooseView(page: InputCdpSession, mode: string) {
     await click(page, '#view-menu [data-view="' + mode + '"]');
 }
 
-async function pairView(page: InputCdpSession, fixture: Fixture, language: Language, mode: PairView, enabled = true) {
+async function pairView(page: InputCdpSession, fixture: Fixture, language: Language, mode: PairView, enabled = true, timeoutMs = 25_000) {
     const {before, after, bytes} = fixture.evidence;
     const tile = (side: 'before' | 'after', pane: string) => {
         const png = PNG.sync.read(bytes[side]);
@@ -280,7 +284,7 @@ async function pairView(page: InputCdpSession, fixture: Fixture, language: Langu
         const selected = view.menu.filter(option => option.pressed).map(option => option.id);
         return selected.join() === mode && view.tiles.length === expected.length &&
             view.differenceCanvases === Number(mode === 'difference') && view;
-    });
+    }, timeoutMs);
     assert.deepEqual(view.tiles, expected, mode + ' draws the declared native tiles in order');
     assert.equal(view.panes.reduce((count, pane) => count + pane.images, 0), expected.length,
         mode + ' has only the intended native images');
@@ -411,12 +415,11 @@ async function submitCheckpoint(page: InputCdpSession, fixture: Fixture, route: 
     return {actId: act.act.actId, form};
 }
 
-async function waitForPairRelease(page: InputCdpSession, fixture: Fixture, language: Language, form: string) {
-    await waitFor('submitted checkpoint form and pair view released', async () => {
-        const released = await page.evaluate<boolean>(`!document.querySelector(${JSON.stringify(form)}) &&
-            !document.querySelector('#view-menu [data-view="before"], #view-menu [data-view="after"]')`);
-        return released && (await observe(page, fixture.evidence, language)).tiles.length === 0;
-    });
+// #1229 owner ruling 11-25: answering a record's checkpoint ask closes the form while keeping the declared pair mounted.
+async function waitForRecordFormClosed(page: InputCdpSession, fixture: Fixture, language: Language, form: string, mode: PairView = 'after') {
+    await waitFor('submitted checkpoint form closed on record', async () =>
+        await page.evaluate<boolean>(`!document.querySelector(${JSON.stringify(form)})`));
+    await pairView(page, fixture, language, mode);
 }
 
 type TileSeal = Pick<JobCheckpointEvidence['tiles'][number], 'id' | 'path' | 'sha256'>;
@@ -447,7 +450,8 @@ async function replaySubmittedPin(page: InputCdpSession, fixture: Fixture, langu
     return tiles[0];
 }
 
-async function runPair(page: InputCdpSession, fixture: Fixture, language: Language, captures: string, route: Route) {
+async function runRecordPair(page: InputCdpSession, fixture: Fixture, language: Language, captures: string) {
+    const route: Route = 'plan';
     const observations = {} as Record<PairView, ViewObservation>;
     const pins: {mode: PairView; id: string; text: string; tile: Fixture['evidence']['after']}[] = [];
     await pairView(page, fixture, language, 'after');
@@ -481,8 +485,7 @@ async function runPair(page: InputCdpSession, fixture: Fixture, language: Langua
     }
     const ids = pins.map(pin => pin.id);
     const entry = await waitFor('four pins persisted', () => savedDraft(page, ids));
-    assert.ok(entry.key.startsWith(route === 'plan' ? 'rig-review-record-comments/1:' : 'rig-review-draft/1:'),
-        'pins persist through the route’s own draft store');
+    assert.ok(entry.key.startsWith('rig-review-record-comments/1:'), 'pins persist through the record draft store');
     const rows = feedbackRows(entry);
     const anchors = pins.map(({id, mode, text, tile}) => {
         const row = rows.find(item => item.id === id);
@@ -519,9 +522,10 @@ async function runPair(page: InputCdpSession, fixture: Fixture, language: Langua
         error?: string; refusals: string[];
     }[], releaseError: ''};
     try {
-        await waitForPairRelease(page, fixture, language, form);
+        await waitForRecordFormClosed(page, fixture, language, form);
         postSubmitReplay.released = true;
-        for (const mode of ['after', 'before'] as const) {
+        // Replay Before first while After is shown, then After, proving pin clicks switch and restore each sealed tile.
+        for (const mode of ['before', 'after'] as const) {
             const {id} = pins.find(pin => pin.mode === mode)!;
             const {id: tileId, path, sha256} = fixture.evidence[mode];
             const expected = {id: tileId, path, sha256};
@@ -540,6 +544,65 @@ async function runPair(page: InputCdpSession, fixture: Fixture, language: Langua
     return {counts, views: observations, rgba, anchors, labels, rightPaneRefused: true, replayedAfterNative: true, submittedAct, postSubmitReplay};
 }
 
+/** #1229 owner ruling 11-25: converted package-pair case — packages keep their rig/reference screen without mounting
+ * the tile pair view, while retaining tile-bound pin labels and pin replay through host.checkpointPairs. */
+async function verifyPackageTilePinReplay(page: InputCdpSession, fixture: Fixture) {
+    const {host, publication, sourceHash, evidence} = fixture;
+    const retained = host.session.retainedSource(publication.publicationId);
+    const review = await loadRetainedJobReview(retained, host.session.attestation().fingerprint);
+    const camera: StageComment['camera'] = {space: 'image', center: {x: 32, y: 24}, zoom: 1,
+        viewport: {width: 64, height: 48}, visible: {x: 0, y: 0, width: 64, height: 48}};
+    const cropHash = sha256(Buffer.from(legacy.stillPng, 'base64'));
+    const region = {x: 22, y: 19, width: 0, height: 0};
+    const makeRow = (side: 'before' | 'after') => {
+        const tile = evidence[side];
+        const bookmark: InspectionBookmark = {schema: 'rig-review-inspection/1',
+            binding: {mode: 'single', sourceHash, rigs: [review.reviewedSource.rig?.sha256 ?? null]},
+            animation: null, time: 0, theme: 'system', layers: {images: true, meshes: false, bones: false},
+            view: {schema: 'rig-review-view/1', cameraSync: false, activeCamera: 'reference',
+                cameras: {reference: camera, rig: null, a: null, b: null}},
+            selection: {view: 'reference', part: null, checkpoint: checkpointId, reference: tile.path, inspector: 'rig'}};
+        const mark: StageComment = {schema: 'rig-review-comment/1', mode: 'setup', viewport: 'reference',
+            frame: null, timeBasis: timeOnlyBasis, time: 0, animation: null, sourceHash, modelHash: null,
+            referenceHash: tile.sha256, referenceId: tile.path, camera, screen: region, world: region, slots: [],
+            crop: {path: 'comment-crops/' + cropHash + '.png', sha256: cropHash, png: 'data:image/png;base64,' + legacy.stillPng,
+                width: 1, height: 1}, bookmark};
+        return {id: 'historical-package-tile-' + side, frameStart: null, frameEnd: null,
+            target: {kind: 'rig' as const, name: 'viewport-387-public'}, category: 'defect' as const,
+            summary: 'Saved package tile ' + side,
+            context: {animation: null, time: 0, frame: null, interval: null, comment: mark}};
+    };
+    const beforeRow = makeRow('before'), afterRow = makeRow('after');
+    const key = `rig-review-draft/1:single:${review.manifest.id}:${sourceHash}:${sourceHash}`;
+    const current = JSON.parse(await waitFor('current package draft envelope for tile replay', async () =>
+        await page.evaluate<string | null>(`localStorage.getItem(${JSON.stringify(key)})`) ?? false));
+    const draft = {...current, schema: 'rig-review-local-draft/1', reviewDirty: true,
+        session: {...current.session, feedback: [beforeRow, afterRow]}};
+    await showSeededDraft(page, fixture, key, draft);
+    // Opening with saved tile pins still keeps the package's normal rig/reference view until a pin is replayed.
+    const initial = await observe(page, evidence, 'en');
+    assert.equal(initial.tiles.length, 0, 'saved tile pins do not mount the pair view on package load');
+    const summaries = await waitFor('tile labels rendered on package comment list', async () => {
+        const list = await page.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(summary)})].map(n => n.textContent ?? '')`);
+        return list.length === 2 ? list : false;
+    });
+    assert.ok(summaries.some(text => text.includes(' on Before') && text.endsWith('Saved package tile before')),
+        'Before tile label bound via checkpointPairTile: ' + JSON.stringify(summaries));
+    assert.ok(summaries.some(text => text.includes(' on After') && text.endsWith('Saved package tile after')),
+        'After tile label bound via checkpointPairTile: ' + JSON.stringify(summaries));
+    const replayedBefore = await replaySubmittedPin(page, fixture, 'en', {
+        id: beforeRow.id, text: beforeRow.summary, tile: {id: evidence.before.id, path: evidence.before.path, sha256: evidence.before.sha256},
+    });
+    const replayedAfter = await replaySubmittedPin(page, fixture, 'en', {
+        id: afterRow.id, text: afterRow.summary, tile: {id: evidence.after.id, path: evidence.after.path, sha256: evidence.after.sha256},
+    });
+    // Clicking an inspector mode leaves the replayed tile and returns to the package rig view.
+    await click(page, '[data-mode="rig"]');
+    await waitFor('package rig view restored after pin replay', async () =>
+        (await observe(page, evidence, 'en')).tiles.length === 0);
+    return {replayedBefore, replayedAfter};
+}
+
 /** A correctly sealed third tile is still neither a manifest reference nor a member of the pair. */
 async function refuseOutsidePair(page: InputCdpSession, fixture: Fixture, entry: DraftEntry, id: string) {
     const draft = structuredClone(entry.draft);
@@ -549,10 +612,10 @@ async function refuseOutsidePair(page: InputCdpSession, fixture: Fixture, entry:
     row.context.comment.referenceId = spare.path;
     row.context.comment.referenceHash = spare.sha256;
     (row.context.comment.bookmark as InspectionBookmark).selection.reference = spare.path;
-    await showSeededDraft(page, fixture, entry.key, draft);
+    await showSeededDraft(page, fixture, entry.key, draft, false);
     if (!(await inspectionErrors(page)).some(error => error.includes('COMMENT_REFERENCE_MISMATCH'))) {
         const selector = `[data-comment-id="${id}"] .stage-comment-summary`;
-        await waitFor('planted package row restored', () => page.evaluate<boolean>('!!document.querySelector(' + JSON.stringify(selector) + ')'));
+        await waitFor('planted record row restored', () => page.evaluate<boolean>('!!document.querySelector(' + JSON.stringify(selector) + ')'));
         await page.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
     }
     await waitFor('outside-pair path refuses by name', async () =>
@@ -563,10 +626,12 @@ async function refuseOutsidePair(page: InputCdpSession, fixture: Fixture, entry:
     return {path: spare.path, sha256: spare.sha256, refusal};
 }
 
+// #1229 owner ruling 11-25: converted outside-pair pin refusal control from package to plan record (with no ask)
+// because packages no longer mount the checkpoint tile pair view for placing new tile pins.
 async function runOutsidePairControl(page: InputCdpSession, scratch: string) {
-    const fixture = await openFixture(scratch, 'package', 'pair', 'en');
+    const fixture = await openFixture(scratch, 'plan', 'pair', 'en', true);
     try {
-        await showFixture(page, fixture, 'en');
+        await showFixture(page, fixture, 'en', false);
         await chooseView(page, 'difference');
         await pairView(page, fixture, 'en', 'difference');
         await startCapture(page);
@@ -641,17 +706,61 @@ function arg(name: string) {
     return value;
 }
 
+/** #1229 fail-first case (owner ruling 11-25): a record publication with a declared pair and NO checkpoint ask
+ * mounts and switches the pair view from the start. Fails on 8ee04367 where pair mounting required a pending ask. */
+async function recordPairWithoutAsk(page: InputCdpSession, scratch: string, captures: string) {
+    const out: Record<string, unknown> = {};
+    for (const language of languages) {
+        const fixture = await openFixture(scratch, 'plan', 'pair', language, true);
+        try {
+            await showFixture(page, fixture, language, false);
+            assert.equal(await page.evaluate<number>(`document.querySelectorAll('form[data-job-ask]').length`), 0,
+                'record has no pending checkpoint ask');
+            const after = await pairView(page, fixture, language, 'after', true, 6_000);
+            await capture(page, captures, 'plan-no-ask-opening-' + language);
+            await chooseView(page, 'compare');
+            await pairView(page, fixture, language, 'compare');
+            await chooseView(page, 'difference');
+            await pairView(page, fixture, language, 'difference');
+            const rgba = await differenceBytes(page, fixture.evidence);
+            out[language] = {tiles: after.tiles.length, differenceSha256: rgba.sha256};
+            console.log('1229_RECORD_PAIR_NO_ASK_PASS ' + language);
+        } finally {
+            await page.goto('about:blank');
+            await fixture.close();
+        }
+    }
+    return out;
+}
+
 async function checkpointViewportControls(page: InputCdpSession, scratch: string) {
     for (const language of languages) {
+        // #1128 empty record controls check uses no-pair, because under #1229 owner ruling 11-25 a declared pair is up from the start.
+        const emptyFixture = await openFixture(scratch, 'plan', 'no-pair', language, true);
+        try {
+            await showFixture(page, emptyFixture, language, false);
+            await waitFor('1128 empty record without pair', () => page.evaluate<boolean>(`document.body.dataset.ready === 'true' &&
+                document.querySelector('#rig-empty')?.checkVisibility() && !!document.querySelector('#view-menu [data-view="compare"]')`));
+            await recordViewportControls(page, command!, language, true);
+        } finally {
+            await page.goto('about:blank');
+            await emptyFixture.close();
+        }
         const fixture = await openFixture(scratch, 'plan', 'pair', language, true);
         try {
             const url = new URL(fixture.host.ownerUrl);
             url.searchParams.set('lang', language);
             await page.goto(url.href, language);
-            await waitFor('1128 empty checkpoint', () => page.evaluate<boolean>(`document.body.dataset.ready === 'true' &&
-                document.querySelector('#rig-empty')?.checkVisibility() && !!document.querySelector('#view-menu [data-view="compare"]')`));
-            await recordViewportControls(page, command!, language, true);
+            // #1229 owner ruling 11-25: on a record, the first declared pair is up from the start before any checkpoint ask,
+            // and stays mounted after the checkpoint ask is answered.
+            await pairView(page, fixture, language, 'after');
+            await recordViewportControls(page, command!, language, false);
             await fixture.ask();
+            await waitFor('checkpoint ask form mounted on paired record', () => page.evaluate<boolean>(`(() => {
+                const form = [...document.querySelectorAll('form[data-job-ask]')].find(f => f.querySelector('select[name=outcome]'));
+                const fields = form?.querySelector('fieldset'), submit = form?.querySelector('button[type=submit]');
+                return !!fields && !fields.disabled && !!submit && !submit.matches(':disabled') && typeof form.commentWords === 'function';
+            })()`));
             await pairView(page, fixture, language, 'after');
             await recordViewportControls(page, command!, language, false);
             const scale = () => page.evaluate<number>("new DOMMatrix(getComputedStyle(document.querySelector('#reference-content')).transform).a");
@@ -668,8 +777,8 @@ async function checkpointViewportControls(page: InputCdpSession, scratch: string
             await chooseView(page, 'before');
             await pairView(page, fixture, language, 'before');
             const {form} = await submitCheckpoint(page, fixture, 'plan', '');
-            await waitForPairRelease(page, fixture, language, form);
-            await recordViewportControls(page, command!, language, true);
+            await waitForRecordFormClosed(page, fixture, language, form, 'before');
+            await recordViewportControls(page, command!, language, false);
             console.log('1128_CHECKPOINT_PASS ' + language);
         } finally {
             await page.goto('about:blank');
@@ -680,6 +789,7 @@ async function checkpointViewportControls(page: InputCdpSession, scratch: string
 
 async function run() {
     const baseline = Bun.argv.includes('--baseline');
+    const recordNoAskOnly = Bun.argv.includes('--record-no-ask');
     const comparisonPath = arg('--compare');
     const output = resolve(arg('--out') ?? (baseline ? 'artifacts/716-baseline' : 'artifacts/716'));
     const captures = join(output, 'owner-look');
@@ -701,6 +811,18 @@ async function run() {
         }});
         await page.setViewport(1440, 900);
         if (!baseline) {
+            active = 'record-pair-no-ask';
+            const noAskScratch = await mkdtemp(join(scratch, 'record-no-ask-'));
+            try {
+                results.cases.recordPairNoAsk = await recordPairWithoutAsk(page, noAskScratch, captures);
+            } finally {
+                await rm(noAskScratch, {recursive: true, force: true});
+            }
+            if (recordNoAskOnly) {
+                await writeFile(join(output, 'observations.json'), JSON.stringify(results, null, 2) + '\n');
+                return;
+            }
+            active = 'checkpoint-viewport-controls';
             const viewportScratch = await mkdtemp(join(scratch, 'viewport-controls-'));
             try {
                 await checkpointViewportControls(page, viewportScratch);
@@ -710,7 +832,9 @@ async function run() {
         }
         if (Bun.argv.includes('--viewport-controls')) return;
         for (const route of routes) {
-            const variants: Variant[] = baseline ? ['no-pair', 'pair'] : ['no-pair', 'pair', 'size-mismatch'];
+            // #1229 owner ruling 11-25: deleted package-*-size-mismatch because packages no longer mount the checkpoint tile pair view;
+            // plan-*-size-mismatch covers the pair Difference alignment refusal on records.
+            const variants: Variant[] = baseline || route === 'package' ? ['no-pair', 'pair'] : ['no-pair', 'pair', 'size-mismatch'];
             for (const variant of variants) {
                 for (const language of languages) {
                     active = route + '-' + language + '-' + variant;
@@ -739,8 +863,22 @@ async function run() {
                                 canvases: view.differenceCanvases, differenceEnabled: view.differenceEnabled}));
                             if (!baseline && variant === 'no-pair' && route === 'package' && language === 'en')
                                 results.cases.historicalManifestReference = await historicalReference(page, fixture);
+                        } else if (variant === 'pair' && route === 'package') {
+                            // #1229 owner ruling 11-25: converted package-*-pair from mounting the removed tile pair view to verifying
+                            // the package keeps its old rig/reference screen while retaining tile-bound pin labels and pin replay.
+                            const view = await observe(page, fixture.evidence, language);
+                            assert.equal(view.language, language);
+                            assert.equal(view.tiles.length, 0, active + ' package does not mount checkpoint pair tiles');
+                            assert.equal(view.differenceCanvases, 0, active + ' package has no tile Difference canvas');
+                            assert.deepEqual(view.menu.map(option => option.id), ['compare', 'reference', 'rig', 'difference'],
+                                active + ' package keeps its standard view switch without pair entries');
+                            await capture(page, captures, route + '-pair-removed-' + language);
+                            console.log('CHECKPOINT_PAIR_COUNTS ' + JSON.stringify({case: active, tiles: view.tiles.length,
+                                canvases: view.differenceCanvases, differenceEnabled: view.differenceEnabled}));
+                            const tileReplay = language === 'en' ? await verifyPackageTilePinReplay(page, fixture) : undefined;
+                            results.cases[active] = {view, ...(tileReplay ? {tileReplay} : {})};
                         } else if (variant === 'pair') {
-                            const result = await runPair(page, fixture, language, captures, route);
+                            const result = await runRecordPair(page, fixture, language, captures);
                             results.cases[active] = result;
                             console.log('CHECKPOINT_PAIR_COUNTS ' + JSON.stringify({case: active, ...result.counts}));
                             const replay = result.postSubmitReplay;
