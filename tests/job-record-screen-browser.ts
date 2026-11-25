@@ -812,8 +812,9 @@ async function liveQuestionDraftChecks(){
     assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(submit)}).hidden`),true);
     // Carried from the retired #839 questionTabChecks: the completed answer leaves no act controls and one saved state.
     // #1048 lifted the question-image pin refusal for a sealed question image: pin mode now opens on it.
-    assert.equal(await page!.evaluate<boolean>(`['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)&&document.querySelector('#workspace-act-row').hidden`),true,'completed answer controls hidden');
-    assert.deepEqual(await page!.evaluate<string[]>(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'single visible saved state');
+    // #1242 owner ruling: the record screen keeps the rig screen's row with Send comments, so the saved state stays in that row.
+    assert.equal(await page!.evaluate<boolean>(`['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)&&!document.querySelector('#workspace-act-row').hidden&&!document.getElementById('send-comments').hidden`),true,'completed answer leaves only Send comments');
+    assert.deepEqual(await page!.evaluate<string[]>(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['review-draft-state'],'single visible saved state');
     if(painting){
      await click(page!,'#stage-comment');
      await wait(`!!document.querySelector('#reference-viewport.stage-comment-mode')&&!document.querySelector('#rig-viewport.stage-comment-mode')`,'sealed question image takes pin mode (#1048)');

@@ -26,7 +26,6 @@ async function app(options: {edits: boolean; rows?: {id: string; summary: string
   const javascript = new Bun.Transpiler({loader: 'ts'}).transformSync(
     slice('const unsentFeedback=', 'function renderDraftState(): void {') +
     slice('function renderDraftState(): void {', 'function renderProvenance(') +
-    slice('  sendComments.onclick=async()=>{', '  chestEditor=bindChestEditor(') +
     'function renderDisabled(blocked,readOnly){' + disabled + '}');
   const run = new Function('host', 'confirms', `
     let session = {feedback: [], updatedAt: null}, saving = false, commentSending = false, dirty = false;

@@ -33,8 +33,9 @@ try{
    const url=new URL(f.host.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href,language);
    await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')&&!document.querySelector('#save').disabled`);
    if(sourceStart!==0){
-    // #1041: Comment · C opens the right communication panel and narrows the stage; open it (C on, C off) before the first raster read.
-    await click('#stage-comment');await click('#stage-comment');
+    // #1041: Comment · C opens the right communication panel and narrows the stage; open it before the first raster read.
+    // #1242 owner ruling 11-25: the panel stays only while the person is commenting, so Comment stays on (C off with no comment closes it).
+    await click('#stage-comment');
     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
     const initialRaster:{png:string;width:number;height:number}=await page.evaluate(`(()=>{const c=document.querySelector('#rig-root canvas');return {png:c.toDataURL('image/png'),width:c.width,height:c.height};})()`);
     const initialPng=initialRaster.png;

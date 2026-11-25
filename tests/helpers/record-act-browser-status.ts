@@ -20,8 +20,9 @@ export async function expectRecordActSubmitted(
   wait: (expression: string, label: string) => Promise<void>,
   language: 'en' | 'ko',
   label: string,
-  /** #1226 owner ruling: a live rig screen with no ask keeps its row with the no-ask line and Send comments. */
-  liveRig = false,
+  /** #1226 owner ruling: a live rig screen with no ask keeps its row with the no-ask line and Send comments.
+   * #1242 owner ruling: a record screen on a live job holds the same row, so this is the default. */
+  liveRig = true,
 ): Promise<{statusText: string; statusKey: string | null}> {
   const catalog = language === 'en' ? enCatalog : koCatalog;
   const submitted = catalog['Submitted'];

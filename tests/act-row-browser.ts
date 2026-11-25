@@ -318,7 +318,8 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    }
    await click(page,'#save');
    // #1226 owner ruling: a live rig with no ask keeps its row (no-ask line, Send comments); the approved outcome stays its state.
-   const liveRig=mode==='rig'||mode==='embedded-rig',stateId=liveRig?'review-draft-state':'dirty';
+   // #1242 owner ruling: the direction and parts screens hold the same row.
+   const liveRig=true,stateId='review-draft-state';
    await wait(page,`document.getElementById('workspace-act-row').hidden===${!liveRig}&&!document.getElementById('${stateId}').hidden&&document.getElementById('${stateId}').dataset.saveState==='saved'`);
    const submitted:any=await capture(page,out,'submitted');assert.equal(submitted.rowVisible,liveRig);
    if(mode!=='embedded-rig')assert.deepEqual(submitted.states,[stateId]);
@@ -348,7 +349,8 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
     assert.deepEqual(savedState.row,{kind:'saved',text:language==='ko'?koCatalog['Answer saved']:'Answer saved'});
     if(savedState.pending)assertPending(saved,mode,width,expectedPendingFooter);
     else{
-     assert.equal(saved.rowVisible,false);assert.deepEqual(saved.states,['dirty']);assert.deepEqual(saved.answers,[]);assert.deepEqual(saved.primary,[]);
+     // #1242 owner ruling: the record screen keeps its row with Send comments, so the answer's state stays in the row.
+     assert.equal(saved.rowVisible,true);assert.deepEqual(saved.states,['review-draft-state']);assert.deepEqual(saved.answers,[]);assert.deepEqual(saved.primary,[]);
      assert.deepEqual(savedState.dirty,savedState.row,'completed answer keeps the exact saved state in its one visible state copy');
     }
    }else{

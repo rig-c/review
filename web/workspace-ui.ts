@@ -124,6 +124,8 @@ export interface WorkspaceUI {
  revealInspector:()=>void;refresh:()=>void;
  /** Open the communication panel (#1041) and lay the workspace out now, before the caller arms anything on the stage. */
  revealCommunication:()=>void;
+ /** Undo `revealCommunication`: the panel stays only while `rightPending` holds (#1242). */
+ concealCommunication:()=>void;
  /** Lay the workspace out now, so a region that just appeared above the stage never leaves it under its minimum for a frame. */
  layoutNow:()=>void;element:(id:string)=>HTMLElement|null;settle:()=>Promise<void>;dispose:()=>void;
 }
@@ -312,6 +314,10 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
   if(effective.inspectorMode==='drawer'&&!dialogs.inspectorHeight.open){for(const dialog of Object.values(dialogs))if(dialog.open)dialog.close();buttons.inspectorHeight.click();if(bottom)apply();}
  };
  const layoutNow=()=>{if(disposed)return;if(frame){cancelAnimationFrame(frame);frame=0;}apply();};
+ const concealCommunication=()=>{
+  if(!communicationKey||!communicationRevealed)return;communicationRevealed=false;
+  if(dialogs[communicationKey].open)dialogs[communicationKey].close();layoutNow();
+ };
  const revealCommunication=()=>{
   if(!communicationKey)return;communicationRevealed=true;layoutNow();
   if(effective.communicationMode==='drawer'&&!dialogs[communicationKey].open){for(const dialog of Object.values(dialogs))if(dialog.open)dialog.close();buttons[communicationKey].click();}
@@ -374,7 +380,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  }
  for(const tab of tabs)observer.observe(panelFor(tab));
  const resumed=()=>{if(!document.hidden)store.refresh();};document.addEventListener('visibilitychange',resumed);schedule();
- return {defaults:()=>store.get(),beforeTab:capture,afterTab:restore,scroll:()=>{capture();return JSON.stringify(memory.snapshot());},restoreScroll(value){if(typeof value!=='string')return;memory.replace(JSON.parse(value));restore();},revealInspector,revealCommunication,layoutNow,refresh:schedule,element:id=>require(id,true)??null,
+ return {defaults:()=>store.get(),beforeTab:capture,afterTab:restore,scroll:()=>{capture();return JSON.stringify(memory.snapshot());},restoreScroll(value){if(typeof value!=='string')return;memory.replace(JSON.parse(value));restore();},revealInspector,revealCommunication,concealCommunication,layoutNow,refresh:schedule,element:id=>require(id,true)??null,
   async settle(){layoutNow();await settleAnimationFrames();if(!disposed)apply();},
   dispose(){if(disposed)return;capture();disposed=true;if(frame)cancelAnimationFrame(frame);observer.disconnect();chromeWatch.disconnect();document.removeEventListener('visibilitychange',resumed);unsubscribe();for(const binding of bindings)binding.dispose();for(const dispose of disposers)dispose();for(const dialog of Object.values(dialogs)){if(dialog.open)dialog.close();dialog.remove();}memory.dispose();store.dispose();}
  };

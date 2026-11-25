@@ -21,13 +21,14 @@ type Language = 'en' | 'ko';
 type Verb = JobAgentRequestV3['verb'];
 type RequestBody = {[V in Verb]: Omit<Extract<JobAgentRequestV3, {verb: V}>, 'schema' | 'jobId' | 'requestId'>}[Verb];
 type HeadlineReadback = {
-  headline: string; translate: string | null; barVisible: boolean; actionVisible: boolean;
+  headline: string; translate: string | null; barVisible: boolean; actionVisible: boolean; sendCommentsVisible: boolean;
   whiteSpace: string | null; headlineElements: number;
   painting: {path: string; width: number; height: number; sameNode: boolean} | null;
   title: string; ready: boolean; sameWorkspace: boolean; editable: boolean; answered: boolean;
 };
 
 const zeroProgressHeadline = 'Nothing is waiting for your answer.';
+const noAskHeadline = "We're looking at the work together. Leave your thoughts as comments.";
 // This literal already has a Korean catalog rendering. Agent text must keep its original bytes.
 const agentText = '  Check the parts.  ';
 const interview = {questionId: 'post_timing', setId: 'post-picture'};
@@ -95,6 +96,7 @@ const readScreen = (page: InputCdpSession, askId = '') => page.evaluate<Headline
     whiteSpace: headline ? getComputedStyle(headline).whiteSpace : null, headlineElements: headline?.childElementCount ?? 0,
     barVisible: visible('#workspace-act-row') && visible('#workspace-ask-headline'),
     actionVisible: ['#workspace-pending-ask', '#save', '#request-changes'].some(visible),
+    sendCommentsVisible: visible('#send-comments'),
     painting: painting ? {path: new URL(painting.currentSrc).pathname, width: painting.naturalWidth, height: painting.naturalHeight,
       sameNode: painting === globalThis.__review987Painting} : null,
     title: document.querySelector('#package-title')?.textContent ?? '', ready: document.body.dataset.ready === 'true',
@@ -201,8 +203,8 @@ async function runBrowser(language: Language, output: string, scratch: string) {
     const answered = (state: HeadlineReadback) => state.answered && !state.editable && !state.actionVisible &&
       !!state.painting && state.painting.path === pending.painting?.path &&
       state.painting.width === pending.painting?.width && state.painting.height === pending.painting?.height;
-    await capture('old-agent', state => answered(state) && !state.barVisible &&
-      state.headline === catalog[zeroProgressHeadline] && state.translate === null);
+    await capture('old-agent', state => answered(state) && state.barVisible && state.sendCommentsVisible &&
+      state.headline === catalog[noAskHeadline] && state.translate === null);
     await page.evaluate(`globalThis.__review987Painting = document.querySelector('#reference-content img');
       globalThis.__review987App = document.getElementById('app'); void 0`);
     const receipt = await fixture.progress(2, 'build');
@@ -227,7 +229,7 @@ async function runBrowser(language: Language, output: string, scratch: string) {
     const publication = await fixture.publishInterview(2);
     assert.notEqual(publication.value.publicationId, firstPublication.value.publicationId);
     await capture('next-publication', state => state.ready && !state.sameWorkspace && state.title === publication.value.label &&
-      state.headline === catalog[zeroProgressHeadline] && state.translate === null && state.whiteSpace === firstLoad.whiteSpace);
+      state.headline === catalog[noAskHeadline] && state.sendCommentsVisible && state.translate === null && state.whiteSpace === firstLoad.whiteSpace);
     const secondAsk = await fixture.askInterview(publication);
     askId = secondAsk.value.askId;
     const pendingCaption = (state: HeadlineReadback) => interviewCaption(state, publication.value.publicationId) && state.translate === null;

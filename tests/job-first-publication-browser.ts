@@ -245,12 +245,14 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
           visible:document.querySelector('#workspace-ask-headline').checkVisibility(),
           message:document.querySelector('#message').textContent,
           layoutState:document.querySelector('#layout-state').textContent,
-          partStatus:document.querySelector('[data-part-status]').textContent
-        }))()` ) as {sameNodes:boolean;rects:unknown[];prompt:string;visible:boolean;message:string;layoutState:string;partStatus:string};
+          partStatus:document.querySelector('[data-part-status]').textContent,
+          sendComments:!!document.querySelector('#send-comments')?.checkVisibility()
+        }))()` ) as {sameNodes:boolean;rects:unknown[];prompt:string;visible:boolean;message:string;layoutState:string;partStatus:string;sendComments:boolean};
         assert.equal(filled.sameNodes,true,'first publication fills the original shell, viewport and bottom panel nodes');
         assert.deepEqual(filled.rects,waiting.rects,'shared frame does not jump on first publication');
-        // #1226 owner ruling: a published rig with no ask shows the no-ask line (Send comments); parts still waits.
-        assert.equal(filled.prompt,catalog[stage==='rig'?"We're looking at the work together. Leave your thoughts as comments.":'job.waiting'],'no fabricated ask between publication and the actual pending subject');
+        // #1226 owner ruling: a published rig with no ask shows the no-ask line (Send comments); #1242: parts too.
+        assert.equal(filled.prompt,catalog["We're looking at the work together. Leave your thoughts as comments."],'no fabricated ask between publication and the actual pending subject');
+        assert.equal(filled.sendComments,true,'a published source with no ask offers Send comments');
         assert.ok([publication.label,catalog[stage==='parts'?'Parts ready. Source files remain unchanged.':'Record review status and structured feedback while preserving sources. Motion is read only.']].includes(filled.message));
         assert.equal(filled.layoutState,catalog['Side by side']);
         assert.equal(filled.partStatus,stage==='parts'?(lang==='en'?'2 parts':'파츠 2개'):(lang==='en'?'1 declared slots · 1 results':'선언된 슬롯 1개 · 결과 1개'));

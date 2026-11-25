@@ -7,7 +7,7 @@ import type {SceneInspection} from '../src/scene-inspection.ts';
 import type {JobProgressV3,RecordSource} from '../src/job-contract.ts';
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
 import {mountJobScreen,joinedInterviewForms,mediaReady,jobSubmissionRefusal} from './job-session.ts';
-import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding} from '../src/parts-comment.ts';
+import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding,type PartsIssue} from '../src/parts-comment.ts';
 import type {JobForm} from './job-session.ts';
 import type {JobRigMeshHost,JobRigMeshScreen} from './job-rig-screen.ts';
 import {bindWorkspaceDrawer,settleAnimationFrames} from './workspace-layout.ts';
@@ -168,7 +168,7 @@ rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requ
 // #1226: Send comments sits in the act bar, leftmost of the answers; it sends a comment-only act that answers no ask.
 const sendComments=panelMake('button',{id:'send-comments',type:'button',hidden:true});setSourceText(sendComments,'Send comments');button('save').before(sendComments);
 let commentSendState:'idle'|'sent'='idle';let commentSending=false;
-let sentAloneCache:{key:string;rows:Record<string,string>}|null=null;
+const rowStoreCache=new Map<string,{key:string;rows:Record<string,string>}>();
 let pendingAnswers:readonly {kind:string;stage?:string}[]=[],answerSaved=false;
 let recordSaveStateShown=false;
 let jobProgress:JobProgressV3|null=null,progressTimer:ReturnType<typeof setInterval>|undefined;
@@ -242,6 +242,10 @@ let comments:ReturnType<typeof bindStageComments>|null=null;
 const recordComments:CommentRow[]=[];
 let recordCommentKey='';
 const submittedDirectionComments=new Set<string>();
+/** #1242: record rows as an answered record act carried them, by id; a row written or edited after it is unsent. */
+let answerInFlightRows:readonly CommentRow[]=[];let recordAnswered=false;
+/** #1242: pinned parts issues an answered parts verdict carried (startParts owns the set). */
+let partsSubmittedIssues:ReadonlySet<string>=new Set();
 let view: 'compare' | 'reference' | 'rig' = 'compare';
 // Requested layout persists in the source-bound draft; the effective one follows actual load events only.
 let rigInput:InputState={state:'pending'},referenceInput:InputState={state:'absent'},effectiveView:SingleLayout|null=null;
@@ -370,34 +374,94 @@ function updateSavedState(): void {
 // #1226: a row already sent on its own does not count toward a later Request changes.
 let liveIssueCount=()=>{const fresh=(row:{id:string})=>!(typeof isSentAlone==='function'&&isSentAlone(row));
   return (session?.feedback.filter(fresh).length??0)+(host?.verdictComments?.rows.filter(fresh).length??0);};
-/** #1226: a live rig screen (not parts, record or direction) can send its comments without an ask. */
-function commentHost():boolean {return !!host?.verdictComments&&!!host.submitComments&&!partsOnly;}
+/** #1226: the publication the screen's comments are bound to; #1242: rig and parts verdict comments, direction or record. */
+const commentBinding=()=>host?.verdictComments??host?.direction??host?.record;
+/** #1226/#1242: a live rig, direction, parts or record screen can send its comments without an ask. */
+function commentHost():boolean {return !!commentBinding()&&!!host?.submitComments;}
 /** #1226: rows sent on their own as act@10, by id with the exact content sent. Such a row is shown Submitted and
  * is never sent again inside a later act (CONTRACT §1). Bound to the displayed publication and source. */
-function sentAloneRows():Record<string,string> {
-  const binding=host?.verdictComments,key=binding?`rig-review-sent-alone/1:${binding.publicationId}:${binding.sourceHash}`:'';
-  if(sentAloneCache?.key!==key){
+function sentAloneRows(store='rig-review-sent-alone/1'):Record<string,string> {
+  const binding=commentBinding(),key=binding?`${store}:${binding.publicationId}:${binding.sourceHash}`:'';
+  let cached=rowStoreCache.get(store);
+  if(cached?.key!==key){
     const rows:Record<string,string>={};
     try{const stored=key?JSON.parse(localStorage.getItem(key)??'{}'):{};
       if(stored&&typeof stored==='object'&&!Array.isArray(stored))for(const [id,json] of Object.entries(stored))if(typeof json==='string')rows[id]=json;}catch{/* in memory only */}
-    sentAloneCache={key,rows};
+    cached={key,rows};rowStoreCache.set(store,cached);
   }
-  return sentAloneCache!.rows;
+  return cached.rows;
 }
 function isSentAlone(row:{id:string}):boolean {return sentAloneRows()[row.id]===JSON.stringify(row);}
-function markSentAlone(rows:readonly {id:string}[]):void {
-  const sent=sentAloneRows();for(const row of rows)sent[row.id]=JSON.stringify(row);
-  try{if(sentAloneCache?.key)localStorage.setItem(sentAloneCache.key,JSON.stringify(sent));}catch{/* in memory only */}
+function markSentAlone(rows:readonly {id:string}[],store='rig-review-sent-alone/1'):void {
+  const sent=sentAloneRows(store);for(const row of rows)sent[row.id]=JSON.stringify(row);
+  const key=rowStoreCache.get(store)?.key;
+  try{if(key)localStorage.setItem(key,JSON.stringify(sent));}catch{/* in memory only */}
+}
+/** #1242: rows a successful record answer carried, by id with the exact content, kept across reloads. Rows the
+ * answer did not carry (written later, or while it was in flight) stay for Send comments. */
+const answerCarriedStore='rig-review-answer-carried/1';
+const isAnswerCarried=(row:{id:string})=>sentAloneRows(answerCarriedStore)[row.id]===JSON.stringify(row);
+/** The rows the record answer being submitted carries; committed only when that answer is saved. Draft saves read
+ * the same words, so the snapshot holds still while an answer is in flight. */
+function carryRecordRows(rows:readonly CommentRow[]):readonly CommentRow[] {
+  if(host?.record&&host.recordSubmission?.()!=='sending')answerInFlightRows=rows.map(row=>structuredClone(row));
+  return rows;
+}
+function commitAnswerCarried():void {
+  if(answerInFlightRows.length)markSentAlone(answerInFlightRows,answerCarriedStore);
+  answerInFlightRows=[];
 }
 const unsentFeedback=()=>(session?.feedback??[]).filter(row=>!isSubmittedFeedback(row.id));
-const hasUnsentComments=()=>!!host?.verdictComments?.rows.some(row=>!isSentAlone(row))||unsentFeedback().length>0;
+/** #1242: what Send comments carries on this screen: rows neither sent on their own nor carried by an answered act. */
+function unsentComments():{feedback:Feedback[];general:{id:string;summary:string}[];issues:PartsIssue[]} {
+  const fresh=(row:{id:string})=>!isSentAlone(row);
+  if((host?.direction||host?.record)&&typeof recordComments!=='undefined'){
+    const rows=recordComments.filter(row=>fresh(row)&&!submittedDirectionComments.has(row.id)&&!isAnswerCarried(row));
+    return {feedback:rows.filter(row=>'target' in row) as Feedback[],issues:rows.filter(row=>'schema' in row) as unknown as PartsIssue[],
+      general:rows.filter(row=>!('target' in row)&&!('schema' in row))};
+  }
+  const general=(host?.verdictComments?.rows??[]).filter(fresh);
+  if(typeof partsOnly!=='undefined'&&partsOnly)return {feedback:[],general,issues:(partsSubject?.issues()??[]).filter(issue=>fresh(issue)&&!partsSubmittedIssues.has(issue.id))};
+  return {feedback:unsentFeedback(),general,issues:[]};
+}
+const hasUnsentComments=()=>{const unsent=unsentComments();return unsent.feedback.length+unsent.general.length+unsent.issues.length>0;};
 /** #1231: a pending Edit Mesh or chest edit is content Send comments carries, as an unsent comment is. */
 const hasUnsentContent=()=>hasUnsentComments()||!!host?.canSubmitMeshEdits?.();
 /** An edit draft changes the answer controls and, beside Send comments, the save state (#1231). */
 const renderEditDraftState=()=>commentHost()?renderDraftState():renderAnswerControls();
+/** #1226: Send comments sends the screen's unsent comments as one act@10. #1242: bound once for every screen that
+ * holds the act bar (rig, direction, parts and record), not by the rig workspace alone. */
+sendComments.onclick=async()=>{
+  if(!commentHost()||sendComments.disabled||saving)return;
+  // The rig workspace's saved-state renderer reads its session; parts and a record without a picture have none.
+  const savedState=()=>session?updateSavedState():renderDraftState();
+  const composer=typeof partsOnly!=='undefined'&&partsOnly?partsSubject:comments;
+  if(composer?.hasPendingComment?.()&&!await composer.commitDraft())return;
+  const {feedback,general:generalRows,issues}=unsentComments(),general=generalRows.map(row=>row.summary);
+  if(!feedback.length&&!general.length&&!issues.length&&!host!.canSubmitMeshEdits?.())return;
+  saving=true;commentSending=true;savedState();
+  let failure:ReturnType<typeof jobSubmissionRefusal>|null=null;
+  try{
+    const sent=await host!.submitComments!(structuredClone(feedback),general,structuredClone(issues));
+    // Sent rows stay in the list and show Submitted, pinned and general alike.
+    markSentAlone([...feedback,...generalRows,...issues]);
+    commentSendState='sent';dirty=hasUnsentContent();
+    comments?.refresh();if(typeof partsSubject!=='undefined')partsSubject?.refreshComments();if(session)renderProposals();if(sent)message(sent);
+  }catch(error){failure=jobSubmissionRefusal(error);message(failure.text,true);}
+  finally{
+    saving=false;commentSending=false;savedState();
+    if(failure)rigInspector.actBar.setSaveState({kind:'failed',text:failure.text,title:failure.title});
+  }
+};
 function renderDraftState(): void {
   const recordSubmission=host?.recordSubmission?.();
-  if(recordSubmission){
+  // #1242: the rows an answered record act carried are not sent again by Send comments.
+  if(typeof commitAnswerCarried==='function'&&host?.record){
+    if(recordSubmission==='submitted'&&!recordAnswered)commitAnswerCarried();
+    recordAnswered=recordSubmission==='submitted';
+  }
+  // #1242: on a record screen a comment written after the answer falls to Send comments' own state.
+  if(recordSubmission&&!(host?.record&&recordSubmission==='submitted'&&typeof commentHost==='function'&&commentHost()&&hasUnsentContent())){
     rigInspector.actBar.setSaveState(recordSubmission==='sending'?{kind:'saving',text:'Sending'}:{kind:'saved',text:'Submitted'});
     recordSaveStateShown=true;
     renderAnswerControls();return;
@@ -412,8 +476,12 @@ function renderDraftState(): void {
   // "Saving…", and an answered verdict keeps its outcome until a new comment is written.
   if(typeof commentHost==='function'&&commentHost()&&!(saving&&!commentSending)&&!draftConflict&&!actReadOnly&&!(draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus))){
     const unsent=hasUnsentContent();
+    // A saved record answer keeps its outcome until a new comment is written, as an answered verdict does.
     rigInspector.actBar.setSaveState(saving?{kind:'saving',text:'Sending'}:!unsent&&live&&host?.verdictAnswered?.()?{kind:'saved',text:live}:
+      !unsent&&typeof answerSaved!=='undefined'&&answerSaved?{kind:'saved',text:'Answer saved'}:
       !unsent&&(commentSendState==='sent'||!!session?.updatedAt||Object.keys(sentAloneRows()).length>0)?{kind:'saved',text:'Submitted'}:{kind:'unsaved',text:'Not submitted'});
+    // The footer repeats a saved record answer, as below.
+    if(!unsent&&typeof answerSaved!=='undefined'&&answerSaved&&!saving&&host?.record&&!el('review-message').classList.contains('error'))message(sourceTextContent(el('dirty')),false,true);
     return;
   }
   if (draftStatus === null && !live && !answerSaved && !dirty && !saving && !draftConflict && !actReadOnly && !session?.updatedAt) return;
@@ -1441,7 +1509,7 @@ function bind(): void {
           if(host?.direction){for(const row of recordComments)submittedDirectionComments.add(row.id);try{localStorage.removeItem(recordCommentKey);}catch{}}
           await persistence?.submitted(submittedBaseline);
           comments?.refresh(); renderProposals();
-        },host.direction?recordJobComments():undefined,general,alreadySent);
+        },host.direction?recordJobComments(recordComments.filter(row => !alreadySent(row))):undefined,general,alreadySent);
         if (sent) message(sent);
       } catch (error) {
         submissionFailure = jobSubmissionRefusal(error);
@@ -1475,25 +1543,6 @@ function bind(): void {
   bindWorkspace(!!data.manifest.model);
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   verdictSubmit=button('save').onclick as ((event:MouseEvent)=>unknown)|null;
-  sendComments.onclick=async()=>{
-    if(!commentHost()||sendComments.disabled||saving)return;
-    if(comments?.hasPendingComment?.()&&!await comments.commitDraft())return;
-    const generalRows=host!.verdictComments!.rows.filter(row=>!isSentAlone(row)),feedback=unsentFeedback(),general=generalRows.map(row=>row.summary);
-    if(!feedback.length&&!general.length&&!host!.canSubmitMeshEdits?.())return;
-    saving=true;commentSending=true;updateSavedState();
-    let failure:ReturnType<typeof jobSubmissionRefusal>|null=null;
-    try{
-      const sent=await host!.submitComments!(structuredClone(feedback),general);
-      // Sent rows stay in the list and show Submitted, pinned and general alike.
-      markSentAlone([...feedback,...generalRows]);
-      commentSendState='sent';dirty=hasUnsentContent();
-      comments?.refresh();renderProposals();if(sent)message(sent);
-    }catch(error){failure=jobSubmissionRefusal(error);message(failure.text,true);}
-    finally{
-      saving=false;commentSending=false;updateSavedState();
-      if(failure)rigInspector.actBar.setSaveState({kind:'failed',text:failure.text,title:failure.title});
-    }
-  };
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),
    job:host?(readOnly||host.direction?'read-only':{
     hasPublishedSpec:()=>!!host?.chestLandmarks?.length,
@@ -1564,6 +1613,11 @@ function bind(): void {
 function bindWorkspace(hasModel=false,empty=false):void {
   if(!workspace){
   const layout=screenRoot.querySelector<HTMLElement>('.layout')!;layout.append(communicationPanel);
+  // #1242: a comment added or removed, or Comment pressed or released, opens or closes the panel when commenting flips.
+  let wasCommenting=false;
+  const followCommenting=()=>{const now=commenting();if(now===wasCommenting)return;wasCommenting=now;if(now)workspace?.refresh();else workspace?.concealCommunication();};
+  const commentWatch=new MutationObserver(followCommenting);
+  commentWatch.observe(communicationPanel,{childList:true,subtree:true});commentWatch.observe(el('stage-comment'),{attributes:true,attributeFilter:['aria-pressed']});
   workspace=bindWorkspaceUI({root:screenRoot,regions:{layout,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,right:communicationPanel,columns:{left:'rightWidth',right:'communicationWidth'},rightPending:communicationPending,bottomBound:()=>inspectorBlocks!==null},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
@@ -1676,8 +1730,10 @@ async function start(): Promise<void> {
 /** Parts have a verdict and image-space pixels, never fabricated model/session fields. */
 async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,writes:{capabilityRequired:boolean}):Promise<void>{
  const subject=opened.parts,issues=saved.issues;let partsBaseline=structuredClone(saved);const submittedIssues=new Set(host? saved.issues.map(issue=>issue.id):[]);
- const generalRows=host?.verdictComments?.rows;
- liveIssueCount=()=>issues.length;
+ const generalRows=host?.verdictComments?.rows;partsSubmittedIssues=submittedIssues;
+ // #1242: a comment sent on its own is not counted, flagged or sent again by the parts verdict (CONTRACT §1).
+ const fresh=(row:{id:string})=>!isSentAlone(row);
+ liveIssueCount=()=>issues.filter(fresh).length;
  if(!partsOnly)throw new Error('PARTS_SUBJECT_ENTRY_REQUIRED');
  readOnly=host?.record?tr('JOB_REVIEW_READ_ONLY'):readOnlyReason(access,writes.capabilityRequired);
  actReadOnly=readOnlyReason(access,writes.capabilityRequired,host?.ownerActAccess);
@@ -1699,7 +1755,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   ...(host?.record?{recordComments}:host?.verdictComments?{generalComments:host.verdictComments,submitting:()=>saving}:{}),
   request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,
   changed:()=>{if(host?.record){recordCommentsChanged();return;}if(generalRows)persistRecordComments();return changed();},
-  selectionChanged:()=>{parts?.refreshImages();renderAnswerControls();},locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
+  selectionChanged:()=>{parts?.refreshImages();renderAnswerControls();},locked:id=>submittedIssues.has(id)||[...issues,...generalRows??[],...host?.record?recordComments:[]].some(row=>row.id===id&&isSentAlone(row)),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
  parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>openReview());
  const thumbnails=new PartThumbnails();viewDisposers.push(()=>thumbnails.dispose());
  parts.registerImages({thumbnail:(icon,item,glyph)=>thumbnails.showOriginal(icon,item,()=>partsSubject!.image(item.index),glyph),items:subject.items,selected:partsSubject.selected,solo:partsSubject.solo,visible:partsSubject.visible,select:partsSubject.select,isolate:partsSubject.isolate,show:partsSubject.show});
@@ -1754,16 +1810,17 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   if(partsSubject?.hasPendingComment()){if(!await partsSubject.commitDraft())return;}
   if(saving||saveBlocked())return;
   saving=true;text('review-message','');el('review-message').classList?.toggle('error',false);button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});renderDraftState();
-  const frozen=structuredClone(issues),general=generalRows?.map(row=>row.summary);
+  const unsentIssues=issues.filter(fresh),verdictRows=generalRows?.filter(fresh);
+  const all=structuredClone(issues),frozen=structuredClone(unsentIssues),general=verdictRows?.map(row=>row.summary);
   let submissionFailure:ReturnType<typeof jobSubmissionRefusal>|null=null,saveFailed=false;
   try{
    if(host?.submitParts)message(await host.submitParts(frozen,general));
    else await request(base+'/verdict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:frozen.length?'changes-requested':'approved',issues:frozen})});
-   if(generalRows&&general?.length){generalRows.splice(0,general.length);persistRecordComments();}
+   if(generalRows&&verdictRows?.length){const sentIds=new Set(verdictRows.map(row=>row.id));generalRows.splice(0,generalRows.length,...generalRows.filter(row=>!sentIds.has(row.id)));persistRecordComments();}
    if(disposed)return;
    if(host)for(const issue of frozen)submittedIssues.add(issue.id);
    if(general?.length){partsSubject?.refreshComments();showCommentCount();}
-   dirty=JSON.stringify(issues)!==JSON.stringify(frozen);partsBaseline={subject:'parts',issues:frozen};await persistence?.submitted(partsBaseline);if(disposed)return;state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
+   dirty=JSON.stringify(issues)!==JSON.stringify(all);partsBaseline={subject:'parts',issues:all};await persistence?.submitted(partsBaseline);if(disposed)return;state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
   }catch(error){saveFailed=true;if(host){submissionFailure=jobSubmissionRefusal(error);message(submissionFailure.text,true);}else{message(errorText(error),true);state.setSaveState({kind:'failed',text:'Save failed.'});}}
   finally{saving=false;button('save').disabled=saveBlocked();renderDraftState();if(submissionFailure){state.setSaveState({kind:'failed',text:submissionFailure.text,title:submissionFailure.title});}else if(saveFailed)state.setSaveState({kind:'failed',text:'Save failed.'});}
  };
@@ -2022,7 +2079,8 @@ function projectRecordComments(rows:readonly CommentRow[]):string {
 }
 /** Comments remain native rows in the draft and feed both act encodings. */
 function recordCommentWords():string {
- return projectRecordComments(recordComments);
+ // #1242: a row already sent on its own is not sent again inside a record answer (CONTRACT §1).
+ return projectRecordComments(carryRecordRows(recordComments.filter(row=>!isSentAlone(row))));
 }
 function checkpointPairTile(path:string|null,sha256:string|null):CheckpointPairTile|undefined {
  for(const pair of host?.checkpointPairs?.values()??[]){
@@ -2212,7 +2270,7 @@ function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
   if(questionFormBindings.has(form))continue;questionFormBindings.add(form);
   form.addEventListener('submit',event=>{if(draftConflict||pendingAnswers.some(subject=>subject.kind.endsWith('verdict'))){event.preventDefault();event.stopImmediatePropagation();}},true);
   if(form.dataset.interviewMain!==undefined){
-   form.addEventListener('job-answer-saved',()=>{answerSaved=true;renderDraftState();},{once:true});
+   form.addEventListener('job-answer-saved',()=>{answerSaved=true;commitAnswerCarried();renderDraftState();},{once:true});
   }else{
    form.addEventListener('job-answer-sending',renderDraftState);
    form.addEventListener('job-answer-failed',renderDraftState);
@@ -2233,7 +2291,7 @@ function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
   unregisterQuestion?.();unregisterQuestion=null;rigAsk.onclick=null;
  }
  showQuestionForm();
- if(!standalone&&host?.record)for(const form of questionTabForms)(form as JobForm['form']).interviewComments=recordJobComments;
+ if(!standalone&&host?.record)for(const form of questionTabForms)(form as JobForm['form']).interviewComments=()=>recordJobComments(carryRecordRows(recordComments.filter(row=>!isSentAlone(row))));
  forms=forms.filter(form=>!questionTabForms.includes(form));
  if(!forms.length){
   for(const form of recordForms()){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
@@ -2347,7 +2405,7 @@ function renderAnswerControls():void {
  const pendingPartComment=parts&&typeof partsSubject!=='undefined'&&!!partsSubject?.hasPendingComment?.();
  const pendingStageComment=!parts&&typeof comments!=='undefined'&&!!comments?.hasPendingComment?.();
  const hasPinnedPart=parts&&(liveIssueCount()>0||pendingPartComment);
- const needsPinnedPart=parts&&!!host?.verdictComments?.rows.length&&!hasPinnedPart;
+ const needsPinnedPart=parts&&!!host?.verdictComments?.rows.some(row=>!isSentAlone(row))&&!hasPinnedPart;
  const pinRefusal='Request changes needs at least one comment pinned to a part.';
  if(subjects.length&&!rigInspector.actBar.saveState())rigInspector.actBar.setSaveState({kind:'unsaved',text:'Not submitted'});
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
@@ -2374,7 +2432,7 @@ function renderAnswerControls():void {
  recordAsk.classList.toggle('primary',dialog&&!questionPending&&!!recordKind);
  let inlineReason='';
  if(verdict){
-  const count=(host?.direction?recordComments.length:liveIssueCount())+(pendingPartComment||pendingStageComment?1:0);
+  const count=liveIssueCount()+(pendingPartComment||pendingStageComment?1:0);
   const hasChanges=count>0||!!host?.canSubmitMeshEdits?.()&&subjects.some(subject=>subject.kind==='review-verdict'&&subject.stage==='rig-review');
   const verdictBlocked=blocked||!!readOnly||!!session?.feedbackWarnings?.length||(parts&&partsAnswerBlocked());
   const missingChanges=host?.verdictComments&&!parts?'Add a comment or an edit where changes are needed.':'Add a comment where changes are needed.';
@@ -2398,7 +2456,8 @@ function renderAnswerControls():void {
  save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;
  if(typeof sendComments!=='undefined'){
   sendComments.hidden=!commentHost()||!!host?.jobClosed?.();
-  sendComments.disabled=blocked||!!readOnly||!hasUnsentContent()&&!pendingStageComment;
+  // #1242: a record's model view is read-only, so its acts follow the owner act authority; parts drafts in their own composer.
+  sendComments.disabled=blocked||!!(host?.record?actReadOnly:readOnly)||!hasUnsentContent()&&!(typeof partsOnly!=='undefined'&&partsOnly?!!partsSubject?.hasPendingComment?.():pendingStageComment);
   // One emphasised answer: Send comments leads only when no ask of any kind is waiting.
   sendComments.classList.toggle('primary',!subjects.length);
  }rigAsk.hidden=!dialog||firstPublicationPrompt||!questionPending&&recordTrigger!==rigAsk;
@@ -2503,9 +2562,14 @@ function bindInspector(partsSubject=false):void {
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
 function openReview():void {pause();if(!partsOnly)syncCorrectionStage();workspace?.revealCommunication();}
+/** #1242 owner ruling 11-25: the person is commenting: at least one comment, pinned or general, or the toolbar's
+ * Comment pressed. On rig, direction and parts the right panel opens only then and otherwise leaves the stage wide. */
+function commenting():boolean {
+  return !!communicationPanel.querySelector('.stage-comment-item[data-comment-id]')||document.getElementById('stage-comment')?.getAttribute('aria-pressed')==='true';
+}
 /** Something to communicate: a displayed record publication (#1228: its Comments and source stay open without an ask),
- * a pending question or record form, or at least one comment. */
-function communicationPending():boolean {return !!host?.record||!!communicationPanel.querySelector('form[data-job-ask], .stage-comment-item[data-comment-id]');}
+ * a pending question or record form, or the person commenting. */
+function communicationPending():boolean {return !!host?.record||commenting()||!!communicationPanel.querySelector('form[data-job-ask], .stage-comment-item[data-comment-id]');}
 function unitScaleMessage(target:CameraTarget):void {message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');}
 function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');}
 
@@ -4001,7 +4065,7 @@ function restoreCommentInspection(value:unknown,timeOnly?:boolean,row?:CommentRo
  return restoreInspection(parseBookmark(value,inspectionBinding()),lifecycle.signal,!!timeOnly,true,feedback);
 }
 function setupComments():void {
- if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.length;if(host?.direction)dirty=dirty||recordComments.length>0;}
+ if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.filter(row=>!(typeof isSentAlone==='function'&&isSentAlone(row))).length;if(host?.direction)dirty=dirty||recordComments.length>0;}
  if(host?.verdictComments){restoreRecordComments();if(host.verdictComments.rows.length)markDirty();}
  comments=bindStageComments<CommentRow,CommentPose>({answeredDirectionFeedback:host?.direction?.answeredDirectionFeedback,general:host?.record||host?.direction||host?.verdictComments?{
   create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row),
@@ -4016,7 +4080,7 @@ function setupComments():void {
    return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;
   },
   pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1&&!video.closest?.('[data-previous-build-active]')){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:()=>shownPlanPicture()?planPictureBookmark():inspectionBookmark(),restore:restoreCommentInspection,feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
-  locked:host?.record?()=>false:host?.direction?id=>submittedDirectionComments.has(id):isSubmittedFeedback,add:f=>{if(host?.record||host?.direction)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(/^The source changed, so /.test(draftStatus??''))draftStatus=null;if(host?.record||host?.direction){recordCommentsChanged();if(host?.direction){markDirty();comments?.refresh();}return;}if(host?.verdictComments)persistRecordComments();markDirty();renderProposals();return persistence?.save();},draftChanged:()=>{if(typeof renderAnswerControls==='function')renderAnswerControls();},error:value=>message(value,true),
+  locked:host?.record||host?.direction?id=>submittedDirectionComments.has(id)||recordComments.some(row=>row.id===id&&isSentAlone(row)):isSubmittedFeedback,add:f=>{if(host?.record||host?.direction)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(/^The source changed, so /.test(draftStatus??''))draftStatus=null;if(host?.record||host?.direction){recordCommentsChanged();if(host?.direction){markDirty();comments?.refresh();}return;}if(host?.verdictComments)persistRecordComments();markDirty();renderProposals();return persistence?.save();},draftChanged:()=>{if(typeof renderAnswerControls==='function')renderAnswerControls();},error:value=>message(value,true),
   picture:mark=>{
    if(mark.viewport!=='reference'||manifestReferenceMatches(mark,(mark.bookmark as InspectionBookmark).selection.reference))return null;
    const tile=checkpointPairTile(mark.referenceId,mark.referenceHash);

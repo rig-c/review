@@ -1,6 +1,6 @@
 import {checkpointEvidencePair} from '../src/checkpoint-evidence-packet.ts';
 import {formFor, isPendingOwnerAsk, jobCheckpointContext, jobJson, jobPublicationRoutes, jobSourceDraftId, matchesJobRecordAct, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection, type JobWindowAsk} from './job-session.ts';
-import {commentPartsIssues,type PartsIssue} from '../src/parts-comment.ts';
+import {commentPartsIssues,partsIssueComments,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
  * window. The job stays the transport: same asks, act kinds, still, displayed-ack and submission idempotency.
@@ -337,13 +337,14 @@ export function createJobRigScreen(options: {
       }
     }
   }
-  /** Send comments: the person's comments, with any pending Edit Mesh and chest drafts as carriers (#1231). */
-  async function submitComments(feedback:readonly Feedback[], general:readonly string[]):Promise<string>{
+  /** Send comments: the person's comments, with any pending Edit Mesh and chest drafts as carriers (#1231).
+   * #1242: the same act from the direction, parts and record screens; parts pins keep their source-bound anchor. */
+  async function submitComments(feedback:readonly Feedback[], general:readonly string[], issues:readonly PartsIssue[]=[]):Promise<string>{
     const prepared=mounted,state=options.window.state();
-    if(!prepared||prepared.parts||!state.receipt||state.preparing)throw new Error('JOB_ACT_SOURCE_STALE');
+    if(!prepared||!state.receipt||state.preparing)throw new Error('JOB_ACT_SOURCE_STALE');
     if(state.closed)throw new Error('JOB_CLOSED');
     if(!options.access.capability)throw new Error('JOB_CAPABILITY_REQUIRED');
-    const comments=[...feedbackContextComments(feedback),...general.map(text=>({text}))];
+    const comments=[...feedbackContextComments(feedback),...partsIssueComments(issues),...general.map(text=>({text}))];
     const drafts=await draftCarriers(prepared);
     if(!comments.length&&!drafts.carriers.length)throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     await sendCommentAct(prepared,state.receipt.displayedNonce,comments,drafts);
@@ -397,6 +398,8 @@ export function createJobRigScreen(options: {
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
+        // #1242: the record's comments go out as the rig screen's comment-only act.
+        submitComments,jobClosed:()=>options.window.state().closed,
         attach:value=>{screen=value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());screen.progress?.(latestProgress);refreshRecordForms();},
         displayed:()=>ready.resolve(),failed:error=>ready.reject(error)};
     }
@@ -414,8 +417,8 @@ export function createJobRigScreen(options: {
     return {...evidencePair,access,pendingSubjects,recordSubmission,navigation,jobClosed:()=>options.window.state().closed,...prepared.refusal?{unavailable:prepared.refusal}:{},
       chestLandmarks:prepared.display.publication.chestLandmarks,
       ...(source.direction?{direction:{...binding,answeredDirectionFeedback}}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>{const subjects=pendingSubjects();
-        // #1226: with no ask pending, a rig general comment goes out as a comment-only act.
-        return !prepared.parts&&!subjects.length||subjects.some(subject=>
+        // #1226/#1242: with no ask pending, a rig or parts general comment goes out as a comment-only act.
+        return !subjects.length||subjects.some(subject=>
         prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review');}}}:{}),
       reviewState(issues,sending) {
         if(sending)return options.translate('job.parts.sending');
