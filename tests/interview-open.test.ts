@@ -11,6 +11,9 @@ import {targetCapability} from '../src/open-workspace-state.ts';
 import {WORKSPACE_SCHEMA} from '../src/open-workspace-contract.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
+import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
+import {setSourceAttribute,sourceTextContent,t} from '../web/i18n.ts';
 
 test('#725 parser admits only the approved interview-root form without weakening explicit selectors',()=>{
  const args=['project','--project','project','--picks-dir','picks'];
@@ -143,4 +146,60 @@ test('#725 feedback and control do not acquire the new interview-only grammar',a
  const f=await interviewOpenFixture();
  try{for(const verb of ['feedback','control'])await expect(main([verb,f.root,'--project',f.root,'--picks-dir','picks'],{stateDir:f.stateDir})).rejects.toThrow('OPEN_OPTION_INVALID --project');}
  finally{await f.close();}
+});
+
+test('#1230 interview-only open screen renders a named refusal in EN and KO without mounting an answer form',async()=>{
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+ const body=source.slice(source.indexOf('async function startRecord('),source.indexOf('/** #1041 B: checkpoint, signoff and plan-approval forms'));
+ const js=new Bun.Transpiler({loader:'ts'}).transformSync(body);
+ const nodes=new Map<string,{id:string;hidden:boolean;disabled:boolean;title:string;textContent:string;dataset:Record<string,string>;attributes:Map<string,string>;children:never[];classList:{error:boolean;contains(n:string):boolean;toggle(n:string,on:boolean):void};setAttribute(k:string,v:string):void;getAttribute(k:string):string|null;removeAttribute(k:string):void}>();
+ const el=(id:string)=>{
+  let node=nodes.get(id);
+  if(!node){
+   node={id,hidden:false,disabled:false,title:'',textContent:'',dataset:{},attributes:new Map(),children:[],
+    classList:{error:false,contains(n){return n==='error'&&this.error;},toggle(n,on){if(n==='error')this.error=on;}},
+    setAttribute(k,v){this.attributes.set(k,v);},getAttribute(k){return this.attributes.get(k)??null;},removeAttribute(k){this.attributes.delete(k);}};
+   nodes.set(id,node);
+  }
+  return node;
+ };
+ const act={hidden:true,querySelectorAll:()=>[]};
+ const document={body:{dataset:{} as Record<string,string>},querySelectorAll:()=>[]};
+ const cameraButtons=Array.from({length:4},()=>({disabled:false}));
+ const disposers:Function[]=[];
+ const scope={
+  document,host:null,readOnly:null,actReadOnly:null,access:{capability:'owner'},readOnlyReason:()=>null,
+  rigInput:null,referenceInput:null,parts:null,disposed:false,tr:String,t,
+  controls:{zoomButtons:cameraButtons.slice(0,3),nativeOne:cameraButtons[3],replaceViewSwitch:()=>()=>{}},
+  chooseInspectionView(){},inspectionViewSwitch:()=>({}),
+  bindWorkspace(){},bindInspector(){},renderLayout(){},
+  el,button:el,text:(id:string,value:string)=>{el(id).textContent=value;},
+  setSourceAttribute:(node:any,k:string,v:string)=>setSourceAttribute(node,k,v),sourceTextContent,
+  message(value:string,error=false,_footerOnly=false,diagnostic?:string){
+   if(!error)el('message').textContent=value;
+   el('review-message').textContent=value;el('review-message').classList.toggle('error',error);
+   if(diagnostic)el('review-message').title=diagnostic;
+   if(error)act.hidden=false;
+  },
+  restoreRecordComments(){throw new Error('must not restore record comments on interview open');},
+  setupComments(){throw new Error('must not setup comments on interview open');},
+  showRecordComments(){throw new Error('must not show record comments on interview open');},
+  rigInspector:{act,comments:{button:el('comments-button')},collapse:el('collapse')},
+  PartExplorer:class{},workspace:{settle:async()=>{}},viewport:{observeResize:()=>({disconnect(){}})},viewDisposers:disposers,
+  renderRecordForms(){throw new Error('must not mount forms');},renderPendingSubjects(){},setJobProgress(){},syncJobActRow(){},
+  suspendScreen(){},resumeScreen:async()=>{},disposeScreen(){},
+ };
+ await new Function('scope',`with(scope){${js};return startRecord({subject:'interview',label:'Synthetic interview',sourceHash:'a'.repeat(64)});}`)(scope);
+ const refusal='INTERVIEW_PICKS_DISABLED: the interview answer form has been removed; discuss options through live job comments.';
+ expect(document.body.dataset.ready).toBe('true');
+ expect(act.hidden).toBe(false);
+ expect(el('stage-comment').hidden).toBe(true);
+ expect(el('save').disabled).toBe(true);
+ expect(el('review-message').classList.contains('error')).toBe(true);
+ expect(el('review-message').title).toBe('INTERVIEW_PICKS_DISABLED');
+ expect(el('review-message').textContent).toBe(refusal);
+ expect(el('message').textContent).toBe(refusal);
+ expect(el('rig-empty').textContent).toBe(refusal);
+ expect(enCatalog[refusal]).toBe(refusal);
+ expect(koCatalog[refusal]).toStartWith('INTERVIEW_PICKS_DISABLED: ');
 });

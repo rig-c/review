@@ -7,7 +7,6 @@ import {expect,test} from 'bun:test';
 import {readFile,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createJobRigScreen} from '../web/job-rig-screen.ts';
-import type {InterviewDisplayQuestion} from '../web/interview-panel.ts';
 import {rigHost,setRigHost} from '../web/rig-host.ts';
 import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jobPublicationRoutes,prepareJobForms,prepareJobInspection,type JobFormDependencies} from '../web/job-session.ts';
 import {JOB_API_V3_SCHEMA,jobRawActMediaType,type ActV3,type DisplayPublicationV3,type JobFileIdentity,type PendingAskV3,type RecordSignoffStage,type UISubmissionV3} from '../src/job-contract.ts';
@@ -301,90 +300,6 @@ test('#715 a parts-backed record uses the real parts host and source binding',as
  }finally{await h.close();}
 });
 
-test('#722 real form saves only checked radios, restores Other with empty contract note without changing option identities',async()=>{
- const f=await recordScreenFixture('interview-picks'),dom=await recordScreenDom();
- let inspection:Awaited<ReturnType<typeof prepareJobInspection>>|undefined;
- try{
-  dom.set('location',{origin:f.origin});
-  inspection=await prepareJobInspection(f.display,new AbortController().signal);
-  // Draft controls are the subject here; the ordinary Nova browser covers the bound-image viewport.
-  for(const question of inspection.interview!.questions)question.images=[];
-  const store=new Map<string,string>(),forms=new Map<string,ReturnType<typeof formFor>>();
-  const node=((tag:string,key?:string)=>{const value=dom.document.createElement(tag);if(key)value.textContent=key;return value;}) as JobFormDependencies['node'];
-  const drafts=createJobFormDrafts({jobId:f.session.jobId,current:()=>inspection!,forms:()=>forms,storage:()=>({setItem:(key,value)=>{store.set(key,value);}})});
-  const deps:JobFormDependencies={node,translate:key=>key,helpers:{...createJobFormHelpers(node,key=>key),jobCheckpointContext,assertJobAskSource:(ask,display)=>{prepareJobForms(display,[ask],()=>null);}},draftStorage:()=>({getItem:key=>store.get(key)??null}),...drafts,access:{capability:'fixture'},pageId:'page',window:{state:()=>({pending:[f.ask],receipt:null,preparing:false,closed:false,generation:1}),submit:async()=>{throw new Error('No submission in draft test');}}};
-  const entry=formFor(f.ask,inspection,deps);forms.set(f.ask.askId,entry);
-  expect(entry.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(false);
-  const radios=[...entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')],identities=radios.map(input=>({name:input.name,value:input.value}));
-  for(const input of radios){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
-  entry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='  직접 입력\n';
-  const noteInput=entry.form.querySelector<HTMLTextAreaElement>('textarea[name="note"]')!;
-  expect(noteInput).not.toBeNull();
-  expect(noteInput.maxLength).toBe(10000);
-  expect(noteInput.getAttribute('maxlength')).toBe('10000');
-  expect(entry.form.querySelector(`label[for="${noteInput.id}"]`)?.textContent).toBe('interview.noteLabel');
-  expect(noteInput.value).toBe('');
-  entry.dirty=true;drafts.saveDraft();
-  const saved=JSON.parse(store.get(drafts.localDraftKey(f.display))!);
-  expect(saved.forms[0].controls.filter((input:{name:string})=>input.name.startsWith('choice.'))).toEqual([{name:'choice.topology',value:'topology_other'},{name:'choice.detail_level',value:'density_auto'}]);
-  const restored=formFor(f.ask,inspection,deps),restoredRadios=[...restored.form.querySelectorAll<HTMLInputElement>('input[type=radio]')];
-  expect(restoredRadios.map(input=>({name:input.name,value:input.value}))).toEqual(identities);
-  expect(restoredRadios.filter(input=>input.checked).map(input=>input.value)).toEqual(['topology_other','density_auto']);
-  expect(restored.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.hidden).toBe(false);
-  expect(restored.read()).toEqual(entry.read());
-  expect(restored.read()).toEqual({questionId:'rig_type',selections:[{itemId:'topology',optionId:'topology_other',otherText:'  직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:''});
-  expect(restored.form.querySelectorAll('select')).toHaveLength(0);
-  // #851 review: a finalized answer reads back from its act even when this browser holds a different draft.
-  const at=new Date().toISOString();
-  const answered={...f.ask,status:'answered',act:{kind:'interview-picks',at,value:{questionId:'rig_type',selections:[{itemId:'topology',optionId:radios.find(input=>input.name==='choice.topology'&&input.value!=='topology_other')!.value,otherText:null},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:''}}} as any;
-  const finalized=formFor(answered,inspection,deps);
-  expect([...finalized.form.querySelectorAll<HTMLInputElement>('input[type=radio]')].filter(input=>input.checked).map(input=>input.value)).toEqual([answered.act.value.selections[0].optionId,'density_auto']);
-  expect(finalized.dirty).toBe(false);
-  expect(finalized.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(true);
-  expect(finalized.form.querySelector('textarea[name="note"]')).toBeNull();
-  expect(finalized.form.querySelector('.interview-note')).toBeNull();
-  restored.form.dataset.interviewAnswered='true';restored.form.dispatchEvent(new Event('change'));
-  expect(restored.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(true);
-  expect(restored.form.querySelector('textarea[name="note"]')).toBeNull();
-  // #901: a saved non-empty note round-trips into pre.interview-note when answered and accepts up to 10,000 characters.
-  const note10000='가'.repeat(5000)+'b'.repeat(5000);
-  const answeredWithNote={...answered,act:{...answered.act,value:{...answered.act.value,note:note10000}}};
-  const finalizedWithNote=formFor(answeredWithNote,inspection,deps);
-  expect(finalizedWithNote.form.querySelector('textarea[name="note"]')).toBeNull();
-  expect(finalizedWithNote.form.querySelector('.interview-note')?.textContent).toBe(note10000);
-  // #992 Bar 2 & Bar 5: form drafts survive republish of the same job, draft and source hash, and restore from legacy per-publication keys.
-  const republishedDisplay:DisplayPublicationV3={...f.display,publication:{...f.display.publication,publicationId:'republished-publication-2',previousPublicationId:f.display.publication.publicationId,generation:f.display.publication.generation+1},routes:{entry:f.display.routes.entry.replace(f.display.publication.publicationId,'republished-publication-2'),apiBase:f.display.routes.apiBase.replace(f.display.publication.publicationId,'republished-publication-2'),assetsBase:f.display.routes.assetsBase.replace(f.display.publication.publicationId,'republished-publication-2')}};
-  const republishedAsk:PendingAskV3={...f.ask,askId:'republished-ask-2',publicationId:'republished-publication-2'};
-  const republishedRestored=formFor(republishedAsk,{...inspection,display:republishedDisplay},deps);
-  expect([...republishedRestored.form.querySelectorAll<HTMLInputElement>('input[type=radio]')].filter(input=>input.checked).map(input=>input.value)).toEqual(['topology_other','density_auto']);
-  expect(republishedRestored.read()).toEqual(entry.read());
-  expect(republishedRestored.dirty).toBe(true);
-  const legacySnapshot=store.get(drafts.localDraftKey(f.display))!;
-  store.clear();
-  store.set('rig-review-job-draft/1:'+f.session.jobId+':'+f.display.publication.publicationId+':'+f.display.publication.source.sourceHash,legacySnapshot);
-  const fallbackRestored=formFor(f.ask,inspection,deps);
-  expect(fallbackRestored.read()).toEqual(entry.read());
-  expect(fallbackRestored.dirty).toBe(true);
-  // Same-publication reconnect with an earlier pending ask for the same subject must match exact askId first.
-  forms.clear();store.clear();
-  const earlierAsk:PendingAskV3={...f.ask,askId:'earlier-unanswered-ask'};
-  const activeAsk:PendingAskV3={...f.ask,askId:'active-answered-ask'};
-  const earlierEntry=formFor(earlierAsk,inspection,deps);earlierEntry.dirty=true;forms.set(earlierAsk.askId,earlierEntry);
-  const activeEntry=formFor(activeAsk,inspection,deps);
-  for(const input of activeEntry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
-  activeEntry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='Exact ask match';
-  activeEntry.dirty=true;forms.set(activeAsk.askId,activeEntry);
-  drafts.saveDraft();
-  const multiSaved=JSON.parse(store.get(drafts.localDraftKey(f.display))!);
-  // Control (c9e6a46): single .find(item => item.askId === ask.askId || item.value?.questionId === subject.questionId) matched earlierAsk at index 0
-  const buggyMatch=multiSaved.forms.find((item:{askId:string;value?:{questionId?:string}})=>item.askId===activeAsk.askId||item.value?.questionId==='rig_type');
-  expect(buggyMatch.askId).toBe(earlierAsk.askId);
-  const activeRestored=formFor(activeAsk,inspection,deps);
-  expect(activeRestored.read()).toEqual(activeEntry.read());
- }finally{inspection?.dispose();dom.restore();await f.close();}
-});
-
-
 // HQ 89f85831: projected prose is the label; source identities stay in tooltips.
 for (const language of ['en','ko'] as const) for (const rule of [1,2,3,4,5,6]) test(`#756 human text/title rule ${rule} (${language})`,async()=>{
  const i18n=await import('../web/i18n.ts'),preference=i18n.getLanguagePreference(),link=i18n.getLinkLanguage();
@@ -578,20 +493,19 @@ test('#809 checkpoint answers reuse the form contract without the evidence grid'
 });
 
 test('#839 disposed workspace cannot re-enter the transient image while tabs unregister',async()=>{
- const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('function syncQuestionImage():void {'),end=source.indexOf('/** Survey forms take the Question section',start);
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('function syncQuestionImage():void {'),end=source.indexOf('/** Record forms take the record section',start);
  let released=0;const scope={disposed:true,releaseInterview:()=>{released++;}};
  const run=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return syncQuestionImage;}`)(scope);
  run();run();expect(released).toBe(1);expect(scope.releaseInterview).toBeNull();
 });
 
-test('#1112 / #1230 a sealed rig question hides the option file row, refuses a fresh answer and exports the original binding of a historical act', async () => {
- type RigQuestion = InterviewDisplayQuestion & {set:{context:{kind:'rig';rig_version:number;parts:{files:JobFileIdentity[]}}}};
+test('#1112 / #1230 a sealed rig question refuses formFor and fresh submissions while exporting the original binding of a historical act', async () => {
+ type RigQuestion = NonNullable<Awaited<ReturnType<typeof prepareJobInspection>>['interview']>['questions'][number] & {set:{context:{kind:'rig';rig_version:number;parts:{files:JobFileIdentity[]}}}};
  const f = await optionSetsJobFixture({count:1,boundRig:true,sealAcceptedParts:true});
  const dom = await recordScreenDom();
  const i18n = await import('../web/i18n.ts');
  const preference = i18n.getLanguagePreference(), link = i18n.getLinkLanguage();
  let inspection: Awaited<ReturnType<typeof prepareJobInspection>> | undefined;
- let entry: ReturnType<typeof formFor> | undefined;
  try {
   dom.set('location',{origin:f.origin});
   i18n.setLinkLanguage(null);
@@ -624,59 +538,24 @@ test('#1112 / #1230 a sealed rig question hides the option file row, refuses a f
    if (key) {element.dataset.jobText=key;element.textContent=i18n.t(key);}
    return element;
   };
-  let act: ActV3 | undefined;
-  const refused: string[] = [];
-  entry = formFor(ask,inspection,{node,translate:i18n.t,
+  expect(() => formFor(ask,inspection!,{node,translate:i18n.t,
    helpers:{...createJobFormHelpers(node,i18n.t),jobCheckpointContext,assertJobAskSource:(bound,display)=>{prepareJobForms(display,[bound],()=>null);}},
    draftStorage:()=>({getItem:()=>null}),localDraftKey:()=> 'review-1112',saveDraft(){},
    pageId,access:{capability:f.session.hostCredentials().ui},
    window:{state:()=>({...f.session.status(),receipt,preparing:false,closed:false}),
-    async submit(input){try{act=await f.session.commitUIAct(input);return {ok:true,value:act};}
-     catch(error){const code=(error as JobError).code;refused.push(code);return {ok:false as const,error:{code,message:String(error)}};}}},
-  });
-  const {form} = entry;
-  const badge = form.querySelector('.job-source');
-  expect(badge?.textContent).toBe(f.publication.label);
-  expect(badge?.getAttribute('title')).toBe(source.sourceHash);
-  expect(form.querySelector('h3')?.textContent).toBe(question.set.question);
-  const assertQuestionList = (label:string,count:string,answered:boolean) => {
-   const list = form.querySelector('.interview-questions')!;
-   expect(list.getAttribute('aria-label')).toBe(label);
-   expect(list.querySelector('p')?.textContent).toBe(count);
-   const buttons = list.querySelectorAll<HTMLButtonElement>('.interview-question');
-   expect(buttons).toHaveLength(1);
-   expect(buttons[0]?.textContent).toBe(label);
-   expect(buttons[0]?.getAttribute('aria-current')).toBe('true');
-   expect(Object.hasOwn(buttons[0]!.dataset,'answered')).toBe(answered);
-  };
-  for (const [language,label,count,catalog] of [
-   ['en','Interview question','Answered 0 / 1',enCatalog],
-   ['ko','인터뷰 질문','답변 0 / 1',koCatalog],
-  ] as const) {
-   i18n.setLanguagePreference(language);
-   assertQuestionList(label,count,false);
-   expect(form.querySelector('.interview-image-context h2')?.textContent).toBe(catalog['interview.source']);
-   expect(form.textContent).toContain(i18n.t('interview.provenance',[question.set.drafted_by,question.set.drafted_at]));
-   expect(form.textContent).not.toContain(catalog['interview.noParts']);
-   expect(form.textContent).not.toContain(catalog['This request has no picture.']);
-   expect(form.textContent).not.toContain(ref.path);
-   expect(form.textContent).not.toContain(ref.sha256);
-   expect(form.querySelector('.interview-image-context code')).toBeNull();
-  }
+    async submit(){throw new Error('unexpected submit');}},
+  })).toThrow('JOB_ACT_KIND_DISABLED');
   const item = question.set.asks[0]!, option = item.options.find(item => item.recommended)!;
-  const radio = [...form.querySelectorAll<HTMLInputElement>('input[type=radio]')].find(input => input.value === option.id)!;
-  radio.click();
-  expect(entry.read()).toEqual({questionId:question.set.question,selections:[{itemId:item.id,optionId:option.id,otherText:null}],note:''});
-  assertQuestionList('인터뷰 질문','답변 0 / 1',false);
-  const submitter = form.querySelector<HTMLButtonElement>('button[type=submit]');
-  await form.onsubmit!(Object.assign(new Event('submit',{cancelable:true}),{submitter}));
-  // #1230: the pending ask is historical; a fresh picks submission refuses by name and nothing is answered.
-  expect(act).toBeUndefined();
-  expect(refused).toEqual(['JOB_ACT_KIND_DISABLED']);
-  assertQuestionList('인터뷰 질문','답변 0 / 1',false);
+  const selections = [{itemId:item.id,optionId:option.id,otherText:null}];
+  expect(() => f.session.commitUIAct({
+   kind:'interview-picks',publicationId:ask.publicationId,askId:ask.askId,pageId,displayedNonce:receipt.displayedNonce,
+   expectedGeneration:f.session.status().generation,submissionId:'review-1112-fresh',
+   value:{questionId:question.set.question,selections,note:''},
+  })).toThrow('JOB_ACT_KIND_DISABLED');
   // The original binding is still exported for a picks act committed before the refusal.
-  act = seedHistoricalPicksAct(f.session,{publicationId:ask.publicationId,pageId,displayedNonce:receipt.displayedNonce,
-   expectedGeneration:f.session.status().generation,submissionId:'review-1112-historical',value:entry.read() as never,
+  const act = seedHistoricalPicksAct(f.session,{publicationId:ask.publicationId,pageId,displayedNonce:receipt.displayedNonce,
+   expectedGeneration:f.session.status().generation,submissionId:'review-1112-historical',
+   value:{questionId:question.set.question,selections,note:''},
    questionId:question.set.question,setId:question.set.id,optionSetSha256:ref.sha256}) as unknown as ActV3;
   expect(act).toMatchObject({kind:'interview-picks',source:{optionSetFile:ref,optionSet:{id:question.set.id,sha256:ref.sha256}}});
   const exported = await fetch(`${f.origin}/jobs/${f.session.jobId}/api`,{method:'POST',headers:{
@@ -686,7 +565,6 @@ test('#1112 / #1230 a sealed rig question hides the option file row, refuses a f
   expect(exported.headers.get('Content-Type')).toBe(jobRawActMediaType);
   expect(await exported.text()).toBe(JSON.stringify(act));
  } finally {
-  entry?.form.dispatchEvent(new Event('job-form-dispose'));
   inspection?.dispose();
   i18n.setLinkLanguage(link);
   i18n.setLanguagePreference(preference);
@@ -697,36 +575,23 @@ test('#1112 / #1230 a sealed rig question hides the option file row, refuses a f
 
 test.each([
  ['bound parts',true,undefined,undefined],
- ['missing rig',false,'rig','This question refers to a rig version that this publication does not include.'],
- ['missing scene',false,'unsealed-scene','This question refers to a scene that this publication does not include.'],
- ['no picture',false,'legacy','This request has no picture.'],
-] as const)('#1112 record question keeps the source heading and genuine warnings (%s)', async (_name,boundParts,postPicture,warning) => {
+ ['missing rig',false,'rig','rig'],
+ ['missing scene',false,'unsealed-scene','scene'],
+ ['no picture',false,'legacy',undefined],
+] as const)('#1112 / #1230 record option-set exposes bound parts or missing-picture signals on the host with no answer form (%s)', async (_name,boundParts,postPicture,expectedMissing) => {
  const h = await harness(false,'fixture','interview-picks',boundParts,undefined,postPicture);
- const forms: ReturnType<typeof formFor>[] = [];
- let inspection: Awaited<ReturnType<typeof prepareJobInspection>> | undefined;
  try {
-  inspection = await prepareJobInspection(h.f.display,new AbortController().signal);
-  const question = inspection.interview!.questions[0]!;
+  const ready = await h.screen.prepare(h.f.display,new AbortController().signal);
+  expect(ready!.record!.forms.size).toBe(0);
+  const question = ready!.record!.inspection.interview!.questions[0]!;
   expect(question.hasParts).toBe(boundParts);
-  const entry = formFor(h.f.ask,inspection,h.deps);
-  forms.push(entry);
-  expect(entry.form.querySelector('.interview-image-context h2')?.textContent).toBe(boundParts?'interview.parts':'interview.source');
-  expect(entry.form.textContent).not.toContain('interview.noParts');
-  expect(entry.form.textContent).not.toContain(question.ref.path);
-  expect(entry.form.textContent).not.toContain(question.ref.sha256);
-  if (warning) expect(entry.form.textContent).toContain(warning);
-  if (boundParts) {
-   // Exercise the shared warning with an explicit unavailable signal on the decoded parts row.
-   expect(question.set.context?.kind).toBe('parts');
-   expect(entry.form.textContent).not.toContain('interview.partsUnavailable');
-   const unavailable = formFor(h.f.ask,{...inspection,interview:{...inspection.interview!,questions:[{...question,hasParts:false,partsUnavailable:true}]}},h.deps);
-   forms.push(unavailable);
-   expect(unavailable.form.textContent).toContain('interview.partsUnavailable');
-   expect(unavailable.form.textContent).not.toContain('interview.noParts');
-  }
+  expect(() => formFor(h.f.ask,ready!.record!.inspection,h.deps)).toThrow('JOB_ACT_KIND_DISABLED');
+  h.screen.commit(ready!);
+  await h.screen.painted(ready!,new AbortController().signal);
+  const host = rigHost()!;
+  expect(host.subject).toBe(boundParts ? 'parts' : undefined);
+  expect(host.record?.missingPicture).toBe(expectedMissing);
  } finally {
-  for (const entry of forms) entry.form.dispatchEvent(new Event('job-form-dispose'));
-  inspection?.dispose();
   await h.close();
  }
 });
@@ -888,7 +753,7 @@ test.each(['none','record','model','version','partial'] as const)('#929 client v
 });
 
 test.each(['same rig','third question names another rig'] as const)('#1101 verifies all three question bindings (%s)', async variant => {
- type RigQuestion = InterviewDisplayQuestion & {set:{context:{kind:'rig';rig_version:number}}};
+ type RigQuestion = NonNullable<Awaited<ReturnType<typeof prepareJobInspection>>['interview']>['questions'][number] & {set:{context:{kind:'rig';rig_version:number}}};
  const fixture = await optionSetsJobFixture({count:3,boundRig:true});
  const dom = await recordScreenDom();
  const originalFetch = globalThis.fetch;

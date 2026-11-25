@@ -60,14 +60,3 @@ test('a FIRST image returns original bytes; page replacement during initial load
   console.log('STAGE_FIRST_IMAGE_ORIGINAL_BYTES; GENERATED_PAGE_DURING_LOAD_REFUSED_AND_REPEATED_409');
  }finally{await rm(root,{recursive:true,force:true});}
 });
-
-
-test('interview launch guidance and chrome have matching English and Korean keys',async()=>{
- const {enCatalog}=await import('../web/catalog-en.ts'),{koCatalog}=await import('../web/catalog-ko.ts');
- for(const file of ['web/interview-panel.ts']){
-  const source=await readFile(file,'utf8');
-  const keys=[...new Set(source.match(/interview\.[A-Za-z]+/g))];
-  expect(keys.length).toBeGreaterThan(0);
-  for(const k of keys){expect(enCatalog[k],k).toBeTruthy();expect(koCatalog[k],k).toBeTruthy();}
- }
-});

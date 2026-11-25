@@ -7,7 +7,6 @@ import type {
     JobDisplayReceipt,
     JobCheckpointEvidence,
     JobCheckpointTable,
-    JobCommentsActValues,
     JobInterviewDiagnostics,
     JobProgressLineV3,
     JobProgressV3,
@@ -30,7 +29,6 @@ import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjec
 import {createJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
 import type {JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl} from './view-controls.ts';
-import {createInterviewForm,interviewPicksRecord,interviewRecords,interviewErrors,type InterviewDisplayQuestion} from './interview-panel.ts';
 import {JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 
@@ -122,7 +120,7 @@ function isRecordAnswer(kind: string): boolean {
     return kind === 'signoff' || kind === 'checkpoint';
 }
 export function isPendingOwnerAsk(ask: PendingAskV3): boolean {
-    return ask.status === 'pending' && ask.subject.kind !== 'signoff' && JOB_ENABLED_ACT_KINDS.some(kind => kind === ask.subject.kind);
+    return ask.status === 'pending' && ask.subject.kind !== 'signoff' && ask.subject.kind !== 'interview-picks' && JOB_ENABLED_ACT_KINDS.some(kind => kind === ask.subject.kind);
 }
 /** Match the finalized envelope to the displayed ask. Record acts omit the display-only direction summary. */
 export function matchesJobRecordAct(ask: PendingAskV3, act: ActV3 | undefined, jobId: string | undefined, submission?: UISubmissionV3): boolean {
@@ -170,11 +168,10 @@ export function prepareJobForms<Form>(
     display: DisplayPublicationV3,
     asks: readonly PendingAskV3[],
     prepare: (ask: PendingAskV3) => Form,
-    answeredInterviews = false,
 ): Map<string, Form> {
     const prepared = new Map<string, Form>();
     for (const ask of asks) {
-        if (ask.publicationId !== display.publication.publicationId || ask.status !== 'pending' && !(answeredInterviews && ask.status === 'answered' && ask.subject.kind === 'interview-picks')) continue;
+        if (ask.publicationId !== display.publication.publicationId || ask.status !== 'pending') continue;
         assertJobAskSource(ask, display);
         prepared.set(ask.askId, prepare(ask));
     }
@@ -1359,7 +1356,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
     }
 }
 export type JobForm = {
-    form: HTMLFormElement & {commentWords?:()=>string; interviewComments?:()=>JobCommentsActValues['interview-picks']['comments']};
+    form: HTMLFormElement & {commentWords?:()=>string};
     fieldset: HTMLFieldSetElement;
     read: () => UISubmissionV3['value'];
     submissionId: string;
@@ -1504,52 +1501,6 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
     return {inputLabel, selectValues, imageGallery, planTextList, planStepText};
 }
 
-/** #1004 (owner ruling 2026-11-21): the interview asks of one several-set publication share one question list and one
- * submit at its top. Submit sends each answered set through its own form (one act per set); the rest stay pending. */
-const jobQuestionGroups = new WeakMap<JobPreparedInspection, Map<number, {entry: JobForm; action: HTMLButtonElement; redraw(): void}>>();
-function jobQuestionSet(ask: JobWindowAsk, prepared: JobPreparedInspection, t: typeof import('./i18n.ts').t) {
-    const subject = ask.subject, sets = 'optionSets' in ask.source ? ask.source.optionSets : undefined;
-    if (subject.kind !== 'interview-picks' || !sets || sets.length < 2) return undefined;
-    const index = sets.findIndex(row => row.questionId === subject.questionId && row.setId === subject.setId);
-    let group = jobQuestionGroups.get(prepared);
-    if (!group) jobQuestionGroups.set(prepared, group = new Map());
-    const rows = group, answered = (entry: JobForm) => entry.form.dataset.interviewAnswered === 'true';
-    // Every prompt has a pick and every required Other text is filled; a disabled fieldset does not count as filled.
-    const complete = (form: HTMLFormElement) => {
-        const groups = new Map<string, boolean>();
-        for (const radio of form.querySelectorAll<HTMLInputElement>('input[type=radio]')) groups.set(radio.name, (groups.get(radio.name) ?? false) || radio.checked);
-        return groups.size > 0 && [...groups.values()].every(Boolean) &&
-            [...form.querySelectorAll<HTMLTextAreaElement>('textarea')].every(area => !area.required || !!area.value.trim());
-    };
-    const ready = (entry: JobForm) => !answered(entry) && !entry.submitting && complete(entry.form);
-    const refresh = () => {
-        const members = [...rows.values()], count = members.filter(row => answered(row.entry) || ready(row.entry)).length;
-        const sending = members.some(row => row.entry.submitting);
-        for (const row of members) {
-            row.action.textContent = sending ? t('Sending') : t('interview.submitAnswered', [count, sets.length]);
-            row.action.disabled = sending || !members.some(item => ready(item.entry));
-            if (sending) row.action.setAttribute('aria-busy', 'true');
-            else row.action.removeAttribute('aria-busy');
-            row.redraw();
-        }
-    };
-    const action = document.createElement('button');
-    action.type = 'button'; action.className = 'primary'; action.dataset.jobQuestionsSubmit = '';
-    action.onclick = () => {for (const row of [...rows.values()]) if (ready(row.entry)) row.entry.form.requestSubmit();};
-    return {
-        list: {listAction: action, selected: index,
-            questions: () => sets.map((row, i) => {const member = rows.get(i)?.entry;
-                return {label: row.questionId + ' · ' + row.setId, answered: !!member && (answered(member) || ready(member))};}),
-            onSelect: (i: number) => rows.get(i)?.entry.form.dispatchEvent(new Event('job-question-select', {bubbles: true}))},
-        join(entry: JobForm, redraw: () => void) {
-            rows.set(index, {entry, action, redraw});
-            for (const type of ['input', 'change', 'job-answer-sending', 'job-answer-saved', 'job-answer-failed', 'job-form-language']) entry.form.addEventListener(type, refresh);
-            entry.form.addEventListener('job-form-dispose', () => {if (rows.get(index)?.entry === entry) rows.delete(index); refresh();});
-            refresh();
-        },
-    };
-}
-
 /** The answer builder owns no page shell, transport or draft collection. */
 export interface JobFormDependencies {
     node: JobFormNode;
@@ -1571,7 +1522,7 @@ export interface JobFormDependencies {
 
 /** Build the existing answer form with explicit host dependencies. */
     function formFor(ask: JobWindowAsk, prepared: JobPreparedInspection, deps: JobFormDependencies): JobForm {
-        const {node, translate: t, helpers: {selectValues, imageGallery, planTextList, planStepText, assertJobAskSource, jobCheckpointContext},
+        const {node, translate: t, helpers: {selectValues, planTextList, planStepText, assertJobAskSource, jobCheckpointContext},
             draftStorage, localDraftKey, saveDraft, window, access, pageId} = deps;
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
@@ -1598,64 +1549,7 @@ export interface JobFormDependencies {
         const commentWords=()=>form.commentWords?.()??retainedCommentWords;
         let read: () => UISubmissionV3['value'];
         let submitKey = 'Submit review';
-        let disposeInterview:(()=>void)|undefined;
-        let interviewForm:ReturnType<typeof createInterviewForm>|undefined;
-        let questionSet:ReturnType<typeof jobQuestionSet>;
-        let interviewRefusal: {error: unknown} | undefined;
-        const renderInterviewRefusal = () => {
-            if (!interviewForm || !interviewRefusal) return;
-            const refusal = jobSubmissionRefusal(interviewRefusal.error);
-            interviewForm.status.textContent = refusal.text;
-            interviewForm.status.title = refusal.title;
-        };
-        if (subject.kind === 'interview-picks') {
-            let question:InterviewDisplayQuestion|undefined = prepared.interview?.questions.find(item => item.set.id === subject.setId && item.set.question === subject.questionId);
-            if (!question || !question.editable) throw new Error('JOB_ASK_INVALID');
-            if (question.ref.sha256 !== askOptionSet(ask)?.sha256) throw new Error('JOB_ACT_SOURCE_STALE');
-            if(ask.status==='answered'&&ask.act?.kind==='interview-picks'){
-                const value=ask.act.value;
-                const picks=value.selections.map(selection=>({ask:selection.itemId,option_id:selection.optionId,...(selection.otherText!==null?{other_text:selection.otherText}:{})}));
-                question={...question,saved:interviewPicksRecord(question.ref,picks,value.note,ask.act.at)};
-            }
-            const interviewState = prepared.interview?.interview ?? prepared.display.publication.interview ?? null;
-            const inspectionRecord = interviewState?.records.find(
-                item => item.timeKind === 'inspection' &&
-                    item.questionId === subject.questionId &&
-                    item.setId === subject.setId &&
-                    item.record.endsWith('.pending_options'),
-            );
-            const legacyDiagnostic = inspectionRecord
-                ? interviewState?.diagnostics.find(
-                    item => item.code === 'INTERVIEW_OPTIONS_SCENE_LEGACY' &&
-                        item.record === inspectionRecord.record &&
-                        item.at === inspectionRecord.at,
-                )
-                : undefined;
-            if (legacyDiagnostic) {
-                const legacyNotice = node('p', 'INTERVIEW_OPTIONS_SCENE_LEGACY');
-                legacyNotice.dataset.jobInterviewWarning = legacyDiagnostic.code;
-                legacyNotice.dataset.record = legacyDiagnostic.record;
-                fields.prepend(legacyNotice);
-            }
-            questionSet=jobQuestionSet(ask,prepared,t);
-            interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:true,
-                presentation:prepared.metadata.recordSource?'record':'inspection',
-                images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url),...(image.path&&image.sha256?{path:image.path,sha256:image.sha256}:{})})),answered:ask.status==='answered',
-                ...questionSet?.list});
-            if (prepared.metadata.recordSource && (question.missingPicture || !question.images.length) && !prepared.metadata.manifest?.model) {
-                fields.prepend(node('p', question.missingPicture === 'rig'
-                    ? 'This question refers to a rig version that this publication does not include.'
-                    : question.missingPicture === 'scene'
-                        ? 'This question refers to a scene that this publication does not include.'
-                        : 'This request has no picture.'));
-            }
-            const {localize,dispose,read:readInterview}=interviewForm;
-            const offLanguage=onLanguageChange(()=>{localize();renderInterviewRefusal();});
-            disposeInterview=()=>{offLanguage();dispose();};
-            read=readInterview;
-            submitKey = 'interview.save';
-        }
-        else if (subject.kind === 'checkpoint') {
+        if (subject.kind === 'checkpoint') {
             form.dataset.checkpointId = subject.checkpointId;
             const checkpoint = jobCheckpointContext(ask, prepared.metadata.manifest?.checkpoints ?? []);
             const heading = node('h3');
@@ -1687,7 +1581,7 @@ export interface JobFormDependencies {
         else {
             throw new Error('JOB_ACT_KIND_DISABLED');
         }
-        const submit = interviewForm?.submit??node('button', submitKey);
+        const submit = node('button', submitKey);
         submit.type = 'submit';
         submit.classList.add('primary');
         if(subject.kind==='checkpoint'){
@@ -1698,23 +1592,14 @@ export interface JobFormDependencies {
             fields.append(fail);
         }
         fields.append(submit);
-        const status = interviewForm?.status??node('p');
+        const status = node('p');
         status.setAttribute('role', 'status');
         form.append(status);
         let disposed = false, recordSubmitted = false;
-        const dispose = () => {if (disposed) return; disposed = true; entry.submitting = false; disposeInterview?.();};
+        const dispose = () => {if (disposed) return; disposed = true; entry.submitting = false;};
         const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
             submitting: false, dispose };
         form.addEventListener('job-form-dispose', dispose);
-        if(questionSet&&interviewForm)questionSet.join(entry,interviewForm.refresh);
-        const updateInterviewSubmit = (sending: boolean) => {
-            const key = sending ? 'Sending' : submitKey;
-            submit.dataset.jobText = key;
-            submit.textContent = t(key);
-            if (sending) submit.setAttribute('aria-busy', 'true');
-            else submit.removeAttribute('aria-busy');
-            status.className = sending ? 'sr-only' : '';
-        };
         const jobId = /^\/jobs\/([^/]+)\//.exec(prepared.display.routes.entry)?.[1];
         try {
             const primaryKey = localDraftKey(prepared.display);
@@ -1741,7 +1626,6 @@ export interface JobFormDependencies {
                         askId: string;
                         value?: Record<string, unknown>;
                     }) =>
-                        subject.kind === 'interview-picks' ? item.value?.questionId === subject.questionId :
                         subject.kind === 'checkpoint' && item.value?.checkpointId === subject.checkpointId
                     )
                     : undefined);
@@ -1752,17 +1636,11 @@ export interface JobFormDependencies {
                         value: string;
                     }) => item.name === input.name);
                     if (restored && typeof restored.value === 'string') {
-                        if(input instanceof HTMLInputElement&&input.type==='radio'){
-                            input.checked=input.value===restored.value;
-                            if(input.checked)input.dispatchEvent(new Event('change'));
-                        }else{
-                            input.value = restored.value;
-                            if (input instanceof HTMLSelectElement)input.dispatchEvent(new Event('change'));
-                        }
+                        input.value = restored.value;
+                        if (input instanceof HTMLSelectElement)input.dispatchEvent(new Event('change'));
                     }
                 }
                 entry.dirty = !!original;
-                if(subject.kind==='interview-picks')form.dispatchEvent(new Event('change'));
             }
         }
         catch { /* Invalid or unavailable local drafts grant no submission authority. */ }
@@ -1776,10 +1654,9 @@ export interface JobFormDependencies {
             if (!receipt || state.preparing || state.closed || !access.capability || !form.reportValidity())
                 return;
             try {
-                const draft=read();
-                const value=form.interviewComments?{...draft,comments:form.interviewComments()}:draft;
+                const value=read();
                 const key=JSON.stringify(value);
-                if((commentOnly||form.interviewComments)&&attemptedValue!==undefined&&attemptedValue!==key)entry.submissionId=crypto.randomUUID();
+                if(commentOnly&&attemptedValue!==undefined&&attemptedValue!==key)entry.submissionId=crypto.randomUUID();
                 attemptedValue=key;
                 const input = { kind: subject.kind, publicationId: ask.publicationId,
                     askId: ask.askId, pageId, displayedNonce: receipt.displayedNonce,
@@ -1793,13 +1670,6 @@ export interface JobFormDependencies {
                     delete status.dataset.jobText;
                     status.textContent = '';
                     form.dispatchEvent(new Event('job-answer-sending'));
-                } else if (interviewForm) {
-                    interviewRefusal = undefined;
-                    status.removeAttribute('title');
-                    updateInterviewSubmit(true);
-                    status.dataset.jobText = 'Sending';
-                    status.textContent = t('Sending');
-                    if (questionSet) form.dispatchEvent(new Event('job-answer-sending'));
                 }
                 const frozen = await Promise.resolve(input);
                 if (disposed) return;
@@ -1814,30 +1684,20 @@ export interface JobFormDependencies {
                 recordSubmitted = commentOnly;
                 entry.submitting = false;
                 entry.dirty = false;
-                if (interviewForm) updateInterviewSubmit(false);
                 status.dataset.jobText = commentOnly ? 'Submitted' : 'job.saved';
                 status.textContent = t(status.dataset.jobText);
-                if(subject.kind==='interview-picks'){form.dataset.interviewAnswered='true';form.dispatchEvent(new Event('change'));}
                 saveDraft();
                 form.dispatchEvent(new Event('job-answer-saved',{bubbles:true}));
             }
             catch (error) {
                 if (disposed) return;
                 entry.submitting = false;
-                if (interviewForm) {
-                    updateInterviewSubmit(false);
-                    delete status.dataset.jobText;
-                    interviewRefusal = {error};
-                    renderInterviewRefusal();
-                } else {
-                    status.dataset.jobText = error instanceof Error && Object.hasOwn(enCatalog, error.message) && Object.hasOwn(koCatalog, error.message)
-                        ? error.message : 'JOB_ACT_INVALID';
-                    status.textContent = jobWindowRefusal(error, 'JOB_ACT_INVALID');
-                }
+                status.dataset.jobText = error instanceof Error && Object.hasOwn(enCatalog, error.message) && Object.hasOwn(koCatalog, error.message)
+                    ? error.message : 'JOB_ACT_INVALID';
+                status.textContent = jobWindowRefusal(error, 'JOB_ACT_INVALID');
                 const current = window.state();
                 fields.disabled = commentOnly && (current.closed || current.preparing || current.receipt?.publicationId !== ask.publicationId ||
                     !current.pending.some(item => item.askId === ask.askId && item.status === 'pending'));
-                // A shared question-set submit waits on every member; a failed one must let it re-enable for the retry.
                 form.dispatchEvent(new Event('job-answer-failed'));
             }
         };
@@ -1850,51 +1710,6 @@ prepareJobForms.formFor = formFor;
 prepareJobForms.helpers = createJobFormHelpers;
 
 /** The original source-bound draft storage, shared by the legacy and single-screen hosts. */
-/** Joined inspection uses real API rows and the same answer builder; no job identities or acts are synthesized. */
-export async function joinedInterviewForms(access:InstanceAccess,present:(forms:readonly HTMLElement[])=>void):Promise<()=>void> {
-    const request=async(path:string,body?:unknown)=>{
-        const response=await fetch(access.route(path),body?{method:'POST',headers:access.headers({'Content-Type':'application/json'}),body:JSON.stringify(body)}:undefined);
-        const value=await response.json();if(!response.ok)throw new Error(value.error);return value;
-    };
-    const data=await request('/api/interview') as {questions:InterviewDisplayQuestion[];diagnostics?:import('../src/interview-project.ts').InterviewDiagnostic[];historical?:import('../src/interview-project.ts').HistoricalInterview[]};
-    const forms=new Map<number,ReturnType<typeof createInterviewForm>>();
-    let selected=Math.max(0,data.questions.findIndex(question=>question.editable&&!question.saved)),disposed=false;
-    const node:JobFormNode=(tag,key)=>{const item=document.createElement(tag);if(key){item.dataset.jobText=key;item.textContent=t(key);}return item;};
-    const show=(index:number)=>{
-        if(disposed)return;selected=index;
-        const question=data.questions[index];
-        if(!question){const empty=node('section');empty.dataset.interviewMain='';empty.append(node('p','interview.empty'),interviewRecords(data.diagnostics,data.historical));present([empty]);return;}
-        let entry=forms.get(index);
-        if(!entry){
-            entry=createInterviewForm({question,id:'joined-interview-'+question.ref.sha256,node,mainView:true,
-                images:question.images.map(image=>({name:image.name,src:access.route(image.url)})),
-                questions:()=>data.questions.map((item,i)=>({label:item.set.question+' · '+item.set.id+(item.editable?'':' · '+t('interview.history')),answered:forms.get(i)?.form.dataset.interviewAnswered==='true'||Boolean(item.saved||item.answer)})),
-                selected:index,onSelect:show,diagnostics:data.diagnostics,historical:data.historical});
-            const answer=entry;
-            entry.fieldset.disabled=!question.editable||!access.capability;
-            entry.form.onsubmit=async event=>{
-                event.preventDefault();if(!question.editable||!access.capability||entry!.fieldset.disabled||!entry!.form.reportValidity())return;
-                answer.fieldset.disabled=true;
-                let saved=false;
-                try{
-                    const value=answer.read(),picks=value.selections.map(selection=>({ask:selection.itemId,option_id:selection.optionId,...(selection.otherText!==null?{other_text:selection.otherText}:{})}));
-                    const record=interviewPicksRecord(question.ref,picks,answer.retainedNote,new Date().toISOString());
-                    await request('/api/interview/picks',record);
-                    question.saved=record;answer.form.dataset.interviewAnswered='true';answer.status.dataset.jobText='interview.saved';answer.status.textContent=t('interview.saved');answer.form.dispatchEvent(new Event('change'));saved=true;
-                }catch(error){const code=error instanceof Error?error.message.split(':')[0]:'';answer.status.dataset.jobText=interviewErrors[code]??'interview.failed';answer.status.textContent=t(answer.status.dataset.jobText);}
-                finally{answer.fieldset.disabled=!question.editable||!access.capability;}
-                if(saved)answer.form.dispatchEvent(new Event('job-answer-saved',{bubbles:true}));
-            };
-            forms.set(index,entry);
-        }
-        entry.form.dispatchEvent(new Event('change'));present([entry.form]);
-    };
-    const localize=()=>{for(const entry of forms.values())entry.localize();};
-    try{show(selected);}catch(error){for(const entry of forms.values())entry.dispose();throw error;}
-    const off=onLanguageChange(localize);
-    return ()=>{disposed=true;off();for(const entry of forms.values())entry.dispose();forms.clear();};
-}
-
 export function jobSourceDraftId(source: SourceV3): string {
     if ('record' in source)
         return source.subject === 'option-set' ? source.selection.questionId + ':' + source.selection.setId : 'plan';
@@ -1966,7 +1781,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
         discard:prepared=>{const modal=prepared?.record??prepared?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();},
         changed(state){rigScreen.changed(state);if(!state.error&&rigScreen.mounted())bootstrapPrior=null;if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.failure??state.error);},
     }});
-    const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);for(const form of host.querySelectorAll('form.interview-answer'))form.dispatchEvent(new Event('job-form-language'));});
+    const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);});
     await rigScreen.waiting();
     startJobWindowEvents({access,signal:abort.signal,event:event=>window.event(event),progress:value=>rigScreen.progress(value),refused:error=>report(error,'JOB_STREAM_FAILED'),connected:clear});
     const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();const modal=modalState();for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();localize();globalThis.removeEventListener('pagehide',stop);};

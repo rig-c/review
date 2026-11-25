@@ -44,7 +44,8 @@ test('#715 mixed rig verdict and supported modal asks stay on the shared screen'
   expect(jobRigScreenRoute(display, [...asks, {...signoff, status: 'answered'}], ids)).toBe(true);
   expect(jobRigScreenRoute(display, [...asks, {...signoff, publicationId: 'other'}], ids)).toBe(true);
   const interview = {...signoff, subject: {kind: 'interview-picks', questionId: 'q', setId: 's'}} as unknown as PendingAskV3;
-  expect(jobRigScreenRoute(display, [interview], ids)).toBe(true);
+  expect(jobRigScreenRoute(display, [interview], ids)).toBe(false);
+  expect(jobRigScreenRefusal(display, [interview], ids)).toBe('JOB_ASK_UNSUPPORTED');
   for (const subject of [{kind: 'parts-verdict', draftId: 'd'}, {kind: 'reopen', stage: 'rig-review'},
     {kind: 'review-verdict', stage: 'direction-review'}, {kind: 'review-verdict', stage: 'image-review'},
     {kind: 'checkpoint', checkpointId: 'undeclared'}]) {
@@ -55,7 +56,7 @@ test('#715 mixed rig verdict and supported modal asks stay on the shared screen'
   const recordDisplay = {publication: {...publication, source: recordSource}} as unknown as DisplayPublicationV3;
   expect(jobRigScreenAsk(recordDisplay, {...checkpoint, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(true);
   expect(jobRigScreenAsk(recordDisplay, {...signoff, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(false);
-  expect(jobRigScreenAsk(recordDisplay, {...interview, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(true);
+  expect(jobRigScreenAsk(recordDisplay, {...interview, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(false);
   expect(jobRigScreenAsk(recordDisplay, {...signoff, source: recordSource as never, subject: {kind: 'reopen', stage: 'plan-approved'}} as unknown as PendingAskV3, ids)).toBe(false);
   const draft = {...publication, source: {...publication.source, selector: {kind: 'draft', id: 'd'}}};
   expect(jobRigScreenRoute({publication: draft} as unknown as DisplayPublicationV3, [], ids)).toBe(false);
@@ -193,9 +194,20 @@ test('#709 job-window rig verdict mount and capture path are deleted, not hidden
   expect(mainSource).not.toContain('Approve this stage.');
   expect(mainSource).not.toContain('Approve…');
   expect(mainSource).not.toContain('Approve\\u2026');
+  expect(form).not.toContain("subject.kind === 'interview-picks'");
+  expect(source).not.toContain('interview.' + 'save');
+  expect(source).not.toContain('interview.' + 'submitAnswered');
+  expect(source).not.toContain('joined' + 'InterviewForms');
+  expect(rigScreenSource).not.toContain('interview-picks');
+  expect(mainSource).not.toContain('Answer' + ' these questions.');
+  expect(mainSource).not.toContain('Answer' + '\u2026');
+  expect(mainSource).not.toContain('Answer' + '\\u2026');
+  expect(mainSource).not.toContain('Answer' + ' saved');
   for (const key of ['Approve\u2026', 'Approve this stage.', 'Sign-off', 'Checkpoint · Sign-off', 'job.signoff',
     'job.signoff.postVersion', 'job.signoff.postVersionAbsent', 'job.signoff.directionVerdict',
-    'job.signoff.directionVerdictAbsent', 'job.signoff.directionSummaryAbsent']) {
+    'job.signoff.directionVerdictAbsent', 'job.signoff.directionSummaryAbsent',
+    'Answer' + '\u2026', 'Answer' + ' saved', 'Answer' + ' these questions.', 'interview.' + 'save',
+    'interview.' + 'submitAnswered', 'interview.' + 'answered', 'interview.' + 'noteLabel', 'interview.' + 'notePlaceholder']) {
     expect(key in enCatalog).toBe(false);
     expect(key in koCatalog).toBe(false);
   }

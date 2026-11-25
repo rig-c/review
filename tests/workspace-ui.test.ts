@@ -465,7 +465,7 @@ for(const live of [false,true])test('#840 '+(live?'live row':'standalone heading
    headline.hidden=false;save.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);expect(save.hidden).toBe(false);
   }
   mounted.act.hidden=false;mounted.syncActRow();expect(dirtyState.hidden).toBe(live);expect(draftState.hidden).toBe(live);expect(draftRecovery.hidden).toBe(live);
-  mounted.actBar.setSaveState({kind:'saved',text:'Answer saved'});expect((live?dirtyState:draftState).textContent).toBe('Answer saved');
+  mounted.actBar.setSaveState({kind:'saved',text:'Submitted'});expect((live?dirtyState:draftState).textContent).toBe('Submitted');
   if(live){expect([...mounted.strip.parentElement!.children]).toEqual([mounted.strip,mounted.collapse]);mounted.act.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(true);expect(dirtyState.hidden).toBe(false);mounted.act.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);}
   expect(new Set(owners).size).toBe(2);expect([...mounted.strip.children]).toEqual([]);expect(mounted.comments.button.hidden).toBe(true);expect(mounted.comments.panel.getAttribute('aria-labelledby')).toBe('stage-comment');expect(document.getElementById('proposal-panel')!.children[0]!.id).toBe('comments-list-host');
   for(const [index,tab] of row.tabs.entries()){
@@ -708,8 +708,8 @@ for(const language of ['en','ko'] as const)test('#987 ticks the current age and 
  now+=60000;activeTick?.();
  expect(parts).toBe(quietParts);
  expect(read()).toBe(t('job.progress.quiet',[2,phase],language));
- render.renderPendingSubjects([{kind:'interview-picks'}]);
- expect(read()).toBe(catalog['Answer these questions.']);
+ render.renderPendingSubjects([{kind:'checkpoint'}]);
+ expect(read()).toBe(catalog['Review this checkpoint.']);
  expect(attributes.has('translate')).toBe(false);
  expect(activeTick).toBeUndefined();
 });
