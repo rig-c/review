@@ -280,10 +280,14 @@ export function retainedPublicationRoutes(session: JobSession) {
             if (crop) session.authorize('ui', request.headers.get('X-Review-Capability'));
             return await session.readPublicationResponse(publicationId, async retained => {
                 const display = session.displayPublication(publicationId);
-                // Retain history, but expose images only for this publication's declared questions.
+                // Retain history, but expose images only for this publication's questions: its declared picks subjects
+                // or, with no subject (#1230), the option sets the record publication names.
+                const selection = isRetainedRecordSource(retained) && retained.source.subject === 'option-set'
+                    ? retained.source.selection : undefined;
+                const sets = selection ? selection.sets ?? [selection] : [];
                 const questions = retained.questions.map(question => ({...question,
-                    images: retained.subjects.some(subject => subject.kind === 'interview-picks' &&
-                        subject.setId === question.set.id && subject.questionId === question.set.question)
+                    images: [...retained.subjects.flatMap(subject => subject.kind === 'interview-picks' ? [subject] : []), ...sets]
+                        .some(subject => subject.setId === question.set.id && subject.questionId === question.set.question)
                         ? question.images : [],
                 }));
                 if (key !== display.publication.instanceKey) return failure('JOB_DISPLAY_MISMATCH', 409);
