@@ -39,7 +39,8 @@ test('#715 mixed rig verdict and supported modal asks stay on the shared screen'
   expect(jobRigScreenRoute(display, asks, ids)).toBe(true);
   expect(jobRigScreenRoute(display, asks, new Set())).toBe(true);
   const signoff = {...verdict, askId: 'signoff', subject: {kind: 'signoff', stage: 'rig-review'}} as unknown as PendingAskV3;
-  expect(jobRigScreenRoute(display, [...asks, signoff], ids)).toBe(true);
+  expect(jobRigScreenRoute(display, [...asks, signoff], ids)).toBe(false);
+  expect(jobRigScreenRefusal(display, [...asks, signoff], ids)).toBe('JOB_ASK_UNSUPPORTED');
   expect(jobRigScreenRoute(display, [...asks, {...signoff, status: 'answered'}], ids)).toBe(true);
   expect(jobRigScreenRoute(display, [...asks, {...signoff, publicationId: 'other'}], ids)).toBe(true);
   const interview = {...signoff, subject: {kind: 'interview-picks', questionId: 'q', setId: 's'}} as unknown as PendingAskV3;
@@ -53,7 +54,7 @@ test('#715 mixed rig verdict and supported modal asks stay on the shared screen'
     subjects: [{kind: 'checkpoint', checkpointId: 'step-one'}, {kind: 'signoff', stage: 'plan-approved'}, {kind: 'reopen', stage: 'plan-approved'}]};
   const recordDisplay = {publication: {...publication, source: recordSource}} as unknown as DisplayPublicationV3;
   expect(jobRigScreenAsk(recordDisplay, {...checkpoint, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(true);
-  expect(jobRigScreenAsk(recordDisplay, {...signoff, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(true);
+  expect(jobRigScreenAsk(recordDisplay, {...signoff, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(false);
   expect(jobRigScreenAsk(recordDisplay, {...interview, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(true);
   expect(jobRigScreenAsk(recordDisplay, {...signoff, source: recordSource as never, subject: {kind: 'reopen', stage: 'plan-approved'}} as unknown as PendingAskV3, ids)).toBe(false);
   const draft = {...publication, source: {...publication.source, selector: {kind: 'draft', id: 'd'}}};
@@ -185,6 +186,19 @@ test('#709 job-window rig verdict mount and capture path are deleted, not hidden
   expect(mainSource).not.toContain('Review the reopened stage.');
   const actSource = await Bun.file(new URL('../src/job-act.ts', import.meta.url)).text();
   expect(actSource.match(/reopen/g)).toEqual(['reopen']);
+  expect(form).not.toContain("subject.kind === 'signoff'");
+  expect(source).not.toContain('data-direction-signoff');
+  expect(source).not.toContain('job.signoff');
+  expect(rigScreenSource).not.toContain('signoff');
+  expect(mainSource).not.toContain('Approve this stage.');
+  expect(mainSource).not.toContain('Approve…');
+  expect(mainSource).not.toContain('Approve\\u2026');
+  for (const key of ['Approve\u2026', 'Approve this stage.', 'Sign-off', 'Checkpoint · Sign-off', 'job.signoff',
+    'job.signoff.postVersion', 'job.signoff.postVersionAbsent', 'job.signoff.directionVerdict',
+    'job.signoff.directionVerdictAbsent', 'job.signoff.directionSummaryAbsent']) {
+    expect(key in enCatalog).toBe(false);
+    expect(key in koCatalog).toBe(false);
+  }
 });
 
 test('#756 package checkpoint modal requires the same-source plan mapping before leaving the legacy route',async()=>{

@@ -424,7 +424,7 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
   for(const [width,height]of (Bun.argv.includes('--finish-residues')?[[1440,900],[1280,720]]:Bun.argv.includes('--standalone-widths')?[[240,900],[320,900],[540,720],[700,720],[900,720],[1100,800],[1280,720],[1440,900]]:[[1440,900],[1280,720],[1100,800]])){
    await page.setViewport(width,height);await page.goto(target.href,lang);
    await wait(page,kind.startsWith('standalone')?`!!document.querySelector('#rig-root canvas')`:`document.body.dataset.ready==='true'&&!document.body.inert`,kind+' ready');
-   if(Bun.argv.includes('--finish-residues')&&(kind==='checkpoint'||kind==='plan')){
+   if(Bun.argv.includes('--finish-residues')&&kind==='checkpoint'){
     if(!await page.evaluate(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`))await click(page,'#workspace-pending-ask');
     await wait(page,`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'record section');
     // #1041 B: the record form is a section of the right communication panel, not a centred dialog.

@@ -1812,45 +1812,53 @@ describe('standalone event subscription lifetime', () => {
 
             // formFor submit catch path (JOB_ACT_INVALID fallback)
             const display = fixturePublication(1);
-            const act = fixtureAct('signoff');
+            const act = fixtureAct('checkpoint');
             Object.assign(display, {publication: {...display.publication, source: act.source}});
             const ask: PendingAskV3 = {
                 askId: act.askId, publicationId: display.publication.publicationId,
-                source: act.source, status: 'pending', subject: {kind: 'signoff', stage: 'plan-approved'},
+                source: act.source, status: 'pending',
+                subject: {kind: 'checkpoint', checkpointId: 'silhouette', planStepId: 'inspect-body'},
             };
             const makeEl = (tag: string, key?: string): any => {
                 const children: any[] = [];
                 return {
                     tagName: tag.toUpperCase(), dataset: key ? {jobText: key} : {}, textContent: key ? t(key) : '',
-                    title: '', disabled: false, classList: {add() {}}, style: {},
-                    setAttribute() {}, addEventListener() {}, dispatchEvent() { return true; },
+                    title: '', value: tag === 'select' ? 'pass' : '', disabled: false, classList: {add() {}}, style: {},
+                    setAttribute() {}, removeAttribute() {}, addEventListener() {}, dispatchEvent() { return true; },
                     reportValidity() { return true; },
                     append(...nodes: any[]) { children.push(...nodes); },
                     prepend(...nodes: any[]) { children.unshift(...nodes); },
+                    querySelector() { return {value: 'pass'}; },
                     querySelectorAll() { return []; },
                     children,
                 };
             };
             let submitFailure: Error = new RangeError('boom-submit');
             const helpers = prepareJobForms.helpers(makeEl, t);
-            const entry = prepareJobForms.formFor(
-                ask,
-                {display, metadata: {manifest: {checkpoints: []}}} as unknown as JobPreparedInspection,
-                {
-                    node: makeEl, translate: t,
-                    helpers: {...helpers, assertJobAskSource() {}, jobCheckpointContext},
-                    draftStorage: () => ({getItem: () => null}),
-                    localDraftKey: () => 'draft', saveDraft() {},
-                    access: {capability: 'cap'}, pageId: 'page-941',
-                    window: {
-                        state: () => ({
-                            receipt: {publicationId: display.publication.publicationId, pageId: 'page-941', displayedNonce: 'nonce'},
-                            preparing: false, closed: false, generation: 1, pending: [ask],
-                        }),
-                        submit: async () => { throw submitFailure; },
-                    },
+            const inspection = {
+                display,
+                metadata: {manifest: {checkpoints: [{id: 'silhouette', title: 'Silhouette'}]}},
+            } as unknown as JobPreparedInspection;
+            const formDeps = {
+                node: makeEl, translate: t,
+                helpers: {...helpers, assertJobAskSource() {}, jobCheckpointContext},
+                draftStorage: () => ({getItem: () => null}),
+                localDraftKey: () => 'draft', saveDraft() {},
+                access: {capability: 'cap'}, pageId: 'page-941',
+                window: {
+                    state: () => ({
+                        receipt: {publicationId: display.publication.publicationId, pageId: 'page-941', displayedNonce: 'nonce'},
+                        preparing: false, closed: false, generation: 1, pending: [ask],
+                    }),
+                    submit: async () => { throw submitFailure; },
                 },
-            );
+            };
+            expect(() => prepareJobForms.formFor(
+                {...ask, subject: {kind: 'signoff', stage: 'plan-approved'}},
+                inspection,
+                formDeps,
+            )).toThrow('JOB_ACT_KIND_DISABLED');
+            const entry = prepareJobForms.formFor(ask, inspection, formDeps);
             const statusNode = (entry.form as any).children.at(-1);
             calls.length = 0;
             await (entry.form as any).onsubmit({preventDefault() {}});

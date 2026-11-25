@@ -181,7 +181,9 @@ try{
   targets.push({screen:'interview',url:`http://127.0.0.1:${interview.port}/#cap=${capability}`,
    ready:'document.body.dataset.ready==="true" && !!document.querySelector("#view-menu [data-view^=interview-image]")',widths:[390,768]});
 
-  const job=await recordScreenFixture('signoff',true);
+  // #1228: a displayed record publication with no ask holds the right panel open, so the 768 px stage stays 240 px.
+  const job=await recordScreenFixture('checkpoint',true,undefined,'plan-approved',false,true,undefined,false,true);
+  job.fake.publish(job.display);
   cleanup.push(()=>job.close());
   targets.push({screen:'job',url:job.ownerUrl,ready:jobReady+' && !!document.querySelector("#reference-content img")?.naturalWidth',widths:[390,768]});
  }

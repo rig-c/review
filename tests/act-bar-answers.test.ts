@@ -64,7 +64,7 @@ test('#1159 shows the existing reason only while missing changes blocks a visibl
  expect(parts.requestChanges.disabled).toBe(true);
  expect(parts.requestChangesReason.hidden).toBe(true);
 });
-for(const kind of ['signoff','interview-picks','checkpoint'])test('#809 '+kind+' has one answer opener and no redundant submit',()=>{
+for(const kind of ['interview-picks','checkpoint'])test('#809 '+kind+' has one answer opener and no redundant submit',()=>{
  const h=harness([{kind}]);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(false);expect(h.rigAsk.disabled).toBe(false);expect(h.rigAsk.classList.values.has('primary')).toBe(true);
  const mixed=harness([{kind:'review-verdict',stage:'rig-review'},{kind}]);expect(mixed.rigAsk.hidden).toBe(true);expect(mixed.submit.disabled).toBe(true);
 });
@@ -84,7 +84,7 @@ test('#987 progress reveals the act row with the existing actions hidden',()=>{
  expect([h.save,h.requestChanges,h.rigAsk].every(control=>control.hidden)).toBe(true);
  h.env.jobProgress=null;h.render();expect(h.rigInspector.act.hidden).toBe(true);
 });
-for(const kind of ['review-verdict','parts-verdict','signoff','interview-picks','checkpoint'])test('#825 restore conflict blocks all '+kind+' submitting controls',()=>{
+for(const kind of ['review-verdict','parts-verdict','interview-picks','checkpoint'])test('#825 restore conflict blocks all '+kind+' submitting controls',()=>{
  const h=harness([{kind}],3,true);expect(h.rigAsk.disabled).toBe(true);expect(h.submit.disabled).toBe(true);
  if(kind.endsWith('verdict')){expect(h.save.disabled).toBe(true);expect(h.requestChanges.disabled).toBe(true);}
 });
@@ -162,7 +162,7 @@ test('#904 first publication keeps its waiting row until an actual subject arriv
  expect(h.save.classList.values.has('primary')).toBe(false);expect(h.requestChanges.classList.values.has('primary')).toBe(false);
 });
 
-for(const kind of ['review-verdict','parts-verdict','signoff','interview-picks','checkpoint'])test('#904 synchronous reveal prepares '+kind+' labels and keeps pending controls hidden under the waiting prompt',()=>{
+for(const kind of ['review-verdict','parts-verdict','interview-picks','checkpoint'])test('#904 synchronous reveal prepares '+kind+' labels and keeps pending controls hidden under the waiting prompt',()=>{
  const h=harness([{kind,stage:'rig-review'}]);h.rigInspector.act.hidden=false;
  const controls=[['save',h.save],['request-changes',h.requestChanges],['workspace-pending-ask',h.rigAsk]] as const;
  const reveals:{id:string;text:string;disabled:boolean}[]=[];
@@ -178,5 +178,22 @@ for(const kind of ['review-verdict','parts-verdict','signoff','interview-picks',
  h.env.firstPublicationPrompt=false;h.render();
  const verdict=kind.endsWith('verdict');
  expect(reveals).toEqual(verdict?[{id:'save',text:'Approve',disabled:false},{id:'request-changes',text:'Request changes',disabled:true}]:
-  [{id:'workspace-pending-ask',text:kind==='signoff'?'Approve…':kind==='interview-picks'?'Answer…':'Review…',disabled:false}]);
+  [{id:'workspace-pending-ask',text:kind==='interview-picks'?'Answer…':'Review…',disabled:false}]);
+});
+
+test('#1228 a pending signoff subject opens no answer control and shows neither Approve… nor the stage-approval headline',()=>{
+ const h=harness([{kind:'signoff',stage:'plan-approved'}]);
+ expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);
+ expect(h.rigAsk.hidden).toBe(true);expect(h.recordAsk.hidden).toBe(true);
+ expect(h.rigAsk.textContent).not.toBe('Approve…');expect(h.recordAsk.textContent).not.toBe('Approve…');
+ // Once isPendingOwnerAsk filters signoff out of pendingSubjects(), the act row stays hidden too.
+ const filtered=harness([]);
+ expect(filtered.rigInspector.act.hidden).toBe(true);
+ const begin=main.indexOf('function renderPendingSubjects('),end=main.indexOf('\nfunction syncJobActRow(',begin);
+ const headlines:string[]=[];
+ const scope={partsSubject:null,partsOnly:false,host:null,pendingAnswers:[] as {kind:string;stage?:string}[],firstPublicationPrompt:false,
+  renderAskHeadline:(value:string)=>headlines.push(value),renderDraftState(){}};
+ const renderSubjects=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end))};return renderPendingSubjects;}`)(scope);
+ renderSubjects([{kind:'signoff',stage:'plan-approved'}]);
+ expect(headlines).toEqual(['Nothing is waiting for your answer.']);
 });

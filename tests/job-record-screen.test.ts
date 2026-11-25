@@ -10,7 +10,7 @@ import {createJobRigScreen} from '../web/job-rig-screen.ts';
 import type {InterviewDisplayQuestion} from '../web/interview-panel.ts';
 import {rigHost,setRigHost} from '../web/rig-host.ts';
 import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jobPublicationRoutes,prepareJobForms,prepareJobInspection,type JobFormDependencies} from '../web/job-session.ts';
-import {JOB_API_V3_SCHEMA,jobRawActMediaType,type ActV3,type DisplayPublicationV3,type JobFileIdentity,type PendingAskV3,type PlanSource,type RecordSignoffStage,type UISubmissionV3} from '../src/job-contract.ts';
+import {JOB_API_V3_SCHEMA,jobRawActMediaType,type ActV3,type DisplayPublicationV3,type JobFileIdentity,type PendingAskV3,type RecordSignoffStage,type UISubmissionV3} from '../src/job-contract.ts';
 import {optionSetsJobFixture,recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {rigPictureCases,SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_ROOT,type PostPictureCase} from './helpers/job-record-fixture.ts';
 
@@ -81,133 +81,121 @@ test('#750 no picture, receipt rearm, new ask, dirty form identity and closed su
   const saved=[...h.store.values()][0]!;expect(saved).toContain('retained reviewer words');
   h.state.preparing=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);
   h.state.preparing=false;h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'rearmed'};
-  h.state.pending.push({...h.f.ask,askId:'later-signoff',subject:{kind:'signoff',stage:'plan-approved'}},{...h.f.ask,askId:'ignored-reopen',subject:{kind:'reopen',stage:'plan-approved'}});h.screen.changed(h.state);
-  expect(ready!.record!.forms.size).toBe(2);expect(ready!.record!.forms.has('ignored-reopen')).toBe(false);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(entry.read()).toMatchObject({words:'[general]\nretained reviewer words'});expect(entry.fieldset.disabled).toBe(false);
+  h.state.pending.push({...h.f.ask,askId:'later-checkpoint'},{...h.f.ask,askId:'ignored-signoff',subject:{kind:'signoff',stage:'plan-approved'}},{...h.f.ask,askId:'ignored-reopen',subject:{kind:'reopen',stage:'plan-approved'}});h.screen.changed(h.state);
+  expect(ready!.record!.forms.size).toBe(2);expect(ready!.record!.forms.has('ignored-signoff')).toBe(false);expect(ready!.record!.forms.has('ignored-reopen')).toBe(false);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(entry.read()).toMatchObject({words:'[general]\nretained reviewer words'});expect(entry.fieldset.disabled).toBe(false);
   const restored=formFor(h.f.ask,ready!.record!.inspection,h.deps);restored.form.commentWords=entry.form.commentWords;expect(restored.read()).toEqual(entry.read());
   h.state.closed=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);await entry.form.onsubmit!({preventDefault(){}} as never);expect(h.submitted).toHaveLength(0);
  }finally{await h.close();}
 });
 
-test('#989 a publication resumed with a historical pending reopen ask plus a signoff ask loads, shows only the signoff form and submits it',async()=>{
+test('#989 and #1228 a publication resumed with historical pending reopen and signoff asks plus a checkpoint ask loads, shows only the checkpoint form and submits it',async()=>{
  const h=await harness();try{
+  const checkpointAsk=h.f.ask;
   const signoffAsk:PendingAskV3={...h.f.ask,askId:'ask-signoff',subject:{kind:'signoff',stage:'plan-approved'}};
   const reopenAsk:PendingAskV3={...h.f.ask,askId:'ask-reopen',subject:{kind:'reopen',stage:'plan-approved'}};
-  h.state.pending=[reopenAsk,signoffAsk];
+  h.state.pending=[reopenAsk,signoffAsk,checkpointAsk];
   let mountedForms:readonly HTMLElement[]=[];
   h.options.load=async()=>{rigHost()!.attach({stage:()=>null,redraw(){},message(){},recordForms(forms){mountedForms=forms;}});rigHost()!.displayed();};
   const ready=await h.screen.prepare(h.f.display,new AbortController().signal);
-  expect([...ready!.record!.forms.keys()]).toEqual(['ask-signoff']);
+  expect([...ready!.record!.forms.keys()]).toEqual([checkpointAsk.askId]);
   h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
-  h.state.receipt={publicationId:signoffAsk.publicationId,pageId:h.deps.pageId,displayedNonce:'resumed-nonce'};
+  h.state.receipt={publicationId:checkpointAsk.publicationId,pageId:h.deps.pageId,displayedNonce:'resumed-nonce'};
   h.screen.changed(h.state);
   expect(ready!.record!.forms.size).toBe(1);
   expect(ready!.record!.forms.has('ask-reopen')).toBe(false);
+  expect(ready!.record!.forms.has('ask-signoff')).toBe(false);
   expect(mountedForms).toHaveLength(1);
-  const entry=ready!.record!.forms.get('ask-signoff')!;
+  const entry=ready!.record!.forms.get(checkpointAsk.askId)!;
   expect(entry.fieldset.disabled).toBe(false);
-  entry.form.commentWords=()=>'[general]\nsignoff on resumed job';
+  entry.form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='pass';
+  entry.form.commentWords=()=>'[general]\ncheckpoint on resumed job';
   await entry.form.onsubmit!({preventDefault(){}} as never);
   expect(h.submitted).toEqual([{
-   kind:'signoff',
-   publicationId:signoffAsk.publicationId,
-   askId:'ask-signoff',
+   kind:'checkpoint',
+   publicationId:checkpointAsk.publicationId,
+   askId:checkpointAsk.askId,
    pageId:h.deps.pageId,
    displayedNonce:'resumed-nonce',
    expectedGeneration:h.state.generation,
    submissionId:entry.submissionId,
-   value:{stage:'plan-approved',decision:'approved',words:'[general]\nsignoff on resumed job'},
+   value:{checkpointId:(checkpointAsk.subject as {checkpointId:string}).checkpointId,outcome:'pass',words:'[general]\ncheckpoint on resumed job'},
   }]);
  }finally{await h.close();}
 });
 
-test('#1088 direction sign-off shows three localized rows for projected and historical sources', async () => {
- const i18n = await import('../web/i18n.ts');
- const preference = i18n.getLanguagePreference(), link = i18n.getLinkLanguage();
- const h = await harness(false, 'fixture', 'signoff', false, 'direction-review');
- let inspection: Awaited<ReturnType<typeof prepareJobInspection>> | undefined;
- let unbind: (() => void) | undefined;
+test('#1228 a publication declaring signoff shows no form and no error on record, surfaces JOB_ASK_UNSUPPORTED on a model ask, and replays historical signoff acts byte-exact', async () => {
+ const {parseRecordAct} = await import('../src/job-api.ts');
+ const {matchesJobRecordAct, isPendingOwnerAsk} = await import('../web/job-session.ts');
+ const h = await harness(true, 'fixture', 'signoff', false, 'direction-review');
  try {
-  i18n.setLinkLanguage(null);
-  const source = h.f.ask.source;
-  if (source.subject !== 'plan') throw new Error('Expected plan source');
-  inspection = await prepareJobInspection(h.f.display, new AbortController().signal);
-  const node = ((tag: string, key?: string) => {
-   const element = h.dom.document.createElement(tag);
-   if (key) {element.dataset.jobText = key; element.textContent = i18n.t(key);}
-   return element;
-  }) as JobFormDependencies['node'];
-  const deps = {...h.deps, node, translate: i18n.t, helpers: {...h.deps.helpers, ...createJobFormHelpers(node, i18n.t)}};
-  const host = h.dom.document.createElement('div');
-  const cases: {projection?: PlanSource['directionReview']; en: string[]; ko: string[]}[] = [
-   {
-    projection: {postVersion: 3, verdictActId: 'act-direction-accepted', take: {duration: 4.5, loop: true}, camera: 'composed'},
-    en: ['Post to sign: v3', 'Accepted direction verdict · act-direction-accepted', 'Direction · 4.5 s · loop'],
-    ko: ['서명 대상 포스트 v3', '채택된 연출 판정 · act-direction-accepted', '연출 · 4.5초 · 반복'],
-   },
-   {
-    projection: {postVersion: 4, verdictActId: null, take: {duration: 8, loop: true}, camera: 'fixed'},
-    en: ['Post to sign: v4', 'Direction verdict not supplied', 'Direction · 8 s · loop · fixed camera'],
-    ko: ['서명 대상 포스트 v4', '연출 판정이 제공되지 않았어요.', '연출 · 8초 · 반복 · 카메라 고정'],
-   },
-   {
-    projection: {postVersion: 1, verdictActId: 'act-moving', take: {duration: 2, loop: false}, camera: 'moving'},
-    en: ['Post to sign: v1', 'Accepted direction verdict · act-moving', 'Direction · 2 s · once · moving camera'],
-    ko: ['서명 대상 포스트 v1', '채택된 연출 판정 · act-moving', '연출 · 2초 · 한 번 · 카메라 이동'],
-   },
-   {
-    en: ['Post version not supplied', 'Direction verdict not supplied', 'Direction summary not supplied'],
-    ko: ['포스트 버전이 제공되지 않았어요.', '연출 판정이 제공되지 않았어요.', '연출 요약이 제공되지 않았어요.'],
-   },
-  ];
-  const script = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
-  const subscription = script.split('\n').find(line => line.includes('const localize=i18n.onLanguageChange('))!;
-  unbind = new Function('i18n', 't', 'host', new Bun.Transpiler({loader: 'ts'}).transformSync(subscription + ';return localize;'))(i18n, i18n.t, host);
-  for (const {projection, en, ko} of cases) {
-   // Inject the already-decoded source on both sides of the existing display/ask binding.
-   const boundSource = projection ? {...source, directionReview: projection} : source;
-   const display = {...h.f.display, publication: {...h.f.display.publication, source: boundSource}};
-   i18n.setLanguagePreference('en');
-   const entry = formFor({...h.f.ask, source: boundSource}, {...inspection, display}, deps);
-   const {form, fieldset} = entry;
-   host.replaceChildren(form);
-   expect(form.querySelectorAll('[data-job-plan-step]')).toHaveLength(0);
-   expect(host.querySelector('form[data-direction-signoff]')).toBe(form);
-   const rows = [...form.querySelectorAll<HTMLElement>('li[data-direction-signoff-row]')];
-   expect(rows.map(row => row.dataset.directionSignoffRow)).toEqual(['post-version', 'verdict-act-id', 'summary']);
-   for (const [language, expected] of [['en', en], ['ko', ko], ['en', en]] as const) {
-    i18n.setLanguagePreference(language);
-    expect(rows.map(row => row.textContent)).toEqual(expected);
-    expect(form.querySelector('[data-job-text="job.commentsFromWorkspace"]')?.textContent).toBe(i18n.t('job.commentsFromWorkspace'));
-    expect(form.querySelector('button[type="submit"]')?.textContent).toBe(i18n.t('job.signoff'));
-   }
-   expect(fieldset.title).toBe('direction-review');
-   form.commentWords = () => '[general]\nKeep this take';
-   expect(entry.read()).toEqual({stage: 'direction-review', decision: 'approved', words: '[general]\nKeep this take'});
+  expect(isPendingOwnerAsk(h.f.ask)).toBe(false);
+  // 1) Record publication carrying a sign-off subject: once with no ask sent, once with a pending signoff ask.
+  for (const pending of [[] as PendingAskV3[], [h.f.ask]]) {
+   h.state.pending = [...pending];
+   let mountedForms: readonly HTMLElement[] = [];
+   const messages: [string, boolean | undefined][] = [];
+   h.options.load = async () => {
+    rigHost()!.attach({stage: () => null, redraw() {}, message(text, error) {messages.push([text, error]);}, recordForms(forms) {mountedForms = forms;}});
+    rigHost()!.displayed();
+   };
+   const ready = await h.screen.prepare(h.f.display, new AbortController().signal);
+   expect(ready!.refusal).toBeUndefined();
+   expect(ready!.record!.forms.size).toBe(0);
+   expect(ready!.record!.picture).not.toBeNull();
+   const tx = h.screen.commit(ready!);
+   await h.screen.painted(ready!, new AbortController().signal);
+   tx.finalize();
+   expect(mountedForms).toEqual([]);
+   expect(messages.filter(([, error]) => error)).toEqual([]);
+   expect(rigHost()!.record?.hasPicture).toBe(true);
+   ready!.record!.inspection.dispose();
   }
+  // 2) Production-shaped rig publication: once without signoff ask (viewer + comment-only act@10 ready), once with a producer still sending signoff ask (named refusal JOB_ASK_UNSUPPORTED, not a broken page).
+  const picture = h.f.backdrop!;
+  h.state.pending = [];
+  const cleanRig = await h.screen.prepare(picture, new AbortController().signal);
+  expect(cleanRig!.refusal).toBeUndefined();
+  const cleanTx = h.screen.commit(cleanRig!);
+  await h.screen.painted(cleanRig!, new AbortController().signal);
+  cleanTx.finalize();
+  expect(typeof rigHost()!.submitComments).toBe('function');
+  expect(rigHost()!.verdictComments?.available()).toBe(true);
+  const staleProducerAsk: PendingAskV3 = {askId: 'producer-signoff', publicationId: picture.publication.publicationId, source: picture.publication.source, status: 'pending', subject: {kind: 'signoff', stage: 'plan-approved'}};
+  h.state.pending = [staleProducerAsk];
+  const refusedRig = await h.screen.prepare(picture, new AbortController().signal);
+  expect(refusedRig!.refusal).toBe('JOB_ASK_UNSUPPORTED');
+  const refusedTx = h.screen.commit(refusedRig!);
+  await h.screen.painted(refusedRig!, new AbortController().signal);
+  refusedTx.finalize();
+  expect(rigHost()!.unavailable).toBe('JOB_ASK_UNSUPPORTED');
+  // 3) Fresh signoff submissions refuse JOB_ACT_KIND_DISABLED, while historical signoff act@4 still reads and replays byte for byte.
+  const refused = await h.f.ports.commitUIAct(h.f.session.jobId, new Request(h.f.origin + '/ui/acts', {
+   method: 'POST',
+   body: JSON.stringify({
+    kind: 'signoff', publicationId: h.f.ask.publicationId, askId: h.f.ask.askId,
+    pageId: 'historical-page', displayedNonce: 'historical-nonce',
+    expectedGeneration: h.f.display.publication.generation, submissionId: 'fresh-signoff',
+    value: {stage: 'direction-review', decision: 'approved', words: '[general]\nFresh approval'},
+   }),
+  }));
+  expect(refused).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+  if (h.f.ask.source.subject !== 'plan') throw new Error('Expected plan source');
+  const {directionReview: _summary, ...binding} = h.f.ask.source;
+  const historical: ActV3 = {
+   schema: 'rig-review/act@4', actId: 'act-historical-signoff', jobId: h.f.session.jobId,
+   askId: h.f.ask.askId, publicationId: h.f.ask.publicationId, kind: 'signoff',
+   authority: {actor: 'human', channel: 'review-ui', reviewer: {id: 'synthetic-owner', role: 'owner'}},
+   at: '2026-11-08T12:00:00.000Z',
+   source: binding,
+   value: {stage: 'direction-review', decision: 'approved', words: '[general]\nHistorical approval'},
+  };
+  const storedBytes = JSON.stringify(historical);
+  expect(JSON.stringify(parseRecordAct(JSON.parse(storedBytes)))).toBe(storedBytes);
+  expect(matchesJobRecordAct(h.f.ask, historical, h.f.session.jobId)).toBe(true);
  } finally {
-  unbind?.();
-  inspection?.dispose();
   await h.close();
-  i18n.setLinkLanguage(link);
-  i18n.setLanguagePreference(preference);
  }
 });
-
-for (const stage of ['plan-approved', 'rigging-interview', 'post-interview', 'interview'] as const) {
- test(`#1088 ${stage} sign-off still shows the published plan steps`, async () => {
-  const h = await harness(false, 'fixture', 'signoff', false, stage);
-  try {
-   const prepared = await h.screen.prepare(h.f.display, new AbortController().signal);
-   const record = prepared!.record!;
-   try {
-    const entry = record.forms.get(h.f.ask.askId)!;
-    expect(entry.form.querySelector('[data-direction-signoff-row]')).toBeNull();
-    const steps = [...entry.form.querySelectorAll<HTMLElement>('[data-job-plan-step]')];
-    expect(steps.map(step => step.dataset.jobPlanStep)).toEqual(h.f.ask.source.plan!.steps.map(step => step.id));
-   } finally {record.inspection.dispose();}
-  } finally {await h.close();}
- });
-}
 
 test('#750 record metadata mismatch refuses',async()=>{
  const h=await harness(),original=globalThis.fetch;try{
@@ -421,8 +409,10 @@ for (const language of ['en','ko'] as const) for (const rule of [1,2,3,4,5,6]) t
    expect(heading.textContent).toBe(descriptions[0]!);expect(heading.title).toBe((h.f.ask.subject as {checkpointId:string}).checkpointId);
    expect(form.textContent).not.toContain(plan.steps[0]!.id);expect(form.textContent).not.toContain(plan.steps[0]!.hash);
   }else if(rule===5){
-   const entry=formFor({...h.f.ask,subject:{kind:'signoff',stage:'plan-approved'}},inspection,deps);expect(entry.form.textContent).not.toContain('plan-approved');expect(entry.fieldset.title).toBe('plan-approved');expect(entry.read()).toMatchObject({stage:'plan-approved',words:''});
+   expect(()=>formFor({...h.f.ask,subject:{kind:'signoff',stage:'plan-approved'}},inspection,deps)).toThrow('JOB_ACT_KIND_DISABLED');
    expect(()=>formFor({...h.f.ask,subject:{kind:'reopen',stage:'plan-approved'}},inspection,deps)).toThrow('JOB_ACT_KIND_DISABLED');
+   expect('job.signoff' in enCatalog).toBe(false);expect('job.signoff' in koCatalog).toBe(false);
+   expect('Approve this stage.' in enCatalog).toBe(false);expect('Approve this stage.' in koCatalog).toBe(false);
    expect('job.reopen' in enCatalog).toBe(false);expect('job.reopen' in koCatalog).toBe(false);
    expect('Review the reopened stage.' in enCatalog).toBe(false);expect('Review the reopened stage.' in koCatalog).toBe(false);
   }else{
