@@ -417,21 +417,23 @@ const renderEditDraftState=()=>commentHost()?renderDraftState():renderAnswerCont
  * holds the act bar (rig, direction, parts and record), not by the rig workspace alone. */
 sendComments.onclick=async()=>{
   if(!commentHost()||sendComments.disabled||saving)return;
+  // The rig workspace's saved-state renderer reads its session; parts and a record without a picture have none.
+  const savedState=()=>session?updateSavedState():renderDraftState();
   const composer=typeof partsOnly!=='undefined'&&partsOnly?partsSubject:comments;
   if(composer?.hasPendingComment?.()&&!await composer.commitDraft())return;
   const {feedback,general:generalRows,issues}=unsentComments(),general=generalRows.map(row=>row.summary);
   if(!feedback.length&&!general.length&&!issues.length&&!host!.canSubmitMeshEdits?.())return;
-  saving=true;commentSending=true;updateSavedState();
+  saving=true;commentSending=true;savedState();
   let failure:ReturnType<typeof jobSubmissionRefusal>|null=null;
   try{
     const sent=await host!.submitComments!(structuredClone(feedback),general,structuredClone(issues));
     // Sent rows stay in the list and show Submitted, pinned and general alike.
     markSentAlone([...feedback,...generalRows,...issues]);
     commentSendState='sent';dirty=hasUnsentContent();
-    comments?.refresh();if(typeof partsSubject!=='undefined')partsSubject?.refreshComments();renderProposals();if(sent)message(sent);
+    comments?.refresh();if(typeof partsSubject!=='undefined')partsSubject?.refreshComments();if(session)renderProposals();if(sent)message(sent);
   }catch(error){failure=jobSubmissionRefusal(error);message(failure.text,true);}
   finally{
-    saving=false;commentSending=false;updateSavedState();
+    saving=false;commentSending=false;savedState();
     if(failure)rigInspector.actBar.setSaveState({kind:'failed',text:failure.text,title:failure.title});
   }
 };

@@ -31,7 +31,9 @@ async function wait(page: InputCdpSession, expression: string, ms = 20_000) {
   while (Date.now() < end) {if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(60);}
   const state = await page.evaluate<unknown>(`(()=>({state:document.getElementById('review-draft-state')?.textContent,
     message:document.getElementById('review-message')?.textContent,send:document.getElementById('send-comments')?.outerHTML,
-    composer:document.querySelector('.stage-comment-composer')?.textContent}))()`).catch(String);
+    composer:document.querySelector('.stage-comment-composer')?.textContent,footer:document.getElementById('message')?.textContent,
+    alert:[...document.querySelectorAll('[role=alert]')].map(n=>n.textContent).join('|'),
+    rows:[...document.querySelectorAll('[data-comment-id]')].map(n=>n.textContent.slice(0,80))}))()`).catch(String);
   throw new Error('COMMENT_SEND_WAIT ' + expression + ' ' + JSON.stringify(state));
 }
 
