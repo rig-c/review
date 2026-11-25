@@ -46,7 +46,7 @@ type Capture = (name:string)=>Promise<void>;
 type Reload = (expected?:string,reportName?:string)=>Promise<void>;
 type LivePublication = {kind:'rig'|'parts';fixture:Awaited<ReturnType<typeof scriptedJobWindowFixture>>;
   publication:JobPublication;verdict:Verdict};
-type LiveVerdict = LivePublication & {ask:JobPendingAsk;otherAsk:JobPendingAsk};
+type LiveVerdict = LivePublication & {ask:JobPendingAsk};
 type CommentEntryState = {videoDeclared:boolean;language:string;top:boolean;panel:boolean;bottomComments:number;pin:boolean;
   general:boolean;generalCount:number;listRect:{y:number;height:number};checkpointHidden:boolean;stripHidden:boolean;
   stripBlocked:boolean;noSourceFilesHidden:boolean;name:string};
@@ -63,7 +63,7 @@ const summary = '#stage-comment-list .stage-comment-summary';
 const ready = `document.body.dataset.ready==='true'&&!document.body.inert`;
 const generalEntryVisible = `!!document.querySelector('${generalButton}')?.checkVisibility()`;
 
-async function openLiveVerdict(page:InputCdpSession,wait:Wait,live:LivePublication,lang:Language):Promise<LiveVerdict> {
+async function openLiveVerdict(page:InputCdpSession,wait:Wait,live:LivePublication,_lang:Language):Promise<LiveVerdict> {
   const {kind,fixture,publication}=live;
   await wait(`${ready}&&document.querySelector('#save')?.hidden===true`);
   // #1226 owner ruling: "Add general comment" is available with no ask on a live rig.
@@ -71,17 +71,11 @@ async function openLiveVerdict(page:InputCdpSession,wait:Wait,live:LivePublicati
   assert.equal(await page.evaluate<boolean>(generalEntryVisible),true,'a published source alone offers general comments');
   await page.evaluate(`window.__commentEntryBeforeAsk=true`);
 
-  // #1227: checkpoint until #1229 retires record asks
-  const otherAsk=await fixture.ask(publication,{kind:'checkpoint',checkpointId:'step-one'});
-  const catalog=lang==='ko'?koCatalog:enCatalog;
-  const otherPrompt=catalog['Review this checkpoint.'];
-  await wait(`document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(otherPrompt)}`);
-  assert.equal(await page.evaluate<boolean>(generalEntryVisible),false,'a live '+otherAsk.subject.kind+' alone does not offer verdict comments');
-
+  // #1229: with sign-off (#1227) and checkpoint (#1229) retired, a verdict publication transitions directly between no-ask comment mode and the live verdict ask.
   const ask=await fixture.ask(publication,kind==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:'rig-review'});
   await wait(`document.querySelector('#save')?.checkVisibility()===true`);
   assert.equal(await page.evaluate<boolean>('window.__commentEntryBeforeAsk'),true,'the verdict arrives in the same document');
-  return {...live,ask,otherAsk};
+  return {...live,ask};
 }
 
 async function readDecisions(page:InputCdpSession) {
@@ -167,7 +161,7 @@ async function readFinalVerdict(live:LiveVerdict,expectContext=false):Promise<Jo
 }
 
 async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:Reload,capture:Capture,live:LiveVerdict,lang:Language,out:string) {
-  const {kind,verdict,fixture,ask,otherAsk}=live,ko=lang==='ko';
+  const {kind,verdict,fixture,ask}=live,ko=lang==='ko';
   const general=[ko?'수정한 일반 의견':'Edited general comment',ko?'두 번째 일반 의견':'Second general comment'];
   const generalLabel=ko?'일반 코멘트':'General comment';
   const pinRequired=ko?'수정 요청에는 파츠에 고정한 코멘트가 하나 이상 필요해요.':'Request changes needs at least one comment pinned to a part.';
@@ -255,8 +249,9 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:Reload,
   await click(page,verdict==='approved'?'#save':'#request-changes');
   const act=await readFinalVerdict(live,pinned&&kind==='rig');
   await wait(`document.querySelector('#save')?.hidden===true`);
-  assert.equal(await page.evaluate<boolean>(generalEntryVisible),false,'general verdict entry disappears when only the non-verdict ask remains');
-  assert.ok(fixture.host.session.status().pending.some(pending=>pending.askId===otherAsk.askId));
+  // #1229: after the verdict, no retired non-verdict ask remains; the screen returns to comment-only mode (#1226/#1242).
+  assert.equal(await page.evaluate<boolean>(generalEntryVisible),true,'general comment entry stays available in no-ask comment mode after the verdict');
+  assert.equal(fixture.host.session.status().pending.some(pending=>pending.status==='pending'),false);
   const comments=act.value.comments;
   assert.deepEqual(comments.slice(pinned?1:0),general.map(text=>({text})));
   if(pinned){
@@ -308,7 +303,7 @@ async function finalizeElsewhere(live:LiveVerdict) {
 }
 
 async function exerciseClosedDraft(page:InputCdpSession,wait:Wait,reload:Reload,capture:Capture,live:LiveVerdict,lang:Language,out:string) {
-  const {fixture,publication,ask,otherAsk}=live;
+  const {fixture,publication}=live;
   const scope=`rig-review-verdict-comments/1:${fixture.host.session.jobId}:${jobSourceDraftId(publication.source)}:${publication.source.sourceHash}`;
   const readDraft=()=>page.evaluate<GeneralDraftRow[]|null>(`JSON.parse(localStorage.getItem(${JSON.stringify(scope)}))?.comments??null`);
   const rowIds=()=>page.evaluate<string[]>(`[...document.querySelectorAll('#stage-comment-list [data-comment-id]')].map(row=>row.dataset.commentId)`);
@@ -325,14 +320,14 @@ async function exerciseClosedDraft(page:InputCdpSession,wait:Wait,reload:Reload,
   assert.deepEqual(await rowIds(),[keep.id,remove.id]);
   const rowSelector=`[data-comment-id=${JSON.stringify(remove.id)}] .stage-comment-summary`;
   const catalog=lang==='ko'?koCatalog:enCatalog;
-  const closed=`document.querySelector('#save')?.hidden===true&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['Review this checkpoint.'])}`;
+  // #1229: with retired checkpoint/sign-off asks gone, finalization in another client returns the open page to no-ask comment mode (#1226/#1242).
+  const closed=`document.querySelector('#save')?.hidden===true&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog["We're looking at the work together. Leave your thoughts as comments."])}`;
 
   const elsewhere=await finalizeElsewhere(live);
   await wait(closed);
-  assert.equal(await page.evaluate<boolean>(generalEntryVisible),false,'finalization in another client removes Add in the open page');
   await reload(closed,'reload-finalized');
   await click(page,'#stage-comment');
-  assert.equal(await page.evaluate<boolean>(generalEntryVisible),false,'closed verdict still offers no Add after reload');
+  assert.equal(await page.evaluate<boolean>(generalEntryVisible),true,'no-ask comment mode keeps Add available after reload');
   assert.deepEqual(await rowIds(),[keep.id,remove.id],'closed verdict does not hide locally saved draft rows');
   assert.deepEqual(await readDraft(),draft);
 
@@ -342,25 +337,19 @@ async function exerciseClosedDraft(page:InputCdpSession,wait:Wait,reload:Reload,
     return field?{readOnly:field.readOnly,value:field.value,canDelete:!!remove&&!remove.disabled&&remove.checkVisibility()}:null;
   })()`);
   await writeFile(join(out,'closed-draft.json'),JSON.stringify({elsewhere,draft,editor},null,2)+'\n');
-  assert.deepEqual(editor,{readOnly:true,value:remove.summary,canDelete:true},'a closed verdict draft can be inspected and deleted');
+  assert.deepEqual(editor,{readOnly:false,value:remove.summary,canDelete:true},'an unsent draft row remains inspectable and deletable in no-ask comment mode');
   await capture('closed-draft-readonly');
-  await page.evaluate(`(()=>{const form=document.querySelector('${composer}');form.querySelector('input').value='attempted edit';form.requestSubmit();})()`);
-  assert.deepEqual(await readDraft(),draft,'the read-only composer cannot overwrite a saved draft');
-  assert.deepEqual(await rowIds(),[keep.id,remove.id]);
-
-  // Reopen the original row before using Delete so the forced submit above cannot supply its value.
-  await clickComment(page,rowSelector);
   await clickComment(page,`${composer} .stage-comment-delete`);
   assert.deepEqual(await rowIds(),[keep.id]);
   assert.deepEqual(await readDraft(),[keep],'Delete persists the other draft row only');
   await reload(closed,'reload-deleted');
   await click(page,'#stage-comment');
-  assert.equal(await page.evaluate<boolean>(generalEntryVisible),false);
+  assert.equal(await page.evaluate<boolean>(generalEntryVisible),true);
   const afterReload=await readDraft();
   assert.deepEqual(afterReload,[keep]);
   assert.deepEqual(await rowIds(),[keep.id],'the deleted draft row stays gone after reload');
   assert.deepEqual(await readFinalVerdict(live),elsewhere.act,'local cleanup never changes the committed verdict');
-  assert.ok(fixture.host.session.status().pending.some(pending=>pending.askId===otherAsk.askId&&pending.askId!==ask.askId));
+  assert.equal(fixture.host.session.status().pending.some(pending=>pending.status==='pending'),false);
   const readback={elsewhere,draft,editor,afterReload};
   await writeFile(join(out,'closed-draft.json'),JSON.stringify(readback,null,2)+'\n');
   return readback;

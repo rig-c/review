@@ -12,7 +12,6 @@ import {loadReview} from '../src/manifest.ts';
 import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
-import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 const out=Bun.argv[Bun.argv.indexOf('--out')+1]??'artifacts/act-bar';await mkdir(out,{recursive:true});
 const observations:unknown[]=[],failures:string[]=[];
 const flashOnly=Bun.argv.includes('--flash-only');
@@ -29,7 +28,9 @@ const sampleActBar=`(()=>{
 })()`;
 
 async function until(page:InputCdpSession,expression:string){const end=Date.now()+20000;while(Date.now()<end){if(await page.evaluate<boolean>(expression))return;await Bun.sleep(100);}throw Error('ACT_BAR_WAIT: '+expression);}
-for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','parts','checkpoint-pass','checkpoint-fail','interview','interview-rig','interview-parts','joined-interview','standalone'] as const){
+// #1229: removed checkpoint-pass and checkpoint-fail modes because the checkpoint Pass/Fail form and "Review…" opener are retired;
+// record no-ask Send comments is covered by tests/job-comment-send-browser.ts.
+for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','parts','interview','interview-rig','interview-parts','joined-interview','standalone'] as const){
  if(saveRetryOnly&&!['rig','parts'].includes(mode))continue;
  const profile=await mkdtemp(join(tmpdir(),'review809-browser-'));let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
@@ -48,7 +49,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await f.ask(p,mode==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:mode==='rig'?'rig-review':'direction-review'});
    url=f.locator+'/#cap='+f.credentials.ui;
   }else{
-   const f=await recordScreenFixture(mode.startsWith('interview')?'interview-picks':'checkpoint',mode==='interview-rig'?true:mode==='interview-parts'?'parts':false);close=()=>f.close();url=f.ownerUrl;
+   const f=await recordScreenFixture('interview-picks',mode==='interview-rig'?true:mode==='interview-parts'?'parts':false);close=()=>f.close();url=f.ownerUrl;
   }
   const localized=new URL(url);localized.searchParams.set('lang',lang);url=localized.href;
   let control:((method:string,params?:Record<string,unknown>)=>Promise<any>)|undefined;let held=0,actSaveStep=0,heldActRequest:string|undefined;
@@ -70,12 +71,11 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   await page.goto(url,lang);
   await until(page,`(${mode==='standalone'}?!!document.querySelector('#rig-root canvas'):document.body.dataset.ready==='true')&&!document.body.inert&&(${mode==='joined-interview'||mode==='standalone'}||!!document.querySelector('#workspace-ask-headline')?.textContent)`);
   const interview=mode.startsWith('interview')||mode==='joined-interview';
-  const answerRoot=interview?'#workspace-interview-answer':'#job-record-asks';
+  const answerRoot='#workspace-interview-answer';
   // #1041: the question is shown in the right communication panel, not a bottom tab.
   const questionSelected=`(()=>{const n=document.querySelector('#workspace-interview-answer');return !!n&&!n.hidden&&!!n.closest('#workspace-communication:not([hidden])')&&n.getClientRects().length>0;})()`;
-  const recordDialogClosed=`!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`;
-  const questionReady=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer fieldset:not(:disabled)')`;
-  const questionSaved=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer[data-interview-answered=true]')`;
+  const questionReady=`${questionSelected}&&!!document.querySelector('${answerRoot} form.interview-answer fieldset:not(:disabled)')`;
+  const questionSaved=`${questionSelected}&&!!document.querySelector('${answerRoot} form.interview-answer[data-interview-answered=true]')`;
   if(interview)await until(page,questionReady);
   const boot=await page.evaluate<any>(`(()=>{const visible=n=>!!n&&!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden'&&!n.closest('dialog:not([open])');const bar=document.querySelector('#workspace-review-act');const nodes=['review-message','review-draft-state','draft-state','dirty'].map(id=>{const n=document.getElementById(id);return {id,text:n?.textContent.trim(),visible:visible(n),inBar:!!n&&bar.contains(n)};});const primary=nodes.find(n=>n.id==='review-draft-state')?.text;return {samples:window.__actFlashSamples,held:${held},nodes,saveStates:nodes.filter(n=>n.visible&&n.inBar&&n.text&&(n.text===primary||/^(Not submitted|제출되지 않음)$/.test(n.text))),home:bar.parentElement?.id,inHeading:!!bar.closest('.inspector-heading'),rowVisible:!!document.querySelector('#workspace-act-row')?.getClientRects().length,visibleStates:nodes.filter(n=>n.visible&&['review-draft-state','draft-state','dirty'].includes(n.id)&&n.text).map(n=>n.id),standaloneSave:document.querySelector('#save').textContent};})()`);
   observations.push({mode,lang,boot});
@@ -104,17 +104,16 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await until(page,`!document.querySelector('#save').disabled`);
   }
   if(!['rig','direction','parts'].includes(mode)){
-   await click(page,'#workspace-pending-ask');await until(page,interview?questionReady:`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`);
+   await click(page,'#workspace-pending-ask');await until(page,questionReady);
    assert.equal(await page.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`),false);
    const chooseDefaults=`(()=>{const seen=new Set();for(const radio of document.querySelectorAll(${JSON.stringify(answerRoot+' input[type=radio]')}))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`;
-   if(interview)await page.evaluate<void>(chooseDefaults);
-   const selector=mode==='checkpoint-fail'?'#job-record-asks button[data-job-text="job.fail"]':mode==='checkpoint-pass'?'#job-record-asks button[data-job-text="Pass"]':answerRoot+' button[type=submit]';
+   await page.evaluate<void>(chooseDefaults);
+   const selector=answerRoot+' button[type=submit]';
    await writeFile(join(out,`${mode}-${lang}-answer.png`),await page.screenshot());
    const scrollToSubmit=`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`;
-   if(interview)await page.evaluate<void>(scrollToSubmit);
+   await page.evaluate<void>(scrollToSubmit);
    await click(page,selector);
-   if(interview)await until(page,`${questionSaved}&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
-   else await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`);
+   await until(page,`${questionSaved}&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
    if(mode==='joined-interview'){
     assert.equal(await page.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false,'saved first answer leaves the opener enabled');

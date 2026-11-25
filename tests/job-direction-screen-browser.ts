@@ -173,14 +173,14 @@ try{
    assert.equal(signoffAskBody.error.code,'JOB_ASK_INVALID');
    observations.push({kind:'record-signoff-refused-after-verdict',language,code:signoffAskBody.error.code,verdictActId:act.actId});
    await wait(`document.body.dataset.ready==='true'`);
-   type NoSignoffFormReadback={forms:number;recordSectionOpen:boolean;errorText:string;openerVisible:boolean};
+   type NoSignoffFormReadback={forms:number;recordPanels:number;errorText:string;openerVisible:boolean};
    const noSignoffForm:NoSignoffFormReadback=await page.evaluate<NoSignoffFormReadback>(`(()=>({
     forms:document.querySelectorAll('form[data-job-ask]').length,
-    recordSectionOpen:!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])'),
+    recordPanels:document.querySelectorAll('[id="job-record-asks"]').length,
     errorText:document.querySelector('#review-message.error')?.textContent?.trim()??'',
     openerVisible:!!document.querySelector('#workspace-pending-ask:not([hidden])'),
    }))()`);
-   assert.deepEqual(noSignoffForm,{forms:0,recordSectionOpen:false,errorText:'',openerVisible:false});
+   assert.deepEqual(noSignoffForm,{forms:0,recordPanels:0,errorText:'',openerVisible:false});
    observations.push({kind:'record-signoff-subject-no-form',language,publicationId:signoffPublication.publicationId,noSignoffForm,verdictActId:act.actId});
 
   }catch(error){await writeFile(join(output,'original-error.json'),JSON.stringify({error:String(error),stack:error instanceof Error?error.stack:undefined,observations,errors},null,2));await writeFile(join(output,'inner-failure-state.json'),await page.evaluate<string>(`JSON.stringify({text:document.body.innerText,ready:document.body.dataset.ready,forms:[...document.querySelectorAll('form[data-job-ask]')].map(f=>({id:f.dataset.jobAsk,disabled:f.querySelector('fieldset')?.disabled})),dialogs:[...document.querySelectorAll('dialog')].map(d=>({id:d.id,open:d.open}))})`));await writeFile(join(output,'inner-failure.png'),await page.screenshot()).catch(()=>{});throw error;}finally{await page.goto('about:blank');host.stop();await builder.close();}

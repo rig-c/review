@@ -56,7 +56,7 @@ type AskTrigger={count:number;text:string;visible:boolean;hidden:boolean;disable
 type JoinedScreen={
  language:string;width:number;height:number;topbars:number;viewports:number;openDialogs:string[];modals:number;dialogViewers:number;
  forms:number;noteInputs:number;columns:string[];modelCanvas:number;modelReason:string;questionLabel:string;
- pendingAsk:AskTrigger|null;pendingRecordAsk:AskTrigger|null;
+ pendingAsk:AskTrigger|null;retiredRecordDomCount:number;
  saveDisabled:boolean;commentHidden:boolean;controls:string[];imageModes:string[];
  drawerOpen:boolean;formInDrawer:boolean;inspectorHidden:boolean;
  rect:{left:number;top:number;right:number;bottom:number};
@@ -109,7 +109,7 @@ try{
     columns:[...form.children].filter(node=>['NAV','ASIDE','FIELDSET'].includes(node.tagName)).map(node=>node.tagName),
     modelCanvas:document.querySelectorAll('#rig-root canvas').length,modelReason:document.getElementById('rig-empty').textContent,
     questionLabel:document.querySelector(${JSON.stringify(selectedTab)}).textContent.trim(),
-    pendingAsk:askTrigger('workspace-pending-ask'),pendingRecordAsk:askTrigger('workspace-pending-record-ask'),
+    pendingAsk:askTrigger('workspace-pending-ask'),retiredRecordDomCount:document.querySelectorAll('[id="workspace-pending-record-ask"],[id="job-record-asks"]').length,
     saveDisabled:document.getElementById('save').disabled,commentHidden:document.getElementById('stage-comment').hidden,
     controls:[...document.querySelectorAll('${sharedControls}')].map(node=>node.id),
     imageModes:[...document.querySelectorAll('#view-menu [data-view]')].map(node=>node.dataset.view),
@@ -128,7 +128,8 @@ try{
   assert.equal(state.questionLabel,catalog['Question']);
   assert.ok(state.pendingAsk?.count===1&&state.pendingAsk.visible&&!state.pendingAsk.disabled&&!state.pendingAsk.hidden,
    'expected a single visible and enabled #workspace-pending-ask '+JSON.stringify(currentCase));
-  assert.ok(!state.pendingRecordAsk?.visible,'unexpected visible #workspace-pending-record-ask '+JSON.stringify(currentCase));
+  // #1229: #workspace-pending-record-ask and #job-record-asks were removed with the checkpoint Pass/Fail form.
+  assert.equal(state.retiredRecordDomCount,0,'unexpected retired record-ask DOM '+JSON.stringify(currentCase));
   assert.equal(state.saveDisabled,true);
   assert.equal(state.modelReason,catalog['MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.']);
   assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);

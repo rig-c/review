@@ -11,10 +11,9 @@ import {join} from 'node:path';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
-import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
-import {JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, type JobNextValue, type JobPendingAsk, type JobSubject} from '../src/job-contract.ts';
+import {JOB_COMMENT_CONTEXT_ACT_SCHEMA, type JobNextValue, type JobPendingAsk, type JobSubject} from '../src/job-contract.ts';
 import {parseContextCommentsAct} from '../src/job-api.ts';
-import {projectComments,feedbackItemComments,parseStageComment} from '../src/stage-comment.ts';
+import {feedbackItemComments,parseStageComment} from '../src/stage-comment.ts';
 import type {Feedback} from '../src/session.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
@@ -235,12 +234,18 @@ try {
     assert.equal(initialState.images,true);assert.equal(initialState.mesh,false);assert.equal(initialState.bones,false);
     assert.equal(initialState.overlayPixels,0,'initial shared overlay is empty');
     await record('initial-shared-layer-state',initialState);
-    // #768:5-7 / #796 (368ffec): legacy ask-only layer gate and Background widget are deleted.
-    const cpAsk = await ask(rig, {kind: 'checkpoint', checkpointId: 'meshes', planStepId: 'inspect-body'});
-    await wait(`!!document.querySelector('form[data-job-ask="${cpAsk.askId}"] fieldset:not(:disabled)')`, 'meshes checkpoint form');
-    const cpState = await page.evaluate<{disabled:boolean;titles:string[]}>(`({disabled:['layer-images','layer-mesh','layer-bones'].some(id=>document.getElementById(id).disabled),titles:[...document.querySelectorAll('#layer-controls .layer-toggle')].map(el=>el.title)})`);
+    // #1229: fresh checkpoint asks refuse JOB_ASK_INVALID; shared layer controls and shortcuts run directly on the published rig screen.
+    const cpRefused = await (await fixture.call({
+        ...fixture.input.base(), verb: 'ask', expectedGeneration: fixture.host.session.status().generation,
+        idempotencyKey: 'ask-refused-checkpoint', publicationId: rig.publicationId,
+        subject: {kind: 'checkpoint', checkpointId: 'meshes', planStepId: 'inspect-body'},
+    })).json();
+    assert.equal(cpRefused.ok, false, JSON.stringify(cpRefused));
+    assert.equal(cpRefused.error.code, 'JOB_ASK_INVALID');
+    const cpState = await page.evaluate<{disabled:boolean;titles:string[];forms:number}>(`({disabled:['layer-images','layer-mesh','layer-bones'].some(id=>document.getElementById(id).disabled),titles:[...document.querySelectorAll('#layer-controls .layer-toggle')].map(el=>el.title),forms:document.querySelectorAll('form[data-job-ask]').length})`);
+    assert.equal(cpState.forms, 0, 'no checkpoint form is mounted');
     assert.equal(cpState.disabled,false,'shared layer checkboxes are enabled');
-    assert.equal((await sharedLayers()).visible,true,'checkpoint shared layer controls are visible');
+    assert.equal((await sharedLayers()).visible,true,'shared layer controls are visible');
     assert.deepEqual(cpState.titles,([['Images','I'],['Mesh edges','M'],['Bone points','B']] as const).map(([label,key])=>catalog['{0} · key {1}'].replace('{0}',catalog[label]).replace('{1}',key)));
     await record('shared-checkpoint-controls',cpState);
     await click(page,'[data-mode="rig"]');
@@ -439,18 +444,7 @@ try {
     const mark=parseStageComment((comment.context as {comment:unknown}).comment);
     assert.equal(mark.mode,'setup');
     assert.ok(mark.crop.png.startsWith('data:image/png;base64,'));
-    const expectedCommentWords=projectComments(feedbackItemComments([{...comment,summary:commentText}]));
-    await click(page,'#workspace-pending-ask');
-    await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'checkpoint dialog');
-    await click(page,`form[data-job-ask="${cpAsk.askId}"] button[data-job-text="Pass"]`);
-    await expectRecordActSubmitted(page,wait,language,'checkpoint submitted',true);
-    assert.equal(await page.evaluate<boolean>(`!document.querySelector('form[data-job-ask="${cpAsk.askId}"]')`),true,'submitted checkpoint form is pruned');
-    const cpEvents=await nextEvents(),cpActEvent=cpEvents.events.find(e=>e.type==='act'&&e.act.askId===cpAsk.askId);
-    assert.ok(cpActEvent?.type==='act'&&cpActEvent.act.kind==='checkpoint');
-    assert.equal(cpActEvent.act.schema,JOB_COMMENTS_ACT_SCHEMA);
-    assert.deepEqual(cpActEvent.act.value,{checkpointId:'meshes',planStepId:'inspect-body',outcome:'pass',comments:[{text:expectedCommentWords,anchor:{checkpointId:'meshes',planStepId:'inspect-body'}}]});
-    assert.equal(cpActEvent.act.source.sourceHash,rig.source.sourceHash);
-    await record('checkpoint-act-committed',cpActEvent.act);
+    // #1229: removed checkpoint Pass form submission; the pinned comment travels directly with the rig review-verdict below.
     // Explicit human restoration replaces the deleted automatic reset; fixed evidence remains checked.
     await click(page,'.layer-toggle:has(#layer-mesh)');await click(page,'.layer-toggle:has(#layer-bones)');await click(page,'#fit');
     const verdictAsk=await ask(rig,{kind:'review-verdict',stage:'rig-review'});
@@ -474,17 +468,14 @@ try {
     assert.deepEqual(context?.camera,mark.camera);
     await record('canonical-verdict-committed',verdictAct);
 
-    // Reconnect and new publication still exercise the shared overlay and actual source binding.
-    const cpAsk2=await ask(rig,{kind:'checkpoint',checkpointId:'step-one',planStepId:'step-one'});
-    await wait(`!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"]')`,'second checkpoint form');
+    // #1229: reconnect and new publication exercise the shared overlay and actual source binding directly without a second checkpoint form.
     const wireState = () => page!.evaluate(`(()=>{
         const mesh=document.getElementById('layer-mesh'),active=document.activeElement,network=navigator.connection;
         return {predicates:{"document.getElementById('layer-mesh').checked":mesh?.checked??null},
             mesh:{exists:!!mesh,checked:mesh?.checked??null,disabled:mesh?.disabled??null,connected:mesh?.isConnected??null},
             activeElement:{id:active?.id??null,tag:active?.tagName??null,type:active?.getAttribute('type')??null},
             dialogs:[...document.querySelectorAll('dialog')].map(node=>({id:node.id,open:node.open,modal:node.matches(':modal')})),
-            checkpoint:{exists:!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"]'),
-                enabled:!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"] fieldset:not(:disabled)')},
+            forms:document.querySelectorAll('form[data-job-ask]').length,
             connection:{online:navigator.onLine,documentConnected:document.documentElement.isConnected,
                 network:network?{effectiveType:network.effectiveType,downlink:network.downlink,rtt:network.rtt,saveData:network.saveData}:null,
                 message:document.getElementById('message')?.textContent??null,
@@ -514,8 +505,7 @@ try {
     }
     await record('wire-active-before-reconnect',{activation:wireActivation,state:await wireState()});
     await page.goto('about:blank');await page.goto(owner.href);
-    await wait(`!!document.querySelector('#scrub')&&!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"] fieldset:not(:disabled)')`,'reconnected checkpoint');
-    assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${cpAsk2.askId}"] .job-source').title`),rig.source.sourceHash);
+    await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#scrub')&&JSON.parse(document.getElementById('provenance-full')?.textContent||'{}').sourceHash===${JSON.stringify(rig.source.sourceHash)}`,'reconnected rig');
     const reconnectLayers=await sharedLayers();
     assert.equal(reconnectLayers.visible,true,'reconnect keeps shared controls visible');assert.equal(reconnectLayers.enabled,true,'reconnect shared controls enabled');
     await record('reconnected-checkpoint-state',{layers:reconnectLayers,geometry:await readOverlayAlignment()});
@@ -523,7 +513,7 @@ try {
     await wait(`document.getElementById('layer-mesh').checked&&document.getElementById('layer-bones').checked`,'wire active before publication swap');
     fixture.input.setContext({...fixture.input.getContext(),selector:{kind:'rig',version:2}});
     const rig2=await fixture.publish();
-    await wait(`!document.querySelector('form[data-job-ask="${cpAsk2.askId}"]')&&JSON.parse(document.getElementById('provenance-full').textContent).sourceHash===${JSON.stringify(rig2.source.sourceHash)}`,'new publication source');
+    await wait(`JSON.parse(document.getElementById('provenance-full').textContent).sourceHash===${JSON.stringify(rig2.source.sourceHash)}`,'new publication source');
     await page.evaluate(`(()=>{for(const id of ['layer-mesh','layer-bones']){const input=document.getElementById(id);if(input.checked)input.click();}})()`);
     const postPublicationSwap=await readOverlayAlignment();
     assert.equal(postPublicationSwap.totalPixels,0,'no stale overlay after explicit shared layer reset on new publication');

@@ -21,10 +21,14 @@ for (const language of ['en', 'ko'] as const) {
   const responses: {path: string; status: number}[] = [];
   let page: Awaited<ReturnType<typeof launchCdpSession>> | undefined;
   try {
+    const ctx = fixture.input.getContext();
+    const qFiles = fixture.question.images.flatMap(img => img.ref ? [img.ref] : []);
+    const questionSubject = {kind: 'interview-picks' as const, questionId: fixture.question.set.question, setId: fixture.question.set.id};
+    fixture.input.setContext({...ctx, files: [...ctx.files, ...qFiles], subjects: [...ctx.subjects, questionSubject]});
     const publication = await fixture.publish('parts');
     const verdict = await fixture.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
-    // #1227: checkpoint until #1229 retires record asks
-    const checkpoint = await fixture.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+    // #1229: converted from retired checkpoint Pass/Fail form to interview-picks so stale project.json submission still exercises translated JOB_RECORD_MOVED.
+    const interview = await fixture.ask(publication, questionSubject);
     const url = new URL(fixture.host.ownerUrl);
     const actsUrl = new URL('ui/acts', url);
     let send: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
@@ -73,32 +77,33 @@ for (const language of ['en', 'ko'] as const) {
     assert.deepEqual(Object.keys(before).filter(path => before[path] !== after[path]), ['project.json']);
     const ingestedRecord = await readFile(record, 'utf8');
     assert.doesNotThrow(() => JSON.parse(ingestedRecord));
-    await wait(`!document.querySelector('#workspace-pending-ask').hidden && !document.querySelector('#workspace-pending-ask').disabled`, 'checkpoint offered');
+    await wait(`!document.querySelector('#workspace-pending-ask').hidden && !document.querySelector('#workspace-pending-ask').disabled`, 'question offered');
     await click(page, '#workspace-pending-ask');
-    const form = `form[data-job-ask="${checkpoint.askId}"]`;
-    await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden]) ${form} fieldset:not(:disabled)')`, 'existing checkpoint in the record section');
-    await page.evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(form)});f.querySelector('select[name=outcome]').value='pass';f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    const form = `#workspace-interview-answer form[data-job-ask="${interview.askId}"]`;
+    await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden]) form[data-job-ask="${interview.askId}"] fieldset:not(:disabled)')`, 'existing question in the communication panel');
+    await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll(${JSON.stringify(form + ' input[type=radio]')}))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
+    await page.evaluate(`document.querySelector(${JSON.stringify(form + ' button[type=submit]')}).scrollIntoView({block:'center'})`);
     await click(page, form + ' button[type=submit]');
-    const expected = catalog['JOB_RECORD_MOVED'];
-    await wait(`document.querySelector(${JSON.stringify(form + ' [role=status]')})?.textContent === ${JSON.stringify(expected)}`, 'translated moved-record refusal');
-    const status = await page.evaluate<any>(`(()=>{const n=document.querySelector(${JSON.stringify(form + ' [role=status]')}),r=n.getBoundingClientRect(),s=getComputedStyle(n);return {text:n.textContent,key:n.dataset.jobText,x:r.x,y:r.y,width:r.width,height:r.height,display:s.display,visibility:s.visibility,language:document.documentElement.lang,dialogOpen:!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])'),enabled:!document.querySelector(${JSON.stringify(form + ' fieldset')}).disabled};})()`);
-    assert.equal(status.key, 'JOB_RECORD_MOVED');
-    assert.equal(status.text, expected);
+    const expected = catalog['Review was not submitted: {0}']!.replace('{0}', catalog['job.submit.refused']!);
+    await wait(`document.querySelector(${JSON.stringify(form + ' > [role=status]')})?.textContent === ${JSON.stringify(expected)}`, 'translated moved-record refusal', () => responses[1]?.status === 409);
+    const status = await page.evaluate<any>(`(()=>{const n=document.querySelector(${JSON.stringify(form + ' > [role=status]')}),r=n.getBoundingClientRect(),s=getComputedStyle(n);return {text:n.textContent,title:n.title,x:r.x,y:r.y,width:r.width,height:r.height,display:s.display,visibility:s.visibility,language:document.documentElement.lang,panelOpen:!!document.querySelector('#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden])'),enabled:!document.querySelector(${JSON.stringify(form + ' fieldset')}).disabled};})()`);
+    assert.ok(status.title.startsWith('JOB_RECORD_MOVED'), status.title);
+    assert.equal(status.text, expected, status.text);
     assert.equal(status.language, language);
-    // #1041 B: the refusal stays readable in the record section of the right panel.
-    assert.equal(status.dialogOpen, true, 'record section stays shown');
+    // #1041 B: the refusal stays readable in the communication panel.
+    assert.equal(status.panelOpen, true, 'question section stays shown');
     assert.equal(status.enabled, true);
     assert.equal(status.visibility, 'visible');
     assert.notEqual(status.display, 'none');
-    assert.ok(status.width > 0 && status.height > 0 && status.x >= 0 && status.y >= 0 && status.x + status.width <= 1600 && status.y + status.height <= 1000);
+    assert.ok(status.width > 0 && status.height > 0 && status.x >= 0 && status.x + status.width <= 1600 && status.y >= 0 && status.y + status.height <= 1000);
     assert.deepEqual(responses.map(response => response.status), [200, 409]);
     const final = await fixture.next();
-    assert.equal(final.events.filter(event => event.type === 'act').length, 1, 'stale checkpoint creates no second act');
+    assert.equal(final.events.filter(event => event.type === 'act').length, 1, 'stale question creates no second act');
     await writeFile(join(output, 'record-moved-' + language + '.png'), await page.screenshot());
-    const observation = {language, fixture: 'synthetic package and consumer CLI record write; not installed Create ingest', approvedActId: approved.act.actId, checkpointAskId: checkpoint.askId, status, responses, ingest: {exit: ingestExit, stdout: ingestStdout, stderr: ingestStderr}, recordHashes: {before: before['project.json'], after: after['project.json']}};
+    const observation = {language, fixture: 'synthetic package and consumer CLI record write; not installed Create ingest', approvedActId: approved.act.actId, interviewAskId: interview.askId, status, responses, ingest: {exit: ingestExit, stdout: ingestStdout, stderr: ingestStderr}, recordHashes: {before: before['project.json'], after: after['project.json']}};
     cases.push(observation);
     await writeFile(join(output, 'record-moved-' + language + '.json'), JSON.stringify(observation, null, 2) + '\n');
-    console.log('908_BROWSER_PASS ' + language + ' approve=200 synthetic-cli-ingest=0 checkpoint=409');
+    console.log('908_BROWSER_PASS ' + language + ' approve=200 synthetic-cli-ingest=0 interview=409');
   } catch (error) {
     if (page) await writeFile(join(output, 'failure-' + language + '.png'), await page.screenshot());
     throw error;

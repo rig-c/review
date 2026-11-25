@@ -1,23 +1,26 @@
 /** Ordinary Nova orchestration for #629 and #606. Synthetic sealed evidence, never producer output.
- * Run after parent exact-commit GO with --lang en or --lang ko.
+ * #1229: converted from the retired checkpoint Pass/Fail form and outcome submission loop to verifying retained
+ * checkpointEvidence API/seal routes, fresh checkpoint ask refusals (JOB_ASK_INVALID), no-ask comment survival + act@10
+ * submission, historical checkpoint act consumer fetch-act readback, and corrupt tile hash refusal.
  */
 import assert from 'node:assert/strict';
-import {createHash,randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {JobCheckpointEvidence, JobCheckpointTable, NextValueV3, PlanContext} from '../src/job-contract.ts';
-import {checkpointNoteComments,projectComments} from '../src/stage-comment.ts';
-import {JOB_RECORD_READER_ID} from '../src/job-contract.ts';
+import {checkpointNoteComments, projectComments} from '../src/stage-comment.ts';
+import {JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_RECORD_READER_ID} from '../src/job-contract.ts';
+import {parseCommentOnlyAct} from '../src/job-api.ts';
 import {startJobHost} from '../src/job-front.ts';
-import {enCatalog} from '../web/catalog-en.ts';
-import {koCatalog} from '../web/catalog-ko.ts';
 import {createSyntheticPlanRecordWorkspace, createSyntheticRecordReader, makeSyntheticPngBytes,
     writeWorkspaceFile} from './helpers/job-record-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
+import {seedHistoricalCheckpointAct} from './helpers/historical-checkpoint-act.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {inspectPartsViewportPng, type HalfOpenBox, type RgbaTuple} from './helpers/job-window-paint.ts';
+import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 
 /** Shared ordinary test input for preparation, DOM controls and browser orchestration. */
@@ -41,7 +44,6 @@ async function run() {
     const argument = (key: string) => {const i = Bun.argv.indexOf(key); return i < 0 ? undefined : Bun.argv[i + 1];};
     const language = argument('--lang') ?? 'en';
     assert.ok(language === 'en' || language === 'ko');
-    const catalog = language === 'ko' ? koCatalog : enCatalog;
     const output = argument('--out') ?? `evidence/job-checkpoint-evidence-${language}`;
     await mkdir(output, {recursive: true});
     const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review629-browser-'));
@@ -61,8 +63,6 @@ async function run() {
     let control: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
     let corruptTiles = false;
     let expectedDeparture: URL | undefined;
-    let activeDecision: {host: Awaited<ReturnType<typeof startJobHost>>; schema: string;
-        askId: string; publicationId: string; sourceHash: string; outcome: string; words: string; prefix: string} | undefined;
     let latestNext: ReturnType<typeof summarizeNext> | undefined;
     const browserErrors: Record<string, unknown>[] = [];
     const networkFailures: Record<string, unknown>[] = [];
@@ -72,30 +72,9 @@ async function run() {
     function summarizeNext(next: NextValueV3) {
         return {status: next.status, cursor: next.cursor, events: next.events.map(event => ({
             type: event.type, generation: event.generation, cursor: event.cursor,
-            ...(event.type === 'act' ? {askId: event.act.askId, actId: event.act.actId, kind: event.act.kind} : {}),
+            ...(event.type === 'act' ? {actId: event.act.actId, kind: event.act.kind} : {}),
             ...(event.type === 'pending' ? {askId: event.ask.askId, status: event.ask.status, subject: event.ask.subject} : {}),
         }))};
-    }
-    async function checkpointForm(askId: string) {
-        return page!.evaluate<{exists: boolean; ready: boolean; askId: string | null; outcome: string | null;
-            words: string | null; valid: boolean; fieldsetDisabled: boolean | null; submitDisabled: boolean | null;
-            status: {key: string | null; text: string} | null; notice: {failed: string | null; text: string} | null;
-            binding: string | null; controls: unknown[]}>(`(()=>{
-            const f=document.querySelector('form[data-job-ask="${askId}"]');
-            const fields=f?.querySelector('fieldset'), submit=f?.querySelector('button[type=submit]');
-            const outcome=f?.querySelector('select[name=outcome]'), words=f?.commentWords?.();
-            const status=f?.querySelector('[role=status]'), notice=document.querySelector('#message');
-            return {exists:!!f, askId:f?.dataset.jobAsk??null,
-                ready:!!fields&&!fields.disabled&&!!submit&&!submit.matches(':disabled')&&
-                    !!outcome&&!outcome.matches(':disabled')&&typeof words==='string',
-                fieldsetDisabled:fields?.disabled??null, submitDisabled:submit?.matches(':disabled')??null,
-                outcome:outcome?.value??null, words:words??null, valid:f?.checkValidity()??false,
-                status:status?{key:status.dataset.jobText??null,text:status.textContent}:null,
-                notice:notice?{failed:notice.dataset.failed??null,text:notice.textContent}:null,
-                binding:f?.querySelector('.job-source')?.textContent??null,
-                controls:f?[...f.querySelectorAll('input[name],textarea[name],select[name],button[type=submit]')]
-                    .map(n=>({tag:n.tagName,name:n.name,type:n.type,value:n.value,disabled:n.matches(':disabled'),
-                        willValidate:n.willValidate,valid:n.validity.valid})):[]};})()`);
     }
     const observations: Record<string, unknown> = {provenance: 'synthetic four-tile / 103-row evidence, no producer execution'};
     async function until(check: () => Promise<boolean>, label: string) {
@@ -111,9 +90,22 @@ async function run() {
         assert.equal(result.ok, true, JSON.stringify(result));
         return result.value;
     }
+    async function expectCheckpointAskRefused(host: Awaited<ReturnType<typeof startJobHost>>, schema: string, publicationId: string, packet: JobCheckpointEvidence) {
+        const response = await fetch(`${host.origin}/jobs/${host.session.jobId}/api`, {method: 'POST',
+            headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + host.session.hostCredentials().agent},
+            body: JSON.stringify({schema, jobId: host.session.jobId, requestId: randomUUID(), verb: 'ask',
+                expectedGeneration: host.session.status().generation, idempotencyKey: randomUUID(), publicationId,
+                subject: {kind: 'checkpoint', checkpointId: packet.checkpointId,
+                    ...(schema === 'rig-review/job-api@2' ? {planStepId: packet.planStepId} : {})}})});
+        assert.equal(response.status, 409);
+        const body = await response.json();
+        assert.equal(body.ok, false, JSON.stringify(body));
+        assert.equal(body.error.code, 'JOB_ASK_INVALID');
+    }
     async function inspect(host: Awaited<ReturnType<typeof startJobHost>>, schema: string,
         publication: {publicationId: string; source: {sourceHash: string; projectHash?: string | null}}, packet: JobCheckpointEvidence, prefix: string,
         fetchCapability: string) {
+        await expectCheckpointAskRefused(host, schema, publication.publicationId, packet);
         const owner = new URL(host.ownerUrl);
         owner.searchParams.set('lang', language);
         const layoutObservations: unknown[] = [];
@@ -124,28 +116,23 @@ async function run() {
         for (const {phase, ...viewport} of samples) {
             await page!.setViewport(viewport.width, viewport.height);
             if (phase === 'initial') await page!.goto(owner.href);
-            const pending=host.session.status().pending.find(ask=>ask.publicationId===publication.publicationId&&ask.subject.kind==='checkpoint'&&ask.subject.checkpointId===packet.checkpointId);
-            assert.ok(pending,prefix+' pending source-bound checkpoint');
-            const askId=pending.askId;
-            await until(async () => (await checkpointForm(askId)).ready,prefix+' checkpoint form ready');
-            await page!.evaluate(`(()=>{const d=document.querySelector('#job-record-asks');if(d.hidden)document.querySelector('#workspace-pending-ask').click();})()`);
-            const layout=await page!.evaluate<any>(`(()=>{
-              const dialog=document.querySelector('#job-record-asks'),forms=document.querySelector('form[data-job-ask="${askId}"]');
+            await until(() => page!.evaluate<boolean>(`document.body.dataset.ready==='true'&&!!document.getElementById('send-comments')&&!document.getElementById('send-comments').hidden`), prefix + ' ready');
+            const layout = await page!.evaluate<any>(`(()=>{
+              const panel=document.querySelector('#workspace-communication');
               const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
-              return {viewport:{width:innerWidth,height:innerHeight},askId:forms.dataset.jobAsk,dialog:rect(dialog),forms:rect(forms),formsClientHeight:forms.clientHeight,
-                summaries:[...forms.querySelectorAll('.job-plan-steps summary')].map(n=>({text:n.textContent,title:n.title})),legacy:document.querySelectorAll('.job-inspection,[data-job-forms],[data-job-plan-workspace]').length};
+              return {viewport:{width:innerWidth,height:innerHeight},panel:rect(panel),forms:document.querySelectorAll('form[data-job-ask]').length,
+                retiredRecordDomCount:document.querySelectorAll('[id="job-record-asks"],[id="workspace-pending-record-ask"]').length,
+                legacy:document.querySelectorAll('.job-inspection,[data-job-forms],[data-job-plan-workspace]').length,
+                scripts:document.querySelectorAll('#workspace-communication script').length};
             })()`);
             layout.phase=phase;layout.sourceHash=publication.source.sourceHash;layout.recordSha256=publication.source.projectHash;
-            layoutObservations.push(layout);assert.deepEqual(layout.viewport,viewport);assert.equal(layout.askId,askId);
-            assert.equal(layout.legacy,0);assert.ok(layout.recordSha256,prefix+' authenticated text record');
-            // #1041 B: the record section of the right communication panel, bounded horizontally by the viewport.
-            assert.ok(layout.dialog.left>=0&&layout.dialog.top>=0&&layout.dialog.right<=viewport.width,prefix+' record section is bounded');
-            assert.ok(layout.forms.width>0&&layout.formsClientHeight>0&&layout.forms.width<=layout.dialog.width,prefix+' form stays inside the record section');
-            // #809 question 4, phase1b/issue-809-numbered.txt:94: delete only tile labels/fourth-title grid reachability.
-            for(const summary of layout.summaries){assert.ok(summary.title.includes(packet.planStepId));assert.equal(summary.text.includes(packet.planStepId),false);}
+            layoutObservations.push(layout);assert.deepEqual(layout.viewport,viewport);
+            assert.equal(layout.forms,0,prefix+' no checkpoint form mounted');
+            assert.equal(layout.retiredRecordDomCount,0,prefix+' retired checkpoint DOM absent');
+            assert.equal(layout.legacy,0);assert.equal(layout.scripts,0);assert.ok(layout.recordSha256,prefix+' authenticated text record');
+            assert.ok(layout.panel.left>=0&&layout.panel.top>=0&&layout.panel.right<=viewport.width,prefix+' communication panel is bounded');
             let screenshot:Uint8Array|undefined;
             if (prefix.startsWith('package-')) {
-                // #1041 B: the record section is not modal, so nothing closes before the main view is read.
                 await until(async () => {
                     const paint = await page!.evaluate<any>(`(()=>{
                         const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,
@@ -168,8 +155,6 @@ async function run() {
                         const box: HalfOpenBox = [Math.ceil(pane.pane.left), Math.ceil(pane.pane.top),
                             Math.floor(pane.pane.right), Math.floor(pane.pane.bottom)];
                         const rgba: RgbaTuple = pane.target === 'reference' ? [239, 32, 32, 255] : [32, 220, 48, 255];
-                        // The existing scanner counts exact supplied RGBA in backgroundPixels.
-                        // Here that supplied color is the immutable fixture's red or green pixel.
                         const pixels = inspectPartsViewportPng(screenshot, {viewport, backgroundRgba: rgba,
                             leftROI: box, rightAdjacent: box});
                         assert.ok(pixels.supportedViewport && pixels.inBounds, prefix + ' paint ROI stays in viewport');
@@ -189,44 +174,11 @@ async function run() {
                                 canvas.visibility === 'visible' && canvas.display !== 'none')));
                 }, prefix + ' red reference and green rig pixels after ' + phase + ' ' + viewport.width);
                 assert.ok(layout.paint.every((pane: any) => pane.matchedPixels > 0));
-                await page!.evaluate(`document.querySelector('#workspace-pending-ask').click()`);
             }
             const capturePhase = '-' + phase;
             await writeFile(join(output, prefix + '-' + viewport.width + 'x' + viewport.height + capturePhase + '-layout.png'),
                 screenshot ?? await page!.screenshot());
-            layout.planFields = [];
-            for (const field of ['does','produces','bar','rests_on']) {
-                const fieldState = await page!.evaluate<any>(`(()=>{
-                    const form=document.querySelector('form[data-job-ask="${askId}"]');
-                    const value=form.querySelector(${field==='does'?JSON.stringify('.job-plan-steps summary'):JSON.stringify('[data-job-plan-field="'+field+'"]')});
-                    const target=value.textContent.length?value:value.previousElementSibling;
-                    target.scrollIntoView({block:'center',inline:'nearest'});
-                    const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
-                    return {field:${JSON.stringify(field)},text:value.textContent,rests:[...value.querySelectorAll('li')].map(n=>n.textContent),
-                        value:rect(value),target:rect(target),forms:rect(form),
-                        markupCount:value.querySelectorAll('mark,script').length,
-                        label:${field==='does'?JSON.stringify(catalog['job.plan.does']):'value.previousElementSibling.textContent'}};
-                })()`);
-                assert.equal(fieldState.markupCount,0,prefix+' inert field '+field);
-                assert.equal(fieldState.label,catalog['job.plan.'+field]);
-                if (field==='rests_on') assert.deepEqual(fieldState.rests,text.rests_on);
-                else assert.equal(fieldState.text,text[field as 'does'|'produces'|'bar']);
-                assert.ok(fieldState.target.left>=fieldState.forms.left && fieldState.target.right<=fieldState.forms.right,
-                    prefix+' field horizontally reachable '+field);
-                assert.ok(fieldState.target.top>=fieldState.forms.top && fieldState.target.bottom<=fieldState.forms.bottom,
-                    prefix+' field vertically reachable '+field);
-                const fieldShot=await page!.screenshot();
-                // Native modal backdrop intentionally tints context; exact source pixels were proved above with it closed.
-                layout.planFields.push(fieldState);
-                await writeFile(join(output,prefix+'-'+viewport.width+'x'+viewport.height+capturePhase+'-'+field+'.png'),fieldShot);
-            }
-
         }
-        // #809 question 4, phase1b/issue-809-numbered.txt:94: removed grid id/labels, four <img>
-        // load/readiness, table columns/103 DOM rows, routes/recommendation <pre>/catalog labels,
-        // gallery/last-row/recommendation scrolling/screenshots and grid-local script count.
-        // These asserted grid rendering only. Retained packet parsing/binding/file hashes are below;
-        // current modal plan fields still prove inert text/zero markup and exact producer prose.
         const display=host.session.displayPublication(publication.publicationId);
         const base=`${host.origin}/jobs/${host.session.jobId}/publications/${publication.publicationId}/instances/${display.publication.instanceKey}`;
         const response=await fetch(base+'/api/review');assert.equal(response.status,200);
@@ -240,83 +192,71 @@ async function run() {
         assert.equal(retained.table.path,packet.table.path);assert.equal(retained.table.sha256,packet.table.sha256);
         assert.deepEqual(retained.table.columns,evidence.table.columns);assert.deepEqual(retained.table.rows,evidence.table.rows);
         assert.equal(retained.routesText,packet.routesText);assert.equal(retained.recommendationText,packet.recommendationText);
+        if (metadata.planText?.status === 'projected') {
+            const stepRow = metadata.planText.steps.find((row: {id: string}) => row.id === packet.planStepId);
+            assert.ok(stepRow, prefix + ' projected planText step');
+            assert.equal(stepRow.does, text.does);
+            assert.equal(stepRow.bar, text.bar);
+            assert.deepEqual(stepRow.rests_on, text.rests_on);
+        }
         for(const file of [...retained.tiles,retained.table]){
             const raw=await fetch(base+file.url);assert.equal(raw.status,200);
             const bytes=Buffer.from(await raw.arrayBuffer());
             assert.equal(createHash('sha256').update(bytes).digest('hex'),file.sha256,prefix+' immutable evidence member');
         }
-        assert.equal(await page!.evaluate(`document.querySelectorAll('#job-record-asks script').length`),0,'current dialog does not execute packet/plan text');
         assert.equal(await page!.evaluate(`document.querySelectorAll('[data-job-checkpoint-evidence]').length`),0,'retired evidence grid is absent');
-        for (const outcome of ['pass', 'fail']) {
-            console.log('CHECKPOINT_DECISION ' + prefix + ' ' + outcome);
-            const asked = await call(host, schema, {verb: 'ask', expectedGeneration: host.session.status().generation,
-                idempotencyKey: randomUUID(), publicationId: publication.publicationId,
-                subject: {kind: 'checkpoint', checkpointId: packet.checkpointId,
-                    ...(schema === 'rig-review/job-api@2' ? {planStepId: packet.planStepId} : {})}});
-            const words = `${outcome} 한글 <owner>`;
-            activeDecision = {host, schema, askId: asked.askId, publicationId: publication.publicationId,
-                sourceHash: publication.source.sourceHash, outcome, words, prefix};
-            latestNext = undefined;
-            await until(async () => (await checkpointForm(asked.askId)).ready, prefix + ' ' + outcome + ' decision ready');
-            await page!.evaluate(`document.querySelector('#stage-comment').click()`);
-            if(await page!.evaluate(`!!document.querySelector('[data-comment-general]')`))await page!.evaluate(`document.querySelector('[data-comment-general]').click()`);
-            else {
-                await page!.evaluate(`(()=>{const button=document.querySelector('#stage-comment');if(button.getAttribute('aria-pressed')!=='true')button.click();})()`);
-                const point=await page!.evaluate<{x:number;y:number}>(`(()=>{const r=document.querySelector('#rig-viewport').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
-                await control!('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
-                await control!('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
-            }
-            console.log('CHECKPOINT_COMMENT_REQUESTED ' + prefix + ' ' + outcome);
-            await until(()=>page!.evaluate(`!!document.querySelector('.stage-comment-composer input')`),'existing comment composer');
-            await page!.evaluate(`(()=>{const composer=document.querySelector('.stage-comment-composer');composer.querySelector('input').value=${JSON.stringify(words)};composer.requestSubmit();})()`);
-            await until(()=>page!.evaluate(`!document.querySelector('.stage-comment-composer')`),'existing comment saved');
-            const projected=await page!.evaluate<string>(`document.querySelector('form[data-job-ask="${asked.askId}"]').commentWords()`);
-            activeDecision.words=projected;
-            await page!.evaluate(`(()=>{const f=document.querySelector('form[data-job-ask="${asked.askId}"]');f.querySelector('select[name=outcome]').value=${JSON.stringify(outcome)};f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-            // Reconnect preserves the source-bound owner draft before its ordinary UI submission.
-            expectedDeparture = owner;
-            try {await page!.goto('about:blank');} finally {expectedDeparture = undefined;}
-            await page!.goto(owner.href);
-            // updateForms enables this fieldset only after display acknowledgment and pending-ask readiness.
-            await until(()=>page!.evaluate(`!!document.querySelector('form[data-job-ask="${asked.askId}"] fieldset:not(:disabled)')`),prefix+' '+outcome+' reconnect form enabled');
-            // b433: one bounded observation in this ordinary suite, never a second browser job or retry.
-            const commentReadyDeadline=Date.now()+10_000;let commentList:string[]=[];
-            do {
-                commentList=await page!.evaluate<string[]>(`Array.from(document.querySelectorAll('.stage-comment-summary'),node=>node.textContent??'')`);
-                if(commentList.some(text=>text.includes(words)))break;
-                await Bun.sleep(25);
-            }while(Date.now()<commentReadyDeadline);
-            const restored = await checkpointForm(asked.askId);
-            const reconnectProbe={list:commentList,listHasSavedComment:commentList.some(text=>text.includes(words)),words:restored.words,expected:projected,remainingMs:Math.max(0,commentReadyDeadline-Date.now())};
-            observations[prefix+'-'+outcome+'-reconnect-comment-probe']=reconnectProbe;
-            console.log('CHECKPOINT_RECONNECT_COMMENT_PROBE '+JSON.stringify({prefix,outcome,...reconnectProbe}));
-            assert.equal(restored.askId, asked.askId);
-            assert.equal(restored.ready, true);
-            assert.equal(restored.outcome, outcome);
-            assert.equal(restored.words, projected);
-            assert.equal(reconnectProbe.listHasSavedComment,true,prefix+' saved Comment is in restored list');
-            assert.equal(restored.valid, true);
-            observations[prefix + '-' + outcome + '-ready'] = restored;
-            await page!.evaluate(`document.querySelector('form[data-job-ask="${asked.askId}"]').requestSubmit()`);
-            observations[prefix + '-' + outcome + '-submit'] = await checkpointForm(asked.askId);
-            let act: any;
-            await until(async () => {
-                const next = await call(host, schema, {verb: 'next', after: null, waitMs: 0});
-                latestNext = summarizeNext(next);
-                act = next.events.find((event: any) => event.type === 'act' && event.act.askId === asked.askId)?.act;
-                return !!act;
-            }, 'finalized act');
-            const fetched = await call(host, schema, {verb: 'fetch-act', actId: act.actId}, fetchCapability);
+
+        // #1229: leave a comment, verify it survives reconnect, and submit via Send comments (act@10).
+        const words = `comment 한글 <owner> ${prefix}`;
+        await page!.evaluate(`document.querySelector('[data-comment-general]').click()`);
+        await until(()=>page!.evaluate(`!!document.querySelector('.stage-comment-composer input')`),'existing comment composer');
+        await page!.evaluate(`(()=>{const composer=document.querySelector('.stage-comment-composer');composer.querySelector('input').value=${JSON.stringify(words)};composer.requestSubmit();})()`);
+        await until(()=>page!.evaluate(`!document.querySelector('.stage-comment-composer')`),'existing comment saved');
+        expectedDeparture = owner;
+        try {await page!.goto('about:blank');} finally {expectedDeparture = undefined;}
+        await page!.goto(owner.href);
+        await until(() => page!.evaluate<boolean>(`document.body.dataset.ready==='true'&&Array.from(document.querySelectorAll('.stage-comment-summary'),n=>n.textContent??'').some(t=>t.includes(${JSON.stringify(words)}))`), prefix + ' saved comment restored');
+        await click(page!, '#send-comments');
+        let commentAct: any;
+        await until(async () => {
+            const next = await call(host, schema, {verb: 'next', after: null, waitMs: 0});
+            latestNext = summarizeNext(next);
+            commentAct = next.events.find((event: any) => event.type === 'act' && event.act.kind === 'comments')?.act;
+            return !!commentAct;
+        }, 'comment-only act');
+        assert.equal(commentAct.schema, JOB_COMMENT_ONLY_ACT_SCHEMA);
+        const parsedCommentAct = parseCommentOnlyAct(commentAct);
+        assert.equal(parsedCommentAct.source.sourceHash, publication.source.sourceHash);
+        assert.deepEqual(parsedCommentAct.value.comments.map(c => c.text), [words]);
+        observations[prefix + '-comments-act'] = {actId: parsedCommentAct.actId, sourceHash: parsedCommentAct.source.sourceHash};
+
+        // #1229: historical checkpoint acts (pass and fail) remain readable via consumer fetch-act.
+        for (const outcome of ['pass', 'fail'] as const) {
+            const note = `${outcome} 한글 <owner>`;
+            const projected = projectComments([{text: note}]);
+            const seeded = seedHistoricalCheckpointAct(host.session, {
+                publicationId: publication.publicationId,
+                pageId: 'historical-page-' + outcome,
+                displayedNonce: 'historical-nonce-' + outcome,
+                expectedGeneration: host.session.status().generation,
+                submissionId: 'historical-sub-' + outcome,
+                checkpointId: packet.checkpointId,
+                planStepId: packet.planStepId,
+                value: {checkpointId: packet.checkpointId, outcome, words: projected},
+            });
+            const fetched = await call(host, schema, {verb: 'fetch-act', actId: seeded.actId}, fetchCapability);
             assert.equal(fetched.source.sourceHash, publication.source.sourceHash);
-            assert.equal(fetched.value.checkpointId,packet.checkpointId);assert.equal(fetched.value.planStepId,packet.planStepId);assert.equal(fetched.value.outcome,outcome);
+            assert.equal(fetched.value.checkpointId, packet.checkpointId);
+            assert.equal(fetched.value.planStepId, packet.planStepId);
+            assert.equal(fetched.value.outcome, outcome);
             if ('comments' in fetched.value) {
                 const comments = checkpointNoteComments({checkpointId: packet.checkpointId, planStepId: packet.planStepId, note: projected});
                 assert.deepEqual(fetched.value.comments, comments);
                 assert.equal(projectComments(fetched.value.comments), projectComments(comments));
             } else assert.equal(fetched.value.words, projected);
-            observations[prefix + '-' + outcome] = {actId: fetched.actId, sourceHash: fetched.source.sourceHash, value: fetched.value};
-            activeDecision = undefined;
+            observations[prefix + '-historical-' + outcome] = {actId: fetched.actId, sourceHash: fetched.source.sourceHash, value: fetched.value};
         }
+
         corruptTiles = true;
         await control!('Fetch.enable', {patterns: [{urlPattern: '*checkpoint-evidence/*/tiles/0', requestStage: 'Request'}]});
         expectedDeparture = owner;
@@ -336,9 +276,6 @@ async function run() {
             installWriterBinding: binding => {grant = binding;}});
         const publication = await call(planHost, 'rig-review/job-api@3', {verb: 'publish', expectedGeneration: 0,
             idempotencyKey: randomUUID(), freeze: {kind: 'producer-held', holdId: 'synthetic', record: plan.record}, result: plan.result});
-        await call(planHost, 'rig-review/job-api@3', {verb: 'ask', expectedGeneration: 1,
-            idempotencyKey: randomUUID(), publicationId: publication.publicationId,
-            subject: {kind: 'checkpoint', checkpointId: evidence.packet.checkpointId}});
         page = await launchCdpSession(join(scratch, 'profile'), {sendDeadlineMs: 15_000, onEvent: async (event, send) => {
             if (event.sessionId) control = send;
             const params = event.params ?? {};
@@ -346,7 +283,6 @@ async function run() {
                 const url = new URL(String(params.url));
                 assert.equal(params.type, 'beforeunload', 'only the dirty-comment reconnect departure is expected');
                 assert.ok(expectedDeparture && url.origin === expectedDeparture.origin && url.pathname === expectedDeparture.pathname);
-                console.log('CHECKPOINT_RECONNECT_DEPARTURE ' + url.pathname);
                 await send('Page.handleJavaScriptDialog', {accept: true});
             }
             if (event.method === 'Runtime.exceptionThrown') {
@@ -392,16 +328,17 @@ async function run() {
             subjects:[{kind:'checkpoint',checkpointId:'step-one'}],text});
         pkg.input.setRecordPath('project.json');
         const packageEvidence = syntheticCheckpointEvidence(pkg.input.root, 'motion-card', 'step-one');
+        // Declare a pair on the package packet so prepareJobInspection verifies sealed tile hashes for pin replay without mounting the pair view.
+        const pairedPackagePacket: JobCheckpointEvidence = {...packageEvidence.packet,
+            pair: {before: {id: packageEvidence.packet.tiles[0]!.id, sha256: packageEvidence.packet.tiles[0]!.sha256},
+                after: {id: packageEvidence.packet.tiles[1]!.id, sha256: packageEvidence.packet.tiles[1]!.sha256}}};
         const beforePackageHashes = await jobInputHashes(pkg.input.root);
-        pkg.input.setContext({...pkg.input.getContext(), checkpointEvidence: [packageEvidence.packet],
+        pkg.input.setContext({...pkg.input.getContext(), checkpointEvidence: [pairedPackagePacket],
             files: [...packagePlan.files,...packageEvidence.files].sort((a,b)=>a.path<b.path?-1:1),
             subjects: [{kind: 'checkpoint', checkpointId: 'motion-card', planStepId: 'step-one'}]});
         const packagePublication = await pkg.publish();
-        await call(pkg.host, 'rig-review/job-api@2', {verb: 'ask', expectedGeneration: pkg.host.session.status().generation,
-            idempotencyKey: randomUUID(), publicationId: packagePublication.publicationId,
-            subject: {kind: 'checkpoint', checkpointId: 'motion-card', planStepId: 'step-one'}});
         assert.ok(packageGrant);
-        await inspect(pkg.host, 'rig-review/job-api@2', packagePublication, packageEvidence.packet,
+        await inspect(pkg.host, 'rig-review/job-api@2', packagePublication, pairedPackagePacket,
             'package-' + language, packageGrant.fetchCapability);
         assert.deepEqual(await jobInputHashes(root),beforePlanHashes,'record source bytes stay immutable');
         assert.deepEqual(await jobInputHashes(pkg.input.root),beforePackageHashes,'package source bytes stay immutable');
@@ -412,35 +349,25 @@ async function run() {
         await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2) + '\n');
     } catch (error) {
         const failure: Record<string, unknown> = {error: redact(error instanceof Error ? error.message : String(error)), latestNext};
-        if (activeDecision) {
-            const {host, ...decision} = activeDecision;
-            failure.activeDecision = decision;
-            try {failure.form = await checkpointForm(decision.askId);}
-            catch (diagnosticError) {failure.formError = redact(String(diagnosticError));}
-            try {
-                const status = host.session.status();
-                failure.host = {jobId: status.jobId, generation: status.generation, status: status.status, cursor: status.cursor,
-                    publicationId: status.publication?.publicationId, sourceHash: status.publication?.source.sourceHash,
-                    pending: status.pending.map(ask => ({askId: ask.askId, publicationId: ask.publicationId,
-                        status: ask.status, subject: ask.subject}))};
-                failure.next = summarizeNext(await call(host, decision.schema, {verb: 'next', after: null, waitMs: 0}));
-            } catch (diagnosticError) {failure.hostError = redact(String(diagnosticError));}
-        }
         observations.failure = failure;
         observations.browserErrors = browserErrors;
         observations.networkFailures = networkFailures;
         observations.uiResponses = uiResponses;
         if (page) {
-            try {await writeFile(join(output, 'failure.png'), await page.screenshot());}
-            catch (diagnosticError) {failure.screenshotError = redact(String(diagnosticError));}
+            try {await writeFile(join(output, 'failure.png'), await page.screenshot());} catch {}
         }
         await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2) + '\n');
         throw error;
     } finally {
-        await page?.close();
-        await pkg?.close();
-        planHost?.stop();
-        await rm(scratch, {recursive: true, force: true});
+        try {await page?.close();}
+        finally {
+            try {planHost?.stop();}
+            finally {
+                try {await pkg?.close();}
+                finally {await rm(scratch, {recursive: true, force: true});}
+            }
+        }
     }
 }
+
 if (import.meta.main) await run();

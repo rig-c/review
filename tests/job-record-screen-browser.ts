@@ -906,12 +906,15 @@ async function draftSurvivalChecks(){
   await writeFile(join(out,'look',lang,name),png);
   await writeFile(join(lookRoot,lang,name),png);
  };
- const fixture=await recordScreenFixture('checkpoint',false,out);
+ // #1229: converted from waiting on the removed checkpoint Pass/Fail form to waiting on the no-ask plan record ready state (#send-comments).
+ const fixture=await recordScreenFixture('checkpoint',false,out,undefined,false,true,undefined,false,true);
  try{
+  fixture.fake.publish(fixture.display);
   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang','en');
   await page!.setViewport(1440,900);
   await page!.goto('about:blank');await page!.goto(url.href);
-  await wait(`!!document.querySelector('#stage-comment-list')&&!!document.querySelector('form[data-job-ask="ask-checkpoint"] fieldset:not(:disabled)')`,'992 initial load');
+  const planReady=`document.body.dataset.ready==='true'&&!!document.querySelector('#stage-comment-list')&&!!document.getElementById('send-comments')&&!document.getElementById('send-comments').hidden`;
+  await wait(planReady,'992 initial load');
   const addGeneral=async(text:string,frameId?:string)=>{
    const root=frameId?`document.getElementById(${JSON.stringify(frameId)}).contentDocument`:'document';
    await page!.evaluate<void>(`${root}.querySelector('[data-comment-general]').click()`);
@@ -924,14 +927,14 @@ async function draftSurvivalChecks(){
   await addGeneral('c1 · reload survival');
   assert.equal((await readRows()).length,1);
   await page!.goto('about:blank');await page!.goto(url.href);
-  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&!!document.querySelector('form[data-job-ask="ask-checkpoint"] fieldset:not(:disabled)')`,'992 bar 1 reload');
+  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&(${planReady})`,'992 bar 1 reload');
   assert.equal((await readRows())[0]?.endsWith('c1 · reload survival'),true);
   // Bar 2: Republish, same job, draft and source hash
+  await page!.evaluate<void>(`document.body.dataset.ready='republishing-bar2'`);
   const pub2=await fixture.session.execute({schema:'rig-review/job-api@3',jobId:fixture.session.jobId,requestId:'992-republish-same',verb:'publish',expectedGeneration:fixture.session.status().generation,idempotencyKey:'992-republish-same',result:fixture.workspace.result,freeze:{kind:'producer-held',holdId:'992-hold-2',record:fixture.workspace.record}},new AbortController().signal) as {publicationId:string;generation:number;source:typeof fixture.display.publication.source};
   const display2=fixture.session.displayPublication(pub2.publicationId);
-  const ask2={...fixture.ask,askId:'ask-checkpoint-2',publicationId:pub2.publicationId,source:pub2.source};
-  fixture.fake.publish(display2);fixture.fake.pending(ask2,pub2.generation);
-  await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-2"] fieldset:not(:disabled)')`,'992 bar 2 republish');
+  fixture.fake.publish(display2);
+  await wait(planReady,'992 bar 2 republish');
   assert.equal((await readRows())[0]?.endsWith('c1 · reload survival'),true);
   // Bar 4: Two tabs (tab A has c1, tab B adds c2, both survive in both tabs and after reload; removal in A does not come back from B)
   await page!.evaluate<void>(`(()=>{
@@ -952,7 +955,7 @@ async function draftSurvivalChecks(){
   await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1`,'992 bar 4 delete synced');
   assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c2 · from tab B']);
   await page!.goto('about:blank');await page!.goto(url.href);
-  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&!!document.querySelector('form[data-job-ask="ask-checkpoint-2"] fieldset:not(:disabled)')`,'992 bar 4 reload after delete');
+  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&(${planReady})`,'992 bar 4 reload after delete');
   assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c2 · from tab B']);
   // Bar 3: Republish with a changed source hash
   const updatedEvidence=await readFile(join(fixture.root,'plan/context-evidence.json'),'utf8')+'\n';
@@ -960,12 +963,12 @@ async function draftSurvivalChecks(){
   const updatedEvidenceHash=sha(updatedEvidence);
   const planContext=fixture.workspace.context as unknown as {files:{path:string;sha256:string}[]};
   planContext.files=planContext.files.map(f=>f.path==='plan/context-evidence.json'?{...f,sha256:updatedEvidenceHash}:f);
+  await page!.evaluate<void>(`document.body.dataset.ready='republishing-bar3'`);
   const pub3=await fixture.session.execute({schema:'rig-review/job-api@3',jobId:fixture.session.jobId,requestId:'992-republish-changed',verb:'publish',expectedGeneration:fixture.session.status().generation,idempotencyKey:'992-republish-changed',result:fixture.workspace.result,freeze:{kind:'producer-held',holdId:'992-hold-3',record:fixture.workspace.record}},new AbortController().signal) as {publicationId:string;generation:number;source:typeof fixture.display.publication.source};
   assert.notEqual(pub3.source.sourceHash,pub2.source.sourceHash);
   const display3=fixture.session.displayPublication(pub3.publicationId);
-  const ask3={...fixture.ask,askId:'ask-checkpoint-3',publicationId:pub3.publicationId,source:pub3.source};
-  fixture.fake.publish(display3);fixture.fake.pending(ask3,pub3.generation);
-  await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 3 changed source');
+  fixture.fake.publish(display3);
+  await wait(planReady,'992 bar 3 changed source');
   await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
   const carryKey='The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.';
   const expectedCarryEn=enCatalog[carryKey]!.replace('{0}','1');
@@ -983,7 +986,7 @@ async function draftSurvivalChecks(){
   await saveLook('en','changed-source.png');
   const koUrl=new URL(fixture.ownerUrl);koUrl.searchParams.set('lang','ko');
   await page!.goto('about:blank');await page!.goto(koUrl.href);
-  await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 3 changed source ko');
+  await wait(planReady,'992 bar 3 changed source ko');
   await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
   const bar3Ko=await page!.evaluate<{draftState:string;dirty:string}>(`({
    draftState:document.getElementById('review-draft-state')?.textContent??'',
@@ -1001,7 +1004,7 @@ async function draftSurvivalChecks(){
    }));
   })()`);
   await page!.goto('about:blank');await page!.goto(url.href);
-  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 5 fallback');
+  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&(${planReady})`,'992 bar 5 fallback');
   assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c3 · legacy fallback']);
   // Deleting all comments restored from a legacy key and reloading must stay at 0 rows (never resurrect from legacy key).
   await page!.evaluate<void>(`document.querySelector('#stage-comment-list .stage-comment-summary').click()`);
@@ -1009,7 +1012,7 @@ async function draftSurvivalChecks(){
   await page!.evaluate<void>(`document.querySelector('.stage-comment-composer .stage-comment-delete').click()`);
   await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===0`,'992 bar 5 legacy deleted');
   await page!.goto('about:blank');await page!.goto(url.href);
-  await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 5 reload after legacy delete');
+  await wait(planReady,'992 bar 5 reload after legacy delete');
   assert.deepEqual(await readRows(),[]);
 
   // #999 Bar: box-pin comment on parts-verdict draft page saves (even when box crosses part boundary into margin),
@@ -1164,7 +1167,7 @@ if(Bun.argv.includes('--serve')){
     if(name==='main.js'&&seedScript)return seedScript+'\n'+await new Response(res).text();
     return res;
    };
-   const fixture=await recordScreenFixture('checkpoint',false,serveScratch,'plan-approved',false,true,resources);
+   const fixture=await recordScreenFixture('checkpoint',false,serveScratch,'plan-approved',false,true,resources,false,true);
    closers.push(()=>fixture.close());
    const priorPub=fixture.display.publication;
    const seedKey=`rig-review-record-comments/1:${fixture.session.jobId}:plan:${priorPub.source.sourceHash}`;
@@ -1177,11 +1180,10 @@ if(Bun.argv.includes('--serve')){
    planContext.files=planContext.files.map(f=>f.path==='plan/context-evidence.json'?{...f,sha256:updatedEvidenceHash}:f);
    const pub2=await fixture.session.execute({schema:'rig-review/job-api@3',jobId:fixture.session.jobId,requestId:'serve-republish-changed',verb:'publish',expectedGeneration:fixture.session.status().generation,idempotencyKey:'serve-republish-changed',result:fixture.workspace.result,freeze:{kind:'producer-held',holdId:'serve-hold-2',record:fixture.workspace.record}},new AbortController().signal) as {publicationId:string;generation:number;source:typeof fixture.display.publication.source};
    const display2=fixture.session.displayPublication(pub2.publicationId);
-   const ask2={...fixture.ask,askId:'ask-checkpoint-2',publicationId:pub2.publicationId,source:pub2.source};
-   fixture.fake.publish(display2);fixture.fake.pending(ask2,pub2.generation);
+   fixture.fake.publish(display2);
    for(const lang of ['ko','en'] as const){
     const u=new URL(fixture.ownerUrl);u.searchParams.set('lang',lang);
-    console.log(JSON.stringify({fixture:'draft-survival-changed-source',lang,url:u.href,pid:process.pid,priorSourceHash:priorPub.source.sourceHash,currentSourceHash:pub2.source.sourceHash,clicks:['1. Open URL ( optionally click Close / 닫기 on the checkpoint drawer to view the full Comments panel and footer #review-draft-state / #dirty ).']}));
+    console.log(JSON.stringify({fixture:'draft-survival-changed-source',lang,url:u.href,pid:process.pid,priorSourceHash:priorPub.source.sourceHash,currentSourceHash:pub2.source.sourceHash,clicks:['1. Open URL to view the Comments panel and footer #review-draft-state / #dirty.']}));
    }
   }
   if(!fixtureArg||fixtureArg==='parts-box-pin'){

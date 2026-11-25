@@ -16,9 +16,8 @@ import {PNG} from 'pngjs';
 import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
-import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
-import {createJobHostPorts,jobHash,parseCommentsAct,parseRecordAct} from '../src/job-api.ts';
+import {createJobHostPorts,jobHash,parseCommentOnlyAct,parseCommentsAct} from '../src/job-api.ts';
 import {JOB_API_V3_SCHEMA,jobRawActMediaType,type PendingAskV3} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
@@ -33,7 +32,7 @@ function pictureBytes(shift=0):Buffer{
  return PNG.sync.write(png);
 }
 type Subject='plan'|'question'|'backdrop';
-// #1227: checkpoint until #1229 retires record asks
+// #1229: plan records carry no checkpoint form and submit picture pins through Send comments (act@10).
 const fixtureFor=(subject:Subject)=>subject==='plan'
  ?recordScreenFixture('checkpoint',true,undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,pictureBytes())
  :recordScreenFixture('interview-picks',subject==='backdrop',undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,undefined,pictureBytes());
@@ -194,10 +193,10 @@ try{
     const expected=projectComments(all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary}),[picture]);
     assert.equal(expected,`[${labels[0]}]\n${rows[0]!.summary}\n\n[${labels[1]}]\n${rows[1]!.summary}`+(general?`\n\n[general]\n${general}`:''),'A1 label');
     if(subject==='plan'){
-     // #1227: checkpoint until #1229 retires record asks; the words carry the A1 labels.
-     await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'record section');
-     await shot(out,'6-before-submit');await click(page,selector+' button.primary[type=submit]');
-     await expectRecordActSubmitted(page,wait,language,'plan checkpoint submitted');
+     // #1229: converted from the removed checkpoint Pass/Fail form to Send comments (act@10); structured comments carry the A1 labels.
+     await wait(`!!document.getElementById('send-comments')&&!document.getElementById('send-comments').hidden&&!document.getElementById('send-comments').disabled`,'plan Send comments ready');
+     await shot(out,'6-before-submit');await click(page,'#send-comments');
+     await wait(`document.getElementById('review-draft-state')?.dataset.saveState==='saved'`,'plan comments sent');
     }else{
      // Submit the interview picks with the original pointed and general comments.
      for(const value of ['biped_std','density_high']){const option=selector+` label.interview-option:has(input[value="${value}"])`;
@@ -207,18 +206,29 @@ try{
      await wait(`!!document.querySelector(${JSON.stringify(selector+'[data-interview-answered=true]')})`,'interview saved');
     }
     const bytes=await readFile(join(out,'one-screen.json'),'utf8');
-    const act=subject==='plan'?parseRecordAct(JSON.parse(bytes)):parseCommentsAct(JSON.parse(bytes));
-    assert.equal(act.kind,subject==='plan'?'checkpoint':'interview-picks');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
-    assert.ok('record' in act.source&&act.source.files.some(file=>file.path===picture.path&&file.sha256===picture.sha256),'the label names a sealed files entry of the act source');
-    if(act.schema==='rig-review/act@6'){
+    if(subject==='plan'){
+     const act=parseCommentOnlyAct(JSON.parse(bytes));
+     assert.equal(act.kind,'comments');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
+     assert.ok('record' in act.source&&act.source.files.some(file=>file.path===picture.path&&file.sha256===picture.sha256),'the label names a sealed files entry of the act source');
+     const plainComments=act.value.comments.map(({context:_context,...comment})=>comment);
+     assert.equal(JSON.stringify(plainComments),JSON.stringify(all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary})));
+     assert.equal(projectComments(plainComments,[picture]),expected,'plan comment-only act keeps the A1 labels');
+     await shot(out,'7-submitted');
+     const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,structuredComments:plainComments,words:expected,
+      scales:{fresh:fresh.scale,reloaded:reloaded.scale,zoomed:zoomed.scale,fitted:fitted.scale}};
+     cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1048_PINS_PASS '+subject+' '+name+' '+language);
+    }else{
+     const act=parseCommentsAct(JSON.parse(bytes));
+     assert.equal(act.kind,'interview-picks');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
+     assert.ok('record' in act.source&&act.source.files.some(file=>file.path===picture.path&&file.sha256===picture.sha256),'the label names a sealed files entry of the act source');
      assert.equal(JSON.stringify(act.value.comments),JSON.stringify(all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary})));
      assert.equal(JSON.stringify(act),bytes,'picks round-trip byte-for-byte');
-    }else assert.equal((act.value as {words?:string}).words,expected,'plan checkpoint keeps the A1 labels');
-    const replayActSha256=act.schema==='rig-review/act@6'?await verifyPicksReplay(fixture,out,act):null;
-    await shot(out,'7-submitted');
-    const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,...(act.schema==='rig-review/act@6'?{structuredComments:act.value.comments,replayActSha256}:{words:expected}),
-     scales:{fresh:fresh.scale,reloaded:reloaded.scale,zoomed:zoomed.scale,fitted:fitted.scale}};
-    cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1048_PINS_PASS '+subject+' '+name+' '+language);
+     const replayActSha256=await verifyPicksReplay(fixture,out,act);
+     await shot(out,'7-submitted');
+     const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,structuredComments:act.value.comments,replayActSha256,
+      scales:{fresh:fresh.scale,reloaded:reloaded.scale,zoomed:zoomed.scale,fitted:fitted.scale}};
+     cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1048_PINS_PASS '+subject+' '+name+' '+language);
+    }
    }catch(error){await shot(out,'failure').catch(()=>{});throw error;}finally{await page.goto('about:blank');await fixture.close();}
   }
   // #1068: restored rig-backdrop rows keep main's stored bytes and travel as structured pins.

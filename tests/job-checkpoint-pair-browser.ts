@@ -8,8 +8,9 @@ import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {PNG} from 'pngjs';
-import {JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_READER_ID,
-    type JobCheckpointEvidence, type JobCheckpointTable, type JobPublication, type JobPublicationV3, type NextValueV3} from '../src/job-contract.ts';
+import {JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_RECORD_READER_ID,
+    type JobCheckpointEvidence, type JobCheckpointTable, type JobComment, type JobPublication, type JobPublicationV3, type NextValueV3} from '../src/job-contract.ts';
+import {parseCommentOnlyAct} from '../src/job-api.ts';
 import {startJobHost} from '../src/job-front.ts';
 import {differencePixels} from '../src/parts-comparison.ts';
 import {parseFeedback, validatePackageFeedback, type Feedback} from '../src/session.ts';
@@ -81,7 +82,7 @@ async function call<T>(host: Host, schema: typeof JOB_API_SCHEMA | typeof JOB_AP
     return result.value as T;
 }
 
-async function openFixture(scratch: string, route: Route, variant: Variant, language?: Language, deferAsk = false) {
+async function openFixture(scratch: string, route: Route, variant: Variant, language?: Language, deferAsk = true) {
     const pkg = route === 'package' ? await realJobWindowFixture({scratchParent: scratch}) : null;
     const name = variant + (language ? '-' + language : '') + (deferAsk ? '-no-ask' : '');
     const root = pkg?.input.root ?? join(scratch, 'plan-' + name + '-' + randomUUID().slice(0, 8));
@@ -114,9 +115,23 @@ async function openFixture(scratch: string, route: Route, variant: Variant, lang
         }
         assert.ok(host);
         const mountedHost = host;
-        const ask = () => call(mountedHost, schema, {verb: 'ask', expectedGeneration: mountedHost.session.status().generation,
-            idempotencyKey: randomUUID(), publicationId: publication.publicationId, subject});
-        if (!deferAsk) await ask();
+        // #1229: fresh checkpoint asks refuse JOB_ASK_INVALID; expose refuseAsk() so #1225/#1229 checks verify named refusal.
+        const refuseAsk = async () => {
+            const res = await fetch(mountedHost.origin + '/jobs/' + mountedHost.session.jobId + '/api', {
+                method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + mountedHost.session.hostCredentials().agent},
+                body: JSON.stringify({schema, jobId: mountedHost.session.jobId, requestId: randomUUID(), verb: 'ask',
+                    expectedGeneration: mountedHost.session.status().generation, idempotencyKey: randomUUID(),
+                    publicationId: publication.publicationId, subject}),
+            });
+            const body = await res.json();
+            return {status: res.status, body};
+        };
+        if (!deferAsk) {
+            const refused = await refuseAsk();
+            assert.equal(refused.status, 409);
+            assert.equal(refused.body.ok, false);
+            assert.equal(refused.body.error.code, 'JOB_ASK_INVALID');
+        }
         assert.deepEqual(publication.source.checkpointEvidence, [evidence.packet], 'retained checkpoint evidence identity');
         const display = host.session.displayPublication(publication.publicationId);
         const base = host.origin + '/jobs/' + host.session.jobId + '/publications/' + publication.publicationId +
@@ -135,7 +150,7 @@ async function openFixture(scratch: string, route: Route, variant: Variant, lang
             assert.equal(res.status, 200);
             assert.equal(sha256(Buffer.from(await res.arrayBuffer())), tile.sha256, tile.path);
         }
-        return {host, publication, evidence, close, ask, sourceHash: metadata.sourceHash as string};
+        return {host, publication, evidence, close, refuseAsk, sourceHash: metadata.sourceHash as string};
     } catch (error) {
         await close();
         throw error;
@@ -217,20 +232,12 @@ async function settle(page: InputCdpSession) {
     await page.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))');
 }
 
-async function showFixture(page: InputCdpSession, fixture: Awaited<ReturnType<typeof openFixture>>, language: Language, hasAsk = true) {
+async function showFixture(page: InputCdpSession, fixture: Awaited<ReturnType<typeof openFixture>>, language: Language, _hasAsk = false) {
     const owner = new URL(fixture.host.ownerUrl);
     owner.searchParams.set('lang', language);
     await page.goto(owner.href, language);
-    if (hasAsk) {
-        await waitFor('checkpoint mounted', () => page.evaluate<boolean>(`(() => {
-            const form = [...document.querySelectorAll('form[data-job-ask]')].find(f => f.querySelector('select[name=outcome]'));
-            const fields = form?.querySelector('fieldset'), submit = form?.querySelector('button[type=submit]');
-            return document.body.dataset.ready === 'true' && !!fields && !fields.disabled && !!submit &&
-                !submit.matches(':disabled') && typeof form.commentWords === 'function';
-        })()`));
-    } else {
-        await waitFor('ready without ask', () => page.evaluate<boolean>(`document.body.dataset.ready === 'true'`));
-    }
+    // #1229: neither records nor packages mount a checkpoint Pass/Fail form; wait for the shared workspace ready state.
+    await waitFor('ready without checkpoint form', () => page.evaluate<boolean>(`document.body.dataset.ready === 'true'`));
     await settle(page);
 }
 
@@ -393,33 +400,24 @@ async function clickScrolled(page: InputCdpSession, selector: string) {
     await click(page, selector);
 }
 
-async function submitCheckpoint(page: InputCdpSession, fixture: Fixture, route: Route, words: string) {
+// #1229: converted from submitCheckpoint (removed Pass/Fail form) to Send comments (act@10) on the paired record.
+async function submitPairComments(page: InputCdpSession, fixture: Fixture, route: Route, expectedComments: readonly JobComment[], expectedWords: string) {
     const {host, publication} = fixture;
-    const ask = host.session.status().pending.find(item => item.publicationId === publication.publicationId &&
-        item.subject.kind === 'checkpoint' && item.status === 'pending');
-    assert.ok(ask);
-    const form = `form[data-job-ask="${ask.askId}"]`;
-    const pass = form + ' button[data-job-text="Pass"]';
-    if (!await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(pass)})?.checkVisibility()`))
-        await click(page, '#workspace-pending-ask');
-    await clickScrolled(page, pass);
+    await waitFor('Send comments enabled', () => page.evaluate<boolean>(
+        `!!document.getElementById('send-comments') && !document.getElementById('send-comments').hidden && !document.getElementById('send-comments').disabled`));
+    await click(page, '#send-comments');
     const schema = route === 'plan' ? JOB_API_V3_SCHEMA : JOB_API_SCHEMA;
-    const act = await waitFor('finalized checkpoint', async () => {
+    const event = await waitFor('finalized comment-only act', async () => {
         const next = await call<NextValueV3>(host, schema, {verb: 'next', after: null, waitMs: 0});
-        return next.events.find(event => event.type === 'act' && event.act.askId === ask.askId);
+        return next.events.find(item => item.type === 'act' && item.act.publicationId === publication.publicationId && item.act.kind === 'comments');
     });
-    assert.equal(act.type, 'act');
-    assert.equal(act.act.kind, 'checkpoint');
-    assert.equal(act.act.value.outcome, 'pass');
-    assert.equal('comments' in act.act.value ? act.act.value.comments[0]?.text : act.act.value.words, words);
-    return {actId: act.act.actId, form};
-}
-
-// #1229 owner ruling 11-25: answering a record's checkpoint ask closes the form while keeping the declared pair mounted.
-async function waitForRecordFormClosed(page: InputCdpSession, fixture: Fixture, language: Language, form: string, mode: PairView = 'after') {
-    await waitFor('submitted checkpoint form closed on record', async () =>
-        await page.evaluate<boolean>(`!document.querySelector(${JSON.stringify(form)})`));
-    await pairView(page, fixture, language, mode);
+    assert.equal(event.type, 'act');
+    assert.equal(event.act.schema, JOB_COMMENT_ONLY_ACT_SCHEMA);
+    const parsed = parseCommentOnlyAct(event.act);
+    const plain = parsed.value.comments.map(({context: _context, ...comment}) => comment);
+    assert.deepEqual(plain, expectedComments);
+    assert.equal(projectComments(plain, [fixture.evidence.before, fixture.evidence.after]), expectedWords);
+    return {actId: parsed.actId};
 }
 
 type TileSeal = Pick<JobCheckpointEvidence['tiles'][number], 'id' | 'path' | 'sha256'>;
@@ -499,11 +497,11 @@ async function runRecordPair(page: InputCdpSession, fixture: Fixture, language: 
         assert.ok(world.x >= 0 && world.x < width && world.y >= 0 && world.y < height, mode + ' native pixels');
         return {mode, id, text, tileId: tile.id, referenceId, referenceHash, sourceHash, world, bookmark};
     });
-    const words = await page.evaluate<string>(`[...document.querySelectorAll('form[data-job-ask]')].find(
-        form => form.querySelector('select[name=outcome]')).commentWords()`);
-    const labels = words.split('\n\n').map(block => parsePictureCommentLabel(block.split('\n')[0].slice(1, -1)));
+    const expectedComments = feedbackItemComments(rows);
+    const words = projectComments(expectedComments, [fixture.evidence.before, fixture.evidence.after]);
+    const labels = words.split('\n\n').map(block => parsePictureCommentLabel(block.split('\n')[0]!.slice(1, -1)));
     assert.deepEqual(labels.map(row => ({path: row.referenceId, sha256: row.referenceHash})),
-        pins.map(pin => ({path: pin.tile.path, sha256: pin.tile.sha256})), 'checkpoint comment words carry sealed labels');
+        pins.map(pin => ({path: pin.tile.path, sha256: pin.tile.sha256})), 'pair pin comments carry sealed labels');
     await page.goto('about:blank');
     await showFixture(page, fixture, language);
     const restored = await waitFor('draft survives reload', () => savedDraft(page, ids));
@@ -516,13 +514,13 @@ async function runRecordPair(page: InputCdpSession, fixture: Fixture, language: 
     await pairView(page, fixture, language, 'after');
     await page.evaluate(`document.querySelector('.stage-comment-composer input')?.dispatchEvent(
         new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
-    const {actId: submittedAct, form} = await submitCheckpoint(page, fixture, route, words);
+    const {actId: submittedAct} = await submitPairComments(page, fixture, route, expectedComments, words);
     const postSubmitReplay = {released: false, pins: [] as {
         mode: 'after' | 'before'; id: string; expected: TileSeal; observed?: Awaited<ReturnType<typeof replaySubmittedPin>>;
         error?: string; refusals: string[];
     }[], releaseError: ''};
     try {
-        await waitForRecordFormClosed(page, fixture, language, form);
+        await pairView(page, fixture, language, 'after');
         postSubmitReplay.released = true;
         // Replay Before first while After is shown, then After, proving pin clicks switch and restore each sealed tile.
         for (const mode of ['before', 'after'] as const) {
@@ -751,16 +749,14 @@ async function checkpointViewportControls(page: InputCdpSession, scratch: string
             const url = new URL(fixture.host.ownerUrl);
             url.searchParams.set('lang', language);
             await page.goto(url.href, language);
-            // #1229 owner ruling 11-25: on a record, the first declared pair is up from the start before any checkpoint ask,
-            // and stays mounted after the checkpoint ask is answered.
+            // #1229: on a record, the first declared pair is up from the start with no checkpoint form;
+            // a producer checkpoint ask refuses JOB_ASK_INVALID while shared viewport controls keep working.
             await pairView(page, fixture, language, 'after');
             await recordViewportControls(page, command!, language, false);
-            await fixture.ask();
-            await waitFor('checkpoint ask form mounted on paired record', () => page.evaluate<boolean>(`(() => {
-                const form = [...document.querySelectorAll('form[data-job-ask]')].find(f => f.querySelector('select[name=outcome]'));
-                const fields = form?.querySelector('fieldset'), submit = form?.querySelector('button[type=submit]');
-                return !!fields && !fields.disabled && !!submit && !submit.matches(':disabled') && typeof form.commentWords === 'function';
-            })()`));
+            const refused = await fixture.refuseAsk();
+            assert.equal(refused.status, 409);
+            assert.equal(refused.body.ok, false);
+            assert.equal(refused.body.error.code, 'JOB_ASK_INVALID');
             await pairView(page, fixture, language, 'after');
             await recordViewportControls(page, command!, language, false);
             const scale = () => page.evaluate<number>("new DOMMatrix(getComputedStyle(document.querySelector('#reference-content')).transform).a");
@@ -776,8 +772,6 @@ async function checkpointViewportControls(page: InputCdpSession, scratch: string
             assert.equal(await scale(), fit);
             await chooseView(page, 'before');
             await pairView(page, fixture, language, 'before');
-            const {form} = await submitCheckpoint(page, fixture, 'plan', '');
-            await waitForRecordFormClosed(page, fixture, language, form, 'before');
             await recordViewportControls(page, command!, language, false);
             console.log('1128_CHECKPOINT_PASS ' + language);
         } finally {
@@ -785,6 +779,44 @@ async function checkpointViewportControls(page: InputCdpSession, scratch: string
             await fixture.close();
         }
     }
+}
+
+/** #1225 / #1229 owner check: a producer that still sends a checkpoint ask receives JOB_ASK_INVALID,
+ * and the browser page still renders the record pair or package rig screen plus Send comments without breaking. */
+async function checkpointAskRefusalKeepsScreen(page: InputCdpSession, scratch: string) {
+    const out: Record<string, unknown> = {};
+    for (const route of routes) {
+        const fixture = await openFixture(scratch, route, 'pair', 'en', true);
+        try {
+            const refused = await fixture.refuseAsk();
+            assert.equal(refused.status, 409, route + ' checkpoint ask HTTP 409');
+            assert.equal(refused.body.ok, false);
+            assert.equal(refused.body.error.code, 'JOB_ASK_INVALID', route + ' named refusal');
+            await showFixture(page, fixture, 'en');
+            assert.deepEqual(await inspectionErrors(page), [], route + ' renders without error banner after refused ask');
+            assert.equal(await page.evaluate<number>(`document.querySelectorAll('form[data-job-ask],[id="job-record-asks"],[id="workspace-pending-record-ask"]').length`), 0);
+            if (route === 'plan') {
+                await pairView(page, fixture, 'en', 'after');
+            } else {
+                const view = await observe(page, fixture.evidence, 'en');
+                assert.equal(view.tiles.length, 0, 'package keeps rig/reference screen');
+                assert.ok(await page.evaluate<boolean>(`!!document.querySelector('#rig-root canvas')`), 'package rig canvas drawn');
+            }
+            const commentText = 'Owner comment after refused checkpoint ask · ' + route;
+            if (route === 'package') await click(page, '#stage-comment');
+            await page.evaluate(`document.querySelector('[data-comment-general]').click()`);
+            await waitFor('general comment input', () => page.evaluate<boolean>(`!!document.querySelector(${JSON.stringify(composer + ' input')})`));
+            await page.evaluate(`(() => { const f = document.querySelector(${JSON.stringify(composer)}); f.querySelector('input').value = ${JSON.stringify(commentText)}; f.requestSubmit(); })()`);
+            await waitFor('general comment saved', () => page.evaluate<boolean>(`!document.querySelector(${JSON.stringify(composer)})`));
+            const {actId} = await submitPairComments(page, fixture, route, [{text: commentText}], '[general]\n' + commentText);
+            out[route] = {refusal: refused.body.error.code, actId};
+            console.log('1225_REFUSAL_SCREEN_PASS ' + route);
+        } finally {
+            await page.goto('about:blank');
+            await fixture.close();
+        }
+    }
+    return out;
 }
 
 async function run() {
@@ -908,6 +940,8 @@ async function run() {
         if (!baseline) {
             active = 'outside-pair-control';
             results.cases.outsidePair = await runOutsidePairControl(page, scratch);
+            active = 'refused-checkpoint-ask-screen';
+            results.cases.refusedCheckpointAskScreen = await checkpointAskRefusalKeepsScreen(page, scratch);
         }
         await writeFile(join(output, 'observations.json'), JSON.stringify(results, null, 2) + '\n');
     } catch (error) {
