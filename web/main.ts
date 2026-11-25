@@ -1613,6 +1613,11 @@ function bind(): void {
 function bindWorkspace(hasModel=false,empty=false):void {
   if(!workspace){
   const layout=screenRoot.querySelector<HTMLElement>('.layout')!;layout.append(communicationPanel);
+  // #1242: a comment added or removed, or Comment pressed or released, opens or closes the panel when commenting flips.
+  let wasCommenting=false;
+  const followCommenting=()=>{const now=commenting();if(now===wasCommenting)return;wasCommenting=now;if(now)workspace?.refresh();else workspace?.concealCommunication();};
+  const commentWatch=new MutationObserver(followCommenting);
+  commentWatch.observe(communicationPanel,{childList:true,subtree:true});commentWatch.observe(el('stage-comment'),{attributes:true,attributeFilter:['aria-pressed']});
   workspace=bindWorkspaceUI({root:screenRoot,regions:{layout,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,right:communicationPanel,columns:{left:'rightWidth',right:'communicationWidth'},rightPending:communicationPending,bottomBound:()=>inspectorBlocks!==null},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
@@ -2557,10 +2562,14 @@ function bindInspector(partsSubject=false):void {
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
 function openReview():void {pause();if(!partsOnly)syncCorrectionStage();workspace?.revealCommunication();}
+/** #1242 owner ruling 11-25: the person is commenting: at least one comment, pinned or general, or the toolbar's
+ * Comment pressed. On rig, direction and parts the right panel opens only then and otherwise leaves the stage wide. */
+function commenting():boolean {
+  return !!communicationPanel.querySelector('.stage-comment-item[data-comment-id]')||document.getElementById('stage-comment')?.getAttribute('aria-pressed')==='true';
+}
 /** Something to communicate: a displayed record publication (#1228: its Comments and source stay open without an ask),
- * a displayed direction or parts publication (#1242 owner ruling 11-25), a pending question or record form, or at
- * least one comment. */
-function communicationPending():boolean {return !!host?.record||!!host?.direction||!!(partsOnly&&host?.verdictComments)||!!communicationPanel.querySelector('form[data-job-ask], .stage-comment-item[data-comment-id]');}
+ * a pending question or record form, or the person commenting. */
+function communicationPending():boolean {return !!host?.record||commenting()||!!communicationPanel.querySelector('form[data-job-ask], .stage-comment-item[data-comment-id]');}
 function unitScaleMessage(target:CameraTarget):void {message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');}
 function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');}
 

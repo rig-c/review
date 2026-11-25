@@ -123,30 +123,71 @@ async function run(lang: 'en' | 'ko') {
 }
 
 type Screen = 'direction' | 'parts' | 'record';
-/** #1242 owner ruling 11-25: direction/parts open the right panel while a publication is displayed, as rig and record do. */
-const panelExpression = (text?: string) => `(()=>{const p=document.getElementById('workspace-communication'),g=document.querySelector('[data-comment-general]');
-  return {visible:!!p?.checkVisibility(),width:Math.round(p?.getBoundingClientRect().width??0),general:!!g?.checkVisibility()&&!!p?.contains(g),
-    listed:${text === undefined ? 'null' : `[...(p?.querySelectorAll('[data-comment-id]')??[])].some(row=>row.checkVisibility()&&row.textContent.includes(${JSON.stringify(text)}))`}};})()`;
-type Panel = {visible: boolean; width: number; general: boolean; listed: boolean | null};
-function assertPanel(panel: Panel, label: string) {
-  assert.equal(panel.visible && panel.width >= 240 && panel.general && panel.listed !== false, true, 'RIGHT_PANEL_MISSING ' + label + ' ' + JSON.stringify(panel));
+/** #1242 owner ruling 11-25: on rig, direction and parts the right panel stays closed until the person comments: a
+ * comment of either kind, or the toolbar's Comment pressed. Send comments stays in the bar throughout. */
+type PanelState = {open: boolean; width: number; general: boolean; send: boolean; rows: number; pressed: boolean};
+const panelState = `(()=>{const p=document.getElementById('workspace-communication'),g=document.querySelector('[data-comment-general]');
+  return {open:!!p?.checkVisibility(),width:Math.round(p?.getBoundingClientRect().width??0),general:!!g?.checkVisibility()&&!!p?.contains(g),
+    send:!!document.getElementById('send-comments')?.checkVisibility(),rows:p?.querySelectorAll('.stage-comment-item[data-comment-id]').length??0,
+    pressed:document.getElementById('stage-comment')?.getAttribute('aria-pressed')==='true'};})()`;
+const panelOpen = (state: PanelState) => state.open && state.width >= 240;
+async function panelCase(page: InputCdpSession, label: string, open: boolean, extra: (state: PanelState) => boolean = () => true) {
+  const end = Date.now() + 10_000;
+  let state = await page.evaluate<PanelState>(panelState);
+  while (Date.now() < end && !(panelOpen(state) === open && state.send && extra(state))) {await Bun.sleep(60); state = await page.evaluate<PanelState>(panelState);}
+  assert.equal(panelOpen(state) === open && state.send && extra(state), true, `PANEL_RULE ${label}: expected ${open ? 'open' : 'closed'} ${JSON.stringify(state)}`);
+  return state;
 }
-/** The with-ask case: direction and parts with a pending verdict ask open the same panel. */
-async function panelWithAsk(screen: 'direction' | 'parts', lang: 'en' | 'ko') {
-  const fixture = await scriptedJobWindowFixture({c5Parts: 'mesh'});
-  const page = await launchCdpSession(await mkdtemp(join(tmpdir(), 'review-1242-ask-')), {sendDeadlineMs: 20_000});
-  try {
-    const publication = await fixture.publish(screen, screen);
-    await fixture.ask(publication, screen === 'parts' ? {kind: 'parts-verdict', draftId: 'synthetic-parts'} : {kind: 'review-verdict', stage: 'direction-review'});
+async function panelRule(screen: 'rig' | 'direction' | 'parts', lang: 'en' | 'ko') {
+  const cases: Record<string, PanelState> = {};
+  const open = async (fixture: Awaited<ReturnType<typeof scriptedJobWindowFixture>>) => {
+    const page = await launchCdpSession(await mkdtemp(join(tmpdir(), 'review-1242-panel-')), {sendDeadlineMs: 20_000});
     const url = new URL(fixture.host.ownerUrl); url.searchParams.set('lang', lang);
     await page.setViewport(1440, 900);
     await page.goto(url.href);
-    await wait(page, `document.body?.dataset.ready==='true'&&!!document.getElementById('save')?.checkVisibility()`, 30_000);
-    const panel = await page.evaluate<Panel>(panelExpression());
-    await writeFile(join(output, `${screen}-${lang}-ask-panel.png`), await page.screenshot());
-    assertPanel(panel, screen + ' ' + lang + ' with ask');
-    return {screen, lang, ask: true, panel};
+    await wait(page, `document.body?.dataset.ready==='true'&&!!document.getElementById('send-comments')?.checkVisibility()`, 30_000);
+    return page;
+  };
+  const write = async (page: InputCdpSession, text: string) => {
+    await wait(page, `!!document.querySelector('.stage-comment-composer input')`);
+    await page.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(text)};f.requestSubmit();})()`);
+    await wait(page, `!document.querySelector('.stage-comment-composer')`);
+  };
+  // A: no comment → closed; one general comment → open.
+  let fixture = await scriptedJobWindowFixture({c5Parts: 'mesh'});
+  await fixture.publish(screen, screen);
+  let page = await open(fixture);
+  try {
+    cases.none = await panelCase(page, `${screen} ${lang} no comment`, false);
+    await wait(page, `!!document.querySelector('[data-comment-general]:not(:disabled)')`);
+    await page.evaluate(`document.querySelector('[data-comment-general]').click()`);
+    await write(page, words[lang][1]);
+    cases.general = await panelCase(page, `${screen} ${lang} one general comment`, true, state => state.rows === 1);
+    await writeFile(join(output, `panel-${screen}-${lang}-general.png`), await page.screenshot());
   } finally {await page.close?.(); await fixture.close();}
+  // B: Comment pressed → open with Add general comment; released with no comment → closed; a pin → open.
+  fixture = await scriptedJobWindowFixture({c5Parts: 'mesh'});
+  await fixture.publish(screen, screen);
+  page = await open(fixture);
+  try {
+    await panelCase(page, `${screen} ${lang} before Comment`, false);
+    await page.evaluate(`document.getElementById('stage-comment').click()`);
+    cases.pressed = await panelCase(page, `${screen} ${lang} Comment pressed`, true, state => state.general && state.rows === 0);
+    await writeFile(join(output, `panel-${screen}-${lang}-pressed.png`), await page.screenshot());
+    await page.evaluate(`document.getElementById('stage-comment').click()`);
+    cases.released = await panelCase(page, `${screen} ${lang} Comment released with no comment`, false, state => !state.pressed);
+    await page.evaluate(`document.getElementById('stage-comment').click()`);
+    await panelCase(page, `${screen} ${lang} Comment pressed again`, true);
+    const point = await page.evaluate<{x: number; y: number}>(`(()=>{const v=document.getElementById('rig-viewport').getBoundingClientRect();return {x:v.left+v.width*0.6,y:v.top+v.height*0.5};})()`);
+    // A dragged region: parts pins need a positive region, and rig and direction take one as well.
+    await page.mouse('mouseMoved', point.x, point.y); await page.mouse('mousePressed', point.x, point.y);
+    await page.mouse('mouseMoved', point.x + 30, point.y + 24); await page.mouse('mouseReleased', point.x + 30, point.y + 24);
+    await write(page, words[lang][0]);
+    await page.evaluate(`document.getElementById('stage-comment').getAttribute('aria-pressed')==='true'&&document.getElementById('stage-comment').click()`);
+    cases.pin = await panelCase(page, `${screen} ${lang} one pin, Comment released`, true, state => state.rows === 1 && !state.pressed);
+    await writeFile(join(output, `panel-${screen}-${lang}-pin.png`), await page.screenshot());
+  } finally {await page.close?.(); await fixture.close();}
+  return {screen, lang, panel: cases};
 }
 const hintTail = 'Drafts save locally as you type · nothing is sent until you press Send comments';
 /** #1242: one screen's bar in its no-ask state, one general comment written and sent as act@10. */
@@ -188,8 +229,6 @@ async function runScreen(screen: Screen, lang: 'en' | 'ko') {
     assert.equal(idle.headline, catalog["We're looking at the work together. Leave your thoughts as comments."], screen);
     assert.equal(idle.primary, true, screen + ' Send comments leads with no ask');
     assert.equal(idle.disabled, true, screen + ' nothing to send yet');
-    const idlePanel = await page.evaluate<Panel>(panelExpression());
-    assertPanel(idlePanel, screen + ' ' + lang + ' no ask');
     // One general comment.
     await wait(page, `!!document.querySelector('[data-comment-general]:not(:disabled)')`);
     await page.evaluate(`document.querySelector('[data-comment-general]').click()`);
@@ -201,7 +240,6 @@ async function runScreen(screen: Screen, lang: 'en' | 'ko') {
     const written = await bar();
     assert.equal(written.state, catalog['Not submitted'], screen + ' ' + JSON.stringify(written));
     assert.equal(written.hint, catalog[hintTail], screen + ' hint tail');
-    assertPanel(await page.evaluate<Panel>(panelExpression(words[lang][1])), screen + ' ' + lang + ' comment written');
     await writeFile(join(output, `${screen}-${lang}-idle.png`), await page.screenshot());
     await page.evaluate(`document.getElementById('send-comments').click()`);
     await wait(page, `document.getElementById('review-draft-state')?.dataset.saveState==='saved'`);
@@ -227,7 +265,7 @@ const results: unknown[] = [];
 for (const lang of ['en', 'ko'] as const) {
   if (screens.includes('rig')) results.push(await run(lang));
   for (const screen of ['direction', 'parts', 'record'] as const) if (screens.includes(screen)) results.push(await runScreen(screen, lang));
-  for (const screen of ['direction', 'parts'] as const) if (screens.includes(screen)) results.push(await panelWithAsk(screen, lang));
+  for (const screen of ['rig', 'direction', 'parts'] as const) if (screens.includes(screen)) results.push(await panelRule(screen, lang));
 }
 await writeFile(join(output, 'report.json'), JSON.stringify(results, null, 2) + '\n');
 console.log('JOB_COMMENT_SEND_1226 ' + JSON.stringify(results));
