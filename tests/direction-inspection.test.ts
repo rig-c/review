@@ -193,7 +193,8 @@ test('the single-package API binds declared attachment sets and direction to the
 
 test('joined Made correction refusal uses the direction catalog ID in both languages', async () => {
   const main = await readFile(new URL('../web/main.ts', import.meta.url), 'utf8');
-  const selection = main.slice(main.indexOf('function correctionSelection('), main.indexOf('function propose('));
+  const start = main.indexOf('function correctionSelection(');
+  const selection = main.slice(start, main.indexOf('function download(', start));
   const refusal = /if \(stage === 'direction-review' && joined\) \{\s*if \(path === 'made'\) throw new Error\(t\('([^']+)'\)\)/.exec(selection);
   expect(refusal?.[1]).toBe('direction.cameraApplyUnavailable');
   const id = refusal![1]!;

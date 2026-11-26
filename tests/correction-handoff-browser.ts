@@ -103,7 +103,8 @@ try{
  const badge=new PNG({width:24,height:24});for(let i=0;i<576;i++){badge.data[i*4]=240;badge.data[i*4+1]=120;badge.data[i*4+2]=30;badge.data[i*4+3]=255;}await writeFile(join(pkg,'out/parts/badge.png'),PNG.sync.write(badge));
  await producer(['rig','--config',join(pkg,'config.json'),'--parts',join(pkg,'out'),'--out',join(pkg,'out/rig')]);
  await producer(['check','--rig',join(pkg,'out/rig'),'--parts',join(pkg,'out'),'--out',join(pkg,'out/check'),'--page-edges','free','--pack-shape','polygon']);
- await writeFile(join(pkg,'review.json'),JSON.stringify({schema:'rig-review/1',id:'generated-draft',title:'Generated draft · structure evidence',revision:'1',model:'out/check/build/skeleton.model.json',producer:{config:'config.json',parts:'out'},animations:[{id:'idle'}]}));
+ await writeFile(join(pkg,'report.json'),JSON.stringify({spec:'rig-pose-report/1',animation:'idle',frameTimes:Array.from({length:25},(_,i)=>i/24)}));
+ await writeFile(join(pkg,'review.json'),JSON.stringify({schema:'rig-review/1',id:'generated-draft',title:'Generated draft · structure evidence',revision:'1',model:'out/check/build/skeleton.model.json',producer:{config:'config.json',parts:'out'},authoring:[{label:'Authored sample clock',path:'report.json'}],animations:[{id:'idle'}]}));
  await writeFile(join(artifacts,'inspected-check.json'),await readFile(join(pkg,'out/check/check.json')));
  await writeFile(join(artifacts,'inspected-rig.json'),await readFile(join(pkg,'out/rig/rig.json')));await writeFile(join(artifacts,'inspected-model.json'),await readFile(join(pkg,'out/check/build/skeleton.model.json')));
  const original=await hashes(pkg),p=await loadReview(pkg);let state=join(root,'state-en');server=await startServer(p,{port:0,stateDir:state,cwd:bench,capability:'a'.repeat(64),graceMs:600000,unopenedTimeoutMs:600000,exitOnClose:false});
@@ -120,6 +121,49 @@ try{
   // #731/#726 is the earlier frame context, not the stage-chip deletion. Use the current shared Setup.
   await page.evaluate(`document.querySelector('[data-mode="rig"]').click()`);
   await waitForReadiness(page, 'PARTS_NOT_READY', READINESS_DEADLINE_MS, `({ready:!!document.querySelector('[data-part-list] button[data-slot="torso"]')})`);
+  const exact='Keep the precise words · 색을 유지';
+  const madeWords='Adjust the torso contour spacing';
+  await page.evaluate(`(() => {
+   const repeat=document.getElementById('idle-repeat');
+   if(repeat.checked)repeat.click();
+   const number=document.getElementById('frame-number');
+   number.value='0';
+   number.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+   document.getElementById('stage-comment').click();
+  })()`);
+  await waitForReadiness(page,'CORRECTION_COMMENT_MODE',READINESS_DEADLINE_MS,
+    `({ready:document.getElementById('rig-viewport').classList.contains('stage-comment-mode'),detail:document.getElementById('stage-comment').title})`);
+  for(const [index,words] of [exact,madeWords].entries()){
+   const at=await page.evaluate<{x:number;y:number}>(`(() => {
+    const r=document.getElementById('rig-viewport').getBoundingClientRect();
+    return {x:r.x+r.width*(${index}?0.68:0.32),y:r.y+r.height*0.55};
+   })()`);
+   await page.mouse('mouseMoved',at.x,at.y);
+   await page.mouse('mousePressed',at.x,at.y);
+   await page.mouse('mouseMoved',at.x+12,at.y+12);
+   await page.mouse('mouseReleased',at.x+12,at.y+12);
+   await waitForReadiness(page,'CORRECTION_COMMENT_COMPOSER',READINESS_DEADLINE_MS,`({ready:!!document.querySelector('.stage-comment-composer input')})`);
+   await page.evaluate(`(() => {
+    const form=document.querySelector('.stage-comment-composer');
+    form.querySelector('input').value=${JSON.stringify(words)};
+    form.requestSubmit();
+   })()`);
+   await waitForReadiness(page,'CORRECTION_COMMENT_SAVE',DESCRIBED_DEADLINE_MS,`(() => {
+     const rows=[...document.querySelectorAll('.stage-comment-summary')].map(row=>row.textContent);
+     const form=document.querySelector('.stage-comment-composer');
+     return {ready:!form&&rows.length===${index+1},detail:JSON.stringify({rows,open:!!form,
+       error:form?.querySelector('[role=alert]')?.textContent,status:document.getElementById('review-message').textContent})};
+   })()`);
+  }
+  await page.evaluate(`(() => {
+   document.getElementById('correction-controls').open=true;
+   document.getElementById('correction-stage').value='parts-review';
+   document.getElementById('correction-selector').value='source';
+   const rows=document.querySelectorAll('.comment-correction-actions');
+   if(rows.length!==2||[...rows].some(row=>row.querySelectorAll('button').length!==1))throw Error('CORRECTION_ACTION_BEFORE_APPLY');
+   rows[0].querySelector('button').click();
+   document.getElementById('stage-comment').click();
+  })()`);
   await page.evaluate(`document.querySelector('[data-part-list] button[data-slot="torso"]').click();document.getElementById('zoom-in').click()`);
   await waitForReadiness(page, 'MESH_ROUTE_TIMEOUT', READINESS_DEADLINE_MS,
     `({ready:window.rigReviewEditor.mesh.part()==='torso'&&!!window.rigReviewEditor.mesh.configEntry()})`);
@@ -156,25 +200,13 @@ try{
   await cp(scratch,join(artifacts,lang+'-scratch'),{recursive:true});
   const translated=await page.evaluate<string>(`document.querySelector('#correction-controls summary').textContent`);
   if(translated!==(lang==='en'?'Correction handoff':'수정 인계'))throw Error('CORRECTION_SAMPLE_LOCALE '+lang+' '+translated);
-  const exact='Keep the precise words.  \r\n';
   await page.evaluate(`(() => {
-    document.getElementById('stage-comment').click();
-    document.getElementById('correction-controls').open=true;
-    for(const [id,value] of Object.entries({'feedback-start':'0','feedback-end':'0','feedback-target-kind':'rig','feedback-target-name':'generated-draft','feedback-category':'quality','correction-stage':'parts-review','correction-selector':'source','correction-path':'described'}))document.getElementById(id).value=value;
-    const dt=new DataTransfer(); dt.items.add(new File([${JSON.stringify(exact)}],'request.txt',{type:'text/plain'}));document.getElementById('correction-words').files=dt.files;
-    document.getElementById('add-proposal').click();
+   document.getElementById('stage-comment').click();
+   const actions=document.querySelectorAll('.comment-correction-actions')[1]?.querySelectorAll('button');
+   if(actions?.length!==2)throw Error('CORRECTION_MADE_ACTION_MISSING');
+   actions[1].click();
+   document.getElementById('save').click();
   })()`);
-  await waitForReadiness(page, 'CORRECTION_DESCRIBED_ADD', DESCRIBED_DEADLINE_MS, `(() => {
-    return document.querySelector('.proposal-item')
-      ? {ready: true}
-      : {ready: false, detail: document.getElementById('review-message').textContent};
-  })()`);
-  // 5735 / R2 / #741/#735: no separate summary input. Both corrections use the existing file upload.
-  // The handler consumes/clears that file, and add is async; never resend the add click.
-  const madeWords='Adjust the torso contour spacing';
-  await page.evaluate(`(() => {document.getElementById('correction-path').value='made';const dt=new DataTransfer();dt.items.add(new File([${JSON.stringify(madeWords)}],'made-request.txt',{type:'text/plain'}));document.getElementById('correction-words').files=dt.files;document.getElementById('add-proposal').click()})()`);
-  await waitForReadiness(page,'CORRECTION_MADE_ADD',DESCRIBED_DEADLINE_MS,`({ready:document.querySelectorAll('.proposal-item').length===2,detail:document.getElementById('review-message').textContent})`);
-  await page.evaluate(`if(document.querySelectorAll('.proposal-item').length!==2)throw Error('CORRECTION_MADE_ADD '+document.getElementById('review-message').textContent);document.getElementById('save').click()`);
   const file=sessionFile(p,state);
   let savedBytes:Buffer|undefined;
   for(let i=0;i<200;i++){

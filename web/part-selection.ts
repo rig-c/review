@@ -121,8 +121,8 @@ export class PartExplorer extends PartInspection {
  private thumbnails=new Map<ControlPart['side'],PartThumbnailSource>();private rowParts=new Map<HTMLButtonElement,{icon:HTMLElement;label:HTMLElement}>();
  private rows=new Map<string,HTMLButtonElement>();private rowEntries=new Map<HTMLButtonElement,PartEntry>();private detailKey='';private orderKey='';private selectionKey='';
  private visibleSide:ControlPart['side']|null=null;private statusHint:string|null=null;
- private detailNodes:{title:HTMLHeadingElement;info:HTMLParagraphElement;declarations:HTMLParagraphElement;bounds:HTMLParagraphElement;unavailable:HTMLParagraphElement;feedback:HTMLButtonElement;status:HTMLParagraphElement}|null=null;
- constructor(private host:HTMLElement,private detail:HTMLElement,private changed:(previous:ControlPart|null)=>void,private target:(part:ControlPart)=>void){
+ private detailNodes:{title:HTMLHeadingElement;info:HTMLParagraphElement;declarations:HTMLParagraphElement;bounds:HTMLParagraphElement;unavailable:HTMLParagraphElement;feedback:HTMLButtonElement|null;status:HTMLParagraphElement}|null=null;
+ constructor(private host:HTMLElement,private detail:HTMLElement,private changed:(previous:ControlPart|null)=>void,private target?:(part:ControlPart)=>void){
   super();
   this.search.addEventListener('input',()=>this.renderList());this.search.addEventListener('keydown',event=>{if(event.key==='ArrowDown'){event.preventDefault();this.list.querySelector<HTMLButtonElement>('button')?.focus();}if(event.key==='Escape'){this.search.value='';this.renderList();}});
   this.list.addEventListener('keydown',event=>{const buttons=[...this.list.querySelectorAll<HTMLButtonElement>('button')],index=buttons.indexOf(document.activeElement as HTMLButtonElement);const next=event.key==='ArrowDown'?Math.min(index+1,buttons.length-1):event.key==='ArrowUp'?Math.max(0,index-1):event.key==='Home'?0:event.key==='End'?buttons.length-1:null;if(next!==null){event.preventDefault();buttons[next]?.focus();}if(event.key==='Escape')this.search.focus();});
@@ -174,12 +174,12 @@ const key=this.viewKey();if(!force&&key===this.selectionKey)return;this.selectio
   const observation=this.observation(),refusal=this.selected?this.refused.get(this.selected.side):[...this.refused.values()][0],key=JSON.stringify([observation,refusal??null,this.statusHint,!!this.images,this.images?.selected()]);if(key===this.detailKey)return;this.detailKey=key;
   // Keep focused controls connected while the selected pose's bounds animate.
   const nodes=this.detailNodes??=(()=>{
-   const title=document.createElement('h3'),info=document.createElement('p'),declarations=document.createElement('p'),bounds=document.createElement('p'),unavailable=document.createElement('p'),feedback=document.createElement('button'),status=document.createElement('p');
+   const title=document.createElement('h3'),info=document.createElement('p'),declarations=document.createElement('p'),bounds=document.createElement('p'),unavailable=document.createElement('p'),feedback=this.target?document.createElement('button'):null,status=document.createElement('p');
    for(const node of [info,declarations,bounds,unavailable,status])node.className='hint';
-   feedback.type='button';feedback.textContent='Use slot for feedback';feedback.onclick=()=>{const part=this.value();if(part)this.target(part);};
+   if(feedback){feedback.type='button';feedback.textContent='Use slot for feedback';feedback.onclick=()=>{const part=this.value();if(part)this.target?.(part);};}
    unavailable.textContent='Named vertex weights and original source alpha unavailable in this inspection. A packed page is not original part art.';
    status.textContent='Mesh optimization requires an eligible producer handoff. This inspection changes no source art, geometry or motion.';
-   this.detail.replaceChildren(title,info,declarations,bounds,unavailable,feedback,status);
+   this.detail.replaceChildren(title,info,declarations,bounds,unavailable,...(feedback?[feedback]:[]),status);
    return {title,info,declarations,bounds,unavailable,feedback,status};
   })();
   if(this.images){
@@ -188,13 +188,13 @@ const key=this.viewKey();if(!force&&key===this.selectionKey)return;this.selectio
    setSourceText(nodes.info,`${selected?t('Original part image · {name}',{name:selected.name}):t('Select a part to inspect its original image source.')}${selected?' · ':' '}${t('There is no compiled rig yet, so some tools and tabs are unavailable.')}`);
    setSourceText(nodes.declarations,selected?.imageHash?t('Source image SHA-256 · {hash}',{hash:selected.imageHash}):'');
    nodes.declarations.hidden=!selected?.imageHash;
-   for(const node of [nodes.bounds,nodes.unavailable,nodes.feedback,nodes.status])node.hidden=true;
+   for(const node of [nodes.bounds,nodes.unavailable,nodes.feedback,nodes.status])if(node)node.hidden=true;
    return;
   }
   nodes.status.textContent=this.statusHint??'Mesh optimization requires an eligible producer handoff. This inspection changes no source art, geometry or motion.';
   nodes.title.textContent=observation?`${observation.side==='single'?'':observation.side.toUpperCase()+' · '}${observation.slot}`:'Whole rig';
   nodes.info.textContent=observation?`${observation.mode==='solo'?'Solo':'In context'} · ${observation.drawn?observation.kind==='mesh'?`${observation.vertices} posed vertices · ${observation.triangles} triangles`:'Region · four posed corners':'Not drawn at current pose'} · Skin: ${observation.skin??'not set'} · Set: ${observation.set??'not set'}`:refusal?`Parts unavailable · ${refusal.message}. The whole rig stays drawn; no slot is selected, soloed or targeted from stale data.`:'Select an actual slot in the parts explorer. Selection preserves animation, time and physics history.';
-  for(const node of [nodes.declarations,nodes.bounds,nodes.unavailable,nodes.feedback])node.hidden=!observation;nodes.feedback.disabled=!observation;
+  for(const node of [nodes.declarations,nodes.bounds,nodes.unavailable,nodes.feedback])if(node)node.hidden=!observation;if(nodes.feedback)nodes.feedback.disabled=!observation;
   nodes.declarations.textContent=observation?`${observation.activeAttachment?'Resolved public attachment: '+observation.activeAttachment.skin+' / '+observation.activeAttachment.attachment+'.':(observation.identityUnavailable??'No active drawable attachment: '+observation.reason)+'.'} Declared: ${observation.declarations.map(d=>`${d.skin} / ${d.attachment} (${d.kind})`).join('; ')||'none'}. ${observation.page?'Drawn page: '+observation.page:''}${observation.region?' · region '+observation.region:''}${observation.sequence!==null?' · sequence '+observation.sequence:''}`:'';
   nodes.bounds.textContent=observation?observation.bounds?t('Selection bounds · world units / Y up: x {0}, y {1}, width {2}, height {3}. Conservative geometry/clip bounds; fit uses the existing 0.25–8× camera range.',[formatFixed(observation.bounds.x,2),formatFixed(observation.bounds.y,2),formatFixed(observation.bounds.width,2),formatFixed(observation.bounds.height,2)]):t('PART_FIT_UNAVAILABLE: no positive drawn bounds at the held pose.'):'';
  }

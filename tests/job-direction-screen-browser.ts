@@ -123,8 +123,11 @@ try{
    reloading=false;assert.equal((await panelState()).open,false,'direction closed again after reload');
    assert.equal(await page.evaluate(`document.querySelector('#review-status').value`),'changes-requested','inspection draft is authoritative after reload');
    await click('#stage-comment');await wait(`!document.querySelector('#inspector-feedback').hidden`);
-   const corrections:any=await page.evaluate(`(()=>{document.querySelector('#correction-controls').open=true;const visible=n=>!!n&&!n.closest('[hidden]')&&n.getBoundingClientRect().height>0;return {fileVisible:visible(document.querySelector('#correction-words')),addVisible:visible(document.querySelector('#add-proposal')),hiddenByGate:!!document.querySelector('#correction-words').closest('[hidden]')&&!!document.querySelector('#add-proposal').closest('[hidden]')};})()`);
-   assert.deepEqual(corrections,{fileVisible:false,addVisible:false,hiddenByGate:true});
+   const corrections:{handoffHidden:boolean;actions:number}=await page.evaluate(`(() => {
+    const handoff=document.querySelector('#correction-controls');
+    return {handoffHidden:handoff.hidden,actions:document.querySelectorAll('.comment-correction-actions button').length};
+   })()`);
+   assert.deepEqual(corrections,{handoffHidden:true,actions:0});
    assert.deepEqual(await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)})).comments.map(row=>row.summary)`),draft.comments.map((row:any)=>row.summary));
    const screenshot=language+'-direction.png';await writeFile(join(output,screenshot),await page.screenshot());
    await click('#request-changes');

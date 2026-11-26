@@ -12,6 +12,7 @@ import {parseCommentsAct,parseContextCommentsAct,projectComments} from '../src/j
 import {JOB_COMMENT_CONTEXT_ACT_SCHEMA,JOB_COMMENTS_ACT_SCHEMA,type JobCommentsAct,type JobContextCommentsAct,type JobDisplayReceipt,type JobPendingAsk,type JobPublication,type JobResult} from '../src/job-contract.ts';
 import {parseStageComment} from '../src/stage-comment.ts';
 import {loadReview} from '../src/manifest.ts';
+import {freshSession,saveSession} from '../src/session.ts';
 import {startServer} from '../src/server.ts';
 import {startPartsServer} from '../src/parts-server.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -369,7 +370,12 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
    await copyFile(new URL('./fixtures/strip-probe/reference.mov',import.meta.url),join(path,'source.mov'));
    manifest.references.push({id:'source-video',label:'Synthetic source video',type:'video',path:'source.mov'});}
    hasVideo=manifest.references.some((reference:{type:string})=>reference.type==='video');await writeFile(join(path,'review.json'),JSON.stringify(manifest));
-   const capability='b'.repeat(64),server=await startServer(await loadReview(path),{port:0,stateDir:fixture.state,capability});
+   const review=await loadReview(path);
+   if(kind==='source-only')await saveSession(review,{...freshSession(review),feedback:[{
+    id:'source-range',frameStart:0,frameEnd:1,target:{kind:'rig',name:review.feedbackCatalog.rig},
+    category:'quality',summary:'Retained source-only range',context:{animation:'inspect'},
+   }]},fixture.state);
+   const capability='b'.repeat(64),server=await startServer(review,{port:0,stateDir:fixture.state,capability});
    close=async()=>{server.stop(true);await fixture.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
   }else if(kind==='standalone-parts'){
    const capability='b'.repeat(64);
@@ -415,7 +421,7 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
   const state=await page.evaluate<CommentEntryState>(`(()=>{const visible=n=>!!n&&!n.closest('[hidden]')&&n.getBoundingClientRect().height>0;return {videoDeclared:${hasVideo},language:document.documentElement.lang,top:visible(document.querySelector('#stage-comment')),panel:visible(document.querySelector('#inspector-feedback')),bottomComments:document.querySelectorAll('.workspace-bottom-tabs [data-block-target="feedback"],.workspace-bottom-tabs #workspace-tab-feedback').length,pin:document.querySelector('#rig-viewport').classList.contains('stage-comment-mode'),general:visible(document.querySelector('${generalButton}')),generalCount:document.querySelectorAll('${generalButton}').length,listRect:document.querySelector('#stage-comment-list').getBoundingClientRect().toJSON(),checkpointHidden:!visible(document.querySelector('#checkpoint-detail')),stripHidden:!visible(document.querySelector('#strip-panel')),stripBlocked:document.querySelector('#strip-export').disabled,noSourceFilesHidden:!visible(document.querySelector('#source-files')),name:document.querySelector('#stage-comment-list strong').textContent};})()`);
   if(kind==='source-only'){
    assert.equal(state.panel,true);assert.equal(state.stripHidden,false,'source-only JSON strip remains available');assert.equal(state.stripBlocked,false);
-   await page.evaluate(`(()=>{document.querySelector('#strip-panel').open=true;document.getElementById('feedback-start').value='0';document.getElementById('feedback-end').value='1';document.getElementById('strip-reference').value='source-video';document.getElementById('strip-format').value='json';const native=window.fetch;window.fetch=async(...args)=>{const response=await native(...args);if(String(args[0]).endsWith('/api/strip'))window.__sourceOnlyStrip={status:response.status,body:await response.clone().json()};return response;};document.getElementById('strip-export').scrollIntoView({block:'nearest'});})()`);
+   await page.evaluate(`(()=>{document.querySelector('#strip-panel').open=true;document.getElementById('strip-reference').value='source-video';document.getElementById('strip-format').value='json';const native=window.fetch;window.fetch=async(...args)=>{const response=await native(...args);if(String(args[0]).endsWith('/api/strip'))window.__sourceOnlyStrip={status:response.status,body:await response.clone().json()};return response;};document.getElementById('strip-export').scrollIntoView({block:'nearest'});})()`);
    await click(page,'#strip-export');
    await wait(`!!window.__sourceOnlyStrip`);const exported=await page.evaluate<SourceOnlyExport>(`window.__sourceOnlyStrip`);
    assert.equal(exported.status,200,'native Export action reaches the source-only JSON endpoint');assert.equal(exported.body.plan.binding.packages[0]?.reviewedSource.rig,null);assert.equal(exported.body.rendering,null);

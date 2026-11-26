@@ -34,6 +34,7 @@ test('real handoff automatic idle checkpoint previews; deep-link, timed or axis 
 // event/media and UI hosts are substituted. Actual decoding is a browser gate.
 import {readFile} from 'node:fs/promises';
 import {feedbackTargetNames} from '../src/feedback-validation.ts';
+import {eventSelection} from '../web/report-view.ts';
 
 interface PanHostEvent {
  type:string;target:PanHostElement;code?:string;pointerId?:number;isPrimary?:boolean;button?:number;buttons?:number;clientX?:number;clientY?:number;defaultPrevented:boolean;preventDefault():void;
@@ -168,12 +169,25 @@ test('actual single camera adapters synchronize normalized views by default, the
  const overflow=new Function('deps',code+';return open(deps);')({createViewportController,createViewportState,createRigViewportProvider,cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature}) as typeof app;overflow.edge();const before=overflow.state();expect(()=>overflow.pan('rig',-65536,0)).toThrow('VIEW_CAMERA_RANGE');expect(overflow.state()).toEqual(before);overflow.sync(false);overflow.pan('rig',-65536,0);const independent=overflow.state();expect(()=>overflow.sync(true)).toThrow('VIEW_CAMERA_RANGE');expect(overflow.state()).toEqual(independent);
 });
 
-test('actual single afterInputs rebuilds restored bone and slot target editability, catalog and hints',async()=>{
- const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),begin=source.indexOf('function renderFeedbackTargets('),end=source.indexOf('function renderFrameTransport()',begin),after=source.indexOf('afterInputs:',source.indexOf('async function setupPersistence(')),afterEnd=source.indexOf(',onConflict:',after);if([begin,end,after,afterEnd].some(v=>v<0))throw new Error('single restored target action missing');
- const functions=source.slice(begin,end),afterInputs=source.slice(after+'afterInputs:'.length,afterEnd);
- const script=`function open(feedbackTargetNames){const fields={'feedback-target-kind':{value:''},'feedback-target-name':{value:'',disabled:false,readOnly:false},'audio-volume':{value:'1'}},names=[],hints={};const list={replaceChildren(){names.length=0;},append(item){names.push(item.value);}},input=id=>fields[id],select=input,el=()=>list,option=value=>({value}),text=(id,value)=>{hints[id]=value;},renderFeedbackRange=()=>{},data={feedbackCatalog:{rig:'actual-rig',bones:['root','elbow'],slots:['shirt'],animations:null,clock:null,clockAnimation:null}};${functions};let chestFormPart=null;const restoredChestFormPart=null,parts=null,rebuildStatus=null,host=null;const afterInputs=${afterInputs};renderFeedbackTargets(true);return {restore:(kind,name)=>{fields['feedback-target-kind'].value=kind;fields['feedback-target-name'].value=name;afterInputs();},state:()=>({field:{...fields['feedback-target-name']},names:[...names],hint:hints['feedback-target-hint']})};}`;
- const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script),app=new Function('feedbackTargetNames',code+';return open(feedbackTargetNames);')(feedbackTargetNames) as {restore(kind:string,name:string):void;state():{field:{value:string;disabled:boolean;readOnly:boolean};names:string[];hint:string}};
- expect(app.state().field.disabled).toBe(true);app.restore('bone','elbow');expect(app.state()).toMatchObject({field:{value:'elbow',disabled:false,readOnly:false},names:['root','elbow']});expect(app.state().hint).toContain('2 targets');app.restore('bone','elb');expect(app.state()).toMatchObject({field:{value:'elb',disabled:false,readOnly:false},names:['root','elbow']});app.restore('slot','shirt');expect(app.state()).toMatchObject({field:{value:'shirt',disabled:false,readOnly:false},names:['shirt']});expect(app.state().hint).toContain('1 targets');app.restore('rig','actual-rig');expect(app.state().field).toEqual({value:'actual-rig',disabled:false,readOnly:true});
+test('a report marker selects its declared bone or slot in the existing rig selection',async()=>{
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+ const start=source.indexOf('function selectReportTarget('),end=source.indexOf('function chooseReportEvent(',start);
+ expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
+ const code=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end));
+ const selected:unknown[]=[];
+ const scope={
+  selectedReportEvent:{targets:[{kind:'bone',name:'elbow'},{kind:'slot',name:'shirt'}]},
+  selectedReportTarget:undefined as number|undefined,eventSelection,feedbackTargetNames,
+  data:{feedbackCatalog:{rig:'actual-rig',bones:['elbow'],slots:['shirt']}},
+  animationPanel:{select:(target:unknown)=>selected.push(target)},
+  parts:{value:()=>({mode:'solo'}),select:(target:unknown)=>selected.push(target)},
+ };
+ const select=new Function('scope','with(scope){'+code+';return selectReportTarget;}')(scope);
+ select();expect(selected).toEqual([]);
+ scope.selectedReportTarget=0;select();
+ scope.selectedReportTarget=1;select();
+ scope.selectedReportEvent.targets[1]!.name='missing';select();
+ expect(selected).toEqual([{kind:'bone',name:'elbow'},{side:'single',slot:'shirt',mode:'solo'}]);
 });
 
 test('synchronous aspect refresh uses the same stable orientation as resize observation',()=>{const area={clientWidth:628,clientHeight:789,dataset:{orientation:'horizontal'}};expect(syncStageLayout(area)).toBe(true);expect(area.dataset.orientation).toBe('vertical');expect(syncStageLayout(area)).toBe(false);area.clientWidth=900;expect(syncStageLayout(area)).toBe(true);expect(area.dataset.orientation).toBe('horizontal');});

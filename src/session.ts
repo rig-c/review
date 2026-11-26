@@ -100,7 +100,7 @@ function packageClock(p:ReviewPackage,animation:string|null){
 /** Only a server-owned publication may supply the checkpoint evidence for this validation. */
 export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string,turnDials:readonly TurnDial[]=p.feedbackCatalog.turnDials??[],trustedCheckpointEvidence?:JobCheckpointEvidence):Feedback {
   const context=feedback.context===undefined?{}:object(feedback.context,'feedback.context');
-  const comment=hasStageComment(context.comment)?parseStageComment(context.comment):null,timed=comment?.frame===null;
+  const c=hasStageComment(context.comment)?parseStageComment(context.comment):null,timed=c?.frame===null;
   let sealedPicture=false;
   if(timed&&(!isTimeOnlyFeedback(feedback)||animation!==undefined))throw new Error('COMMENT_TIME_ONLY_INVALID: seconds-only single comment requires null frame and interval');
   const interval=timed?null:{frameStart:feedback.frameStart,frameEnd:feedback.frameEnd,inclusive:true};
@@ -118,8 +118,9 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
   // The exported environment schedule (#112): absent or null stays valid; a present record carries its bytes and their sha256, recomputed here.
   if(context.environmentSchedule!==undefined)parseScheduleContext(context.environmentSchedule,text=>createHash('sha256').update(text).digest('hex'));
   if(context.turn!==undefined){if(!turnDials.length)throw new Error('TURN_UNAVAILABLE: this inspected model has no supported turn dials');new TurnState(turnDials).validate(context.turn);}
-  if(hasStageComment(context.comment)){
-    const c=parseStageComment(context.comment);validateCommentCrop(c);const bookmark=parseBookmark(c.bookmark);
+  if(c){
+    const standalone=animation===undefined&&trustedCheckpointEvidence===undefined;
+    validateCommentCrop(c);const bookmark=parseBookmark(c.bookmark);
     if(!isDeepStrictEqual(bookmark.view.cameras[c.viewport],c.camera))throw new Error('COMMENT_CONTEXT_MISMATCH: saved pane camera');
     if(bookmark.time!==c.time||bookmark.animation!==c.animation||!isDeepStrictEqual(bookmark.selection.turn??null,context.turn??null))throw new Error('COMMENT_CONTEXT_MISMATCH: bookmark pose');
     if(animation===undefined){parseBookmark(c.bookmark,{mode:'single',sourceHash:p.sourceHash,rigs:[p.reviewedSource.rig?.sha256??null]});if(c.viewport!=='rig'&&c.viewport!=='reference')throw new Error('COMMENT_CONTEXT_MISMATCH: single viewport');
@@ -138,17 +139,22 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
       }else if(c.referenceId!==null||c.referenceHash!==null)throw new Error('COMMENT_REFERENCE_MISMATCH: single rig marks have no reference viewport binding');
 }
     if(c.sourceHash!==p.sourceHash||c.modelHash!==(c.viewport==='reference'?null:p.reviewedSource.rig?.sha256??null))throw new Error('COMMENT_SOURCE_CHANGED: comment differs from inspected source');
-    if(c.animation!==(animation??context.animation??null)||c.time!==context.time||(c.frame?.index??null)!==feedback.frameStart||feedback.frameStart!==feedback.frameEnd)throw new Error('COMMENT_CONTEXT_MISMATCH: frame, time or animation differs');
+    const matchesInterval=standalone&&c.frame?.basis==='producer'
+      ? feedback.frameStart!==null&&feedback.frameEnd!==null&&feedback.frameStart<=c.frame.index&&c.frame.index<=feedback.frameEnd
+      : (c.frame?.index??null)===feedback.frameStart&&feedback.frameStart===feedback.frameEnd;
+    if(c.animation!==(animation??context.animation??null)||c.time!==context.time||!matchesInterval)throw new Error('COMMENT_CONTEXT_MISMATCH: frame, time or animation differs');
     if(timed&&!sealedPicture){const clock=packageClock(p,c.animation);if(frameAtTime(clock,c.time)!==null)throw new Error('COMMENT_TIME_ONLY_INVALID: explicit producer frame exists at this time');}
     const a=projectMark(c.world,c.camera),b=projectMark({x:c.world.x+c.world.width,y:c.world.y+c.world.height},c.camera);
     if(Math.abs(Math.min(a.x,b.x)-c.screen.x)>1e-5||Math.abs(Math.min(a.y,b.y)-c.screen.y)>1e-5||Math.abs(Math.abs(a.x-b.x)-c.screen.width)>1e-5||Math.abs(Math.abs(a.y-b.y)-c.screen.height)>1e-5)throw new Error('COMMENT_CONTEXT_MISMATCH: screen/world region projection');
     if(c.camera.space!==(c.viewport==='reference'?'image':'world'))throw new Error('COMMENT_CONTEXT_MISMATCH: camera space');
     if(c.slots.some(s=>!p.feedbackCatalog.slots?.includes(s.slot))||c.viewport==='reference'&&c.slots.length)throw new Error('COMMENT_SLOT_UNKNOWN: drawn slot not in this model');
-    const expected=c.slots[0]?{kind:'slot',name:c.slots[0].slot}:{kind:'rig',name:p.feedbackCatalog.rig};
-    if(!isDeepStrictEqual(feedback.target,expected))throw new Error('COMMENT_TARGET_MISMATCH: use topmost drawn slot or rig');
+    if(!standalone){
+      const expected=c.slots[0]?{kind:'slot',name:c.slots[0].slot}:{kind:'rig',name:p.feedbackCatalog.rig};
+      if(!isDeepStrictEqual(feedback.target,expected))throw new Error('COMMENT_TARGET_MISMATCH: use topmost drawn slot or rig');
+    }
   }
   const selected=animation??(typeof context.animation==='string'?context.animation:null);
-  if(timed)validateTimedFeedbackSelection(p.feedbackCatalog,{target:feedback.target,animation:selected,time:comment!.time});
+  if(c?.frame===null)validateTimedFeedbackSelection(p.feedbackCatalog,{target:feedback.target,animation:selected,time:c.time});
   else validateFeedbackSelection((context.comment as any)?.frame?.basis==='reference'?{...p.feedbackCatalog,clock:null,clockAnimation:null,frameClocks:undefined}:p.feedbackCatalog,{...feedbackFrameInterval(feedback),target:feedback.target,animation:selected});
   return {...feedback,context:{...context,...(animation===undefined?{}:{animation}),interval} as Json};
 }

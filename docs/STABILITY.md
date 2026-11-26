@@ -17,6 +17,12 @@
 | [Publication commit](REVIEW_PACKAGE.md#publication-commit) | Optional `commit` in the trusted reader's publication context | 40 lowercase hex, sealed into `source.sourceHash` and echoed as `source.commit`. Absent stays absent, and the publication keeps its bytes. | Review #1226 |
 | [Package manifest `frames`](#package-manifest-frames-declaration) | Optional `rigc-frames/1` in `rig-review/1` | The declared record is validated and hashed. Older manifests without the field keep their source hash. | Review #1018 |
 
+Standalone `rig-review-session/1` saves accept an inclusive range containing the
+producer frame pinned by a stage comment, subject to the existing clip bounds.
+The selected rig, bone or slot must belong to the package's actual target
+catalog. Previously valid records remain valid under the same schema. See
+[Stage region comments](REVIEW_PACKAGE.md#stage-region-comments).
+
 ## Act and ask schemas currently accepted
 
 | Act schema | Accepted form |

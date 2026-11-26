@@ -4,7 +4,7 @@ import {expect,test} from 'bun:test';
 import {readdir,readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {feedbackItemComments,feedbackTimingLabel,projectComments,timeOnlyBasis} from '../src/stage-comment.ts';
+import {feedbackItemComments,feedbackTimingLabel,hasStageComment,projectComments,timeOnlyBasis} from '../src/stage-comment.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {interviewPicksRecord} from '../web/interview-panel.ts';
@@ -585,7 +585,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
 
  // Extract the real renderProposals() from web/main.ts and renderFeedback() from web/compare.ts.
  const rpStart=mainSource.indexOf('function renderProposals(): void {');
- const rpEnd=mainSource.indexOf('\nfunction propose(',rpStart);
+ const rpEnd=mainSource.indexOf('\nfunction download(',rpStart);
  expect(rpStart).toBeGreaterThan(0);
  expect(rpEnd).toBeGreaterThan(rpStart);
  const rpSource=mainSource.slice(rpStart,rpEnd).replace('function renderProposals(): void {','function renderProposals() {');
@@ -636,7 +636,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
     session,
     appliedCheckRefusal:()=>null,
     document:doc,
-    feedbackTimingLabel,
+    feedbackTimingLabel,hasStageComment,
     submittedBaseline:null,
     markDirty:()=>{},
     updateSavedState:()=>{},
