@@ -103,7 +103,8 @@ try{
  const badge=new PNG({width:24,height:24});for(let i=0;i<576;i++){badge.data[i*4]=240;badge.data[i*4+1]=120;badge.data[i*4+2]=30;badge.data[i*4+3]=255;}await writeFile(join(pkg,'out/parts/badge.png'),PNG.sync.write(badge));
  await producer(['rig','--config',join(pkg,'config.json'),'--parts',join(pkg,'out'),'--out',join(pkg,'out/rig')]);
  await producer(['check','--rig',join(pkg,'out/rig'),'--parts',join(pkg,'out'),'--out',join(pkg,'out/check'),'--page-edges','free','--pack-shape','polygon']);
- await writeFile(join(pkg,'review.json'),JSON.stringify({schema:'rig-review/1',id:'generated-draft',title:'Generated draft · structure evidence',revision:'1',model:'out/check/build/skeleton.model.json',producer:{config:'config.json',parts:'out'},animations:[{id:'idle'}]}));
+ await writeFile(join(pkg,'report.json'),JSON.stringify({spec:'rig-pose-report/1',animation:'idle',frameTimes:Array.from({length:25},(_,i)=>i/24)}));
+ await writeFile(join(pkg,'review.json'),JSON.stringify({schema:'rig-review/1',id:'generated-draft',title:'Generated draft · structure evidence',revision:'1',model:'out/check/build/skeleton.model.json',producer:{config:'config.json',parts:'out'},authoring:[{label:'Authored sample clock',path:'report.json'}],animations:[{id:'idle'}]}));
  await writeFile(join(artifacts,'inspected-check.json'),await readFile(join(pkg,'out/check/check.json')));
  await writeFile(join(artifacts,'inspected-rig.json'),await readFile(join(pkg,'out/rig/rig.json')));await writeFile(join(artifacts,'inspected-model.json'),await readFile(join(pkg,'out/check/build/skeleton.model.json')));
  const original=await hashes(pkg),p=await loadReview(pkg);let state=join(root,'state-en');server=await startServer(p,{port:0,stateDir:state,cwd:bench,capability:'a'.repeat(64),graceMs:600000,unopenedTimeoutMs:600000,exitOnClose:false});
@@ -122,7 +123,14 @@ try{
   await waitForReadiness(page, 'PARTS_NOT_READY', READINESS_DEADLINE_MS, `({ready:!!document.querySelector('[data-part-list] button[data-slot="torso"]')})`);
   const exact='Keep the precise words · 색을 유지';
   const madeWords='Adjust the torso contour spacing';
-  await page.evaluate(`document.getElementById('stage-comment').click()`);
+  await page.evaluate(`(() => {
+   const repeat=document.getElementById('idle-repeat');
+   if(repeat.checked)repeat.click();
+   const number=document.getElementById('frame-number');
+   number.value='0';
+   number.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+   document.getElementById('stage-comment').click();
+  })()`);
   await waitForReadiness(page,'CORRECTION_COMMENT_MODE',READINESS_DEADLINE_MS,
     `({ready:document.getElementById('rig-viewport').classList.contains('stage-comment-mode'),detail:document.getElementById('stage-comment').title})`);
   for(const [index,words] of [exact,madeWords].entries()){
@@ -132,14 +140,20 @@ try{
    })()`);
    await page.mouse('mouseMoved',at.x,at.y);
    await page.mouse('mousePressed',at.x,at.y);
-   await page.mouse('mouseReleased',at.x,at.y);
+   await page.mouse('mouseMoved',at.x+12,at.y+12);
+   await page.mouse('mouseReleased',at.x+12,at.y+12);
    await waitForReadiness(page,'CORRECTION_COMMENT_COMPOSER',READINESS_DEADLINE_MS,`({ready:!!document.querySelector('.stage-comment-composer input')})`);
    await page.evaluate(`(() => {
     const form=document.querySelector('.stage-comment-composer');
     form.querySelector('input').value=${JSON.stringify(words)};
-    form.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+    form.requestSubmit();
    })()`);
-   await waitForReadiness(page,'CORRECTION_COMMENT_SAVE',DESCRIBED_DEADLINE_MS,`({ready:document.querySelectorAll('.stage-comment-summary').length===${index+1},detail:document.querySelector('.stage-comment-composer [role=alert]')?.textContent})`);
+   await waitForReadiness(page,'CORRECTION_COMMENT_SAVE',DESCRIBED_DEADLINE_MS,`(() => {
+     const rows=[...document.querySelectorAll('.stage-comment-summary')].map(row=>row.textContent);
+     const form=document.querySelector('.stage-comment-composer');
+     return {ready:!form&&rows.length===${index+1},detail:JSON.stringify({rows,open:!!form,
+       error:form?.querySelector('[role=alert]')?.textContent,status:document.getElementById('review-message').textContent})};
+   })()`);
   }
   await page.evaluate(`(() => {
    document.getElementById('correction-controls').open=true;
