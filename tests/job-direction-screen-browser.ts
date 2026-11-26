@@ -123,7 +123,7 @@ try{
    reloading=false;assert.equal((await panelState()).open,false,'direction closed again after reload');
    assert.equal(await page.evaluate(`document.querySelector('#review-status').value`),'changes-requested','inspection draft is authoritative after reload');
    await click('#stage-comment');await wait(`!document.querySelector('#inspector-feedback').hidden`);
-   const corrections=await page.evaluate(`(() => {
+   const corrections:{handoffHidden:boolean;actions:number}=await page.evaluate(`(() => {
     const handoff=document.querySelector('#correction-controls');
     return {handoffHidden:handoff.hidden,actions:document.querySelectorAll('.comment-correction-actions button').length};
    })()`);

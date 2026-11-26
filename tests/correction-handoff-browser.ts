@@ -120,20 +120,11 @@ try{
   // #731/#726 is the earlier frame context, not the stage-chip deletion. Use the current shared Setup.
   await page.evaluate(`document.querySelector('[data-mode="rig"]').click()`);
   await waitForReadiness(page, 'PARTS_NOT_READY', READINESS_DEADLINE_MS, `({ready:!!document.querySelector('[data-part-list] button[data-slot="torso"]')})`);
-  await page.evaluate(`document.querySelector('[data-part-list] button[data-slot="torso"]').click();document.getElementById('zoom-in').click()`);
-  await waitForReadiness(page, 'MESH_ROUTE_TIMEOUT', READINESS_DEADLINE_MS,
-    `({ready:window.rigReviewEditor.mesh.part()==='torso'&&!!window.rigReviewEditor.mesh.configEntry()})`);
-  const selectionAndCamera=`({part:document.querySelector('[data-part-list] button[aria-pressed="true"]')?.dataset.slot,rig:JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig})`;
-  const before=await page.evaluate<any>(`({snapshot:${selectionAndCamera},text:document.getElementById('mesh-panel-state').textContent,buttons:[...document.querySelectorAll('#mesh-panel button')].map(button=>button.textContent)})`);
-  await page.evaluate(`document.querySelector('[data-mode="playback"]').click();document.querySelector('[data-mode="rig"]').click()`);
-  await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
-  const retained=await page.evaluate<any>(selectionAndCamera);
-  if(retained.part!=='torso'||JSON.stringify(retained.rig)!==JSON.stringify(before.snapshot.rig))throw Error('SHARED_SETUP_ANIMATE_PART_OR_CAMERA_CHANGED');
-  receipts.push({lang,before,retained,retention:'current shared Setup/Animate, not removed embedded-frame navigation'});
-  await writeFile(join(artifacts,lang+'-parts.png'),await page.screenshot());
   const exact='Keep the precise words · 색을 유지';
   const madeWords='Adjust the torso contour spacing';
   await page.evaluate(`document.getElementById('stage-comment').click()`);
+  await waitForReadiness(page,'CORRECTION_COMMENT_MODE',READINESS_DEADLINE_MS,
+    `({ready:document.getElementById('rig-viewport').classList.contains('stage-comment-mode'),detail:document.getElementById('stage-comment').title})`);
   for(const [index,words] of [exact,madeWords].entries()){
    const at=await page.evaluate<{x:number;y:number}>(`(() => {
     const r=document.getElementById('rig-viewport').getBoundingClientRect();
@@ -157,8 +148,19 @@ try{
    const rows=document.querySelectorAll('.comment-correction-actions');
    if(rows.length!==2||[...rows].some(row=>row.querySelectorAll('button').length!==1))throw Error('CORRECTION_ACTION_BEFORE_APPLY');
    rows[0].querySelector('button').click();
-   document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+   document.getElementById('stage-comment').click();
   })()`);
+  await page.evaluate(`document.querySelector('[data-part-list] button[data-slot="torso"]').click();document.getElementById('zoom-in').click()`);
+  await waitForReadiness(page, 'MESH_ROUTE_TIMEOUT', READINESS_DEADLINE_MS,
+    `({ready:window.rigReviewEditor.mesh.part()==='torso'&&!!window.rigReviewEditor.mesh.configEntry()})`);
+  const selectionAndCamera=`({part:document.querySelector('[data-part-list] button[aria-pressed="true"]')?.dataset.slot,rig:JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig})`;
+  const before=await page.evaluate<any>(`({snapshot:${selectionAndCamera},text:document.getElementById('mesh-panel-state').textContent,buttons:[...document.querySelectorAll('#mesh-panel button')].map(button=>button.textContent)})`);
+  await page.evaluate(`document.querySelector('[data-mode="playback"]').click();document.querySelector('[data-mode="rig"]').click()`);
+  await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+  const retained=await page.evaluate<any>(selectionAndCamera);
+  if(retained.part!=='torso'||JSON.stringify(retained.rig)!==JSON.stringify(before.snapshot.rig))throw Error('SHARED_SETUP_ANIMATE_PART_OR_CAMERA_CHANGED');
+  receipts.push({lang,before,retained,retention:'current shared Setup/Animate, not removed embedded-frame navigation'});
+  await writeFile(join(artifacts,lang+'-parts.png'),await page.screenshot());
   // Existing parameter editor and public Apply path; identity/gate/patch/source assertions below stay unchanged.
   await page.evaluate(`document.querySelector('[data-block-target="mesh-panel"]').click()`);
   const meshJob = await settleCorrectionMesh(page);
@@ -185,6 +187,7 @@ try{
   const translated=await page.evaluate<string>(`document.querySelector('#correction-controls summary').textContent`);
   if(translated!==(lang==='en'?'Correction handoff':'수정 인계'))throw Error('CORRECTION_SAMPLE_LOCALE '+lang+' '+translated);
   await page.evaluate(`(() => {
+   document.getElementById('stage-comment').click();
    const actions=document.querySelectorAll('.comment-correction-actions')[1]?.querySelectorAll('button');
    if(actions?.length!==2)throw Error('CORRECTION_MADE_ACTION_MISSING');
    actions[1].click();
