@@ -32,7 +32,7 @@ Reviewers now give feedback through comments. Fresh sign-off, checkpoint and int
 * Fresh `checkpoint` asks now refuse with `JOB_ASK_INVALID`, and page `checkpoint` submissions refuse with `JOB_ACT_KIND_DISABLED`. Records show declared pairs without an ask, and packages show the rig screen without the Pass/Fail form. Publications declaring `checkpoint` subjects, finalized historical `checkpoint` acts and records, and standalone `rig-review-session/1` checkpoint outcomes keep their readers, and a committed submission still replays its stored act (#1252, closes #1229).
 * Fresh `interview-picks` asks now refuse with `JOB_ASK_INVALID`, and page `interview-picks` submissions refuse with `JOB_ACT_KIND_DISABLED`. The answer form is removed. Publications that declare picks subjects, finalized historical picks acts and `rig-review/interview-picks@1` files keep their readers, and a committed submission still replays its stored act (#1251, closes #1230).
 * Edit Mesh, chest landmarks and the Answered-by marker ride the comment-only act. `answeredDirectionFeedback` also resolves to an act@10 on an earlier direction post. The mesh editor hint now names Send comments (#1243, closes #1231 and #1245).
-* The development pin on `@rig-c/parts` is 2.59.0 (#1265, refs #1170).
+* The development pin on `@rig-c/parts` is 2.60.0 (#1265 and this release, refs #1170).
 
 ### Fixed
 
