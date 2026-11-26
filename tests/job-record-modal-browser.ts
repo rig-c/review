@@ -14,7 +14,7 @@ import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
 import {parseCommentOnlyAct,parseCommentsAct} from '../src/job-api.ts';
-import {JOB_API_SCHEMA,type JobDisplayAcknowledgment,type JobDisplayReceipt,type JobResult,type PendingAskV3,type UISubmissionV3} from '../src/job-contract.ts';
+import {JOB_API_SCHEMA,type JobDisplayAcknowledgment,type JobDisplayReceipt,type JobResult,type PendingAskV3,type PublicationV3,type UISubmissionV3} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {tr} from '../web/i18n.ts';
@@ -103,8 +103,59 @@ async function waitForMixedDisplay(display:ReturnType<typeof observeMixedDisplay
 }
 const bottomState=`(()=>{const i=document.getElementById('workspace-inspector');return JSON.stringify({hidden:i?.hidden??null,rows:getComputedStyle(document.querySelector('.layout').parentElement).gridTemplateRows,height:Math.round(i?.getBoundingClientRect().height??0),tab:document.querySelector('.block-row [aria-selected=true]')?.dataset.blockTarget??null});})()`;
 const removedAnswerSelector='form.interview'+'-answer';
+const generalCommentButton='#stage-comment-list button[data-comment-general]';
+function observeRecordDisplay(url:string,publicationId:string,sourceHash:string,selector:string){
+ const fetcher=window.fetch.bind(window);
+ let settle!:(failure:string|null)=>void;
+ const ready=new Promise<string|null>(resolve=>{settle=resolve;});
+ Object.assign(window,{__recordCommentsReady715:ready,fetch(input:RequestInfo|URL,init?:RequestInit){
+  const pending=fetcher(input,init);
+  if(typeof input!=='string'||init?.method!=='POST'||typeof init.body!=='string'||new URL(input,location.href).href!==url)return pending;
+  const request=JSON.parse(init.body) as JobDisplayAcknowledgment;
+  if(request.publicationId!==publicationId||request.sourceHash!==sourceHash||!request.pageId)return pending;
+  return pending.then(response=>{
+   if(response.status!==200||response.url!==url)return response;
+   const json=response.json.bind(response);
+   response.json=async()=>{
+    const result=await json() as JobResult<JobDisplayReceipt>;
+    if(result.ok&&result.value.publicationId===publicationId&&result.value.pageId===request.pageId&&result.value.displayedNonce){
+     const original=document.querySelector<HTMLButtonElement>(selector),list=original?.parentElement;
+     if(!original||!list)settle('Add general missing before display receipt');
+     else{
+      let removed=false;
+      const observer=new MutationObserver(records=>{
+       removed ||= records.some(record=>Array.from(record.removedNodes).includes(original));
+      });
+      observer.observe(list,{childList:true});
+      // Yield the real receipt to the app. Its acknowledgment continuations run before the next task.
+      const {port1,port2}=new MessageChannel();
+      port1.onmessage=()=>{
+       observer.disconnect();port1.close();port2.close();
+       const current=document.querySelector<HTMLButtonElement>(selector);
+       settle(!init.signal?.aborted&&removed&&!original.isConnected&&current?.parentElement===list&&!current.disabled
+        ?null:'Add general was not replaced with an enabled button after display receipt');
+      };
+      port2.postMessage(null);
+     }
+    }
+    return result;
+   };
+   return response;
+  });
+ }});
+}
+async function openRecord(url:URL,{publicationId,source:{sourceHash}}:PublicationV3){
+ const args=[new URL('ui/displayed',url).href,publicationId,sourceHash,generalCommentButton];
+ const source=`(${observeRecordDisplay.toString()})(...${JSON.stringify(args)})`;
+ const {identifier}=await command!('Page.addScriptToEvaluateOnNewDocument',{source}) as {identifier:string};
+ try{await page!.goto(url.href);}finally{await command!('Page.removeScriptToEvaluateOnNewDocument',{identifier});}
+}
 async function ensureComment(){if(await page!.evaluate(`document.getElementById('stage-comment')?.getAttribute('aria-pressed')!=='true'`))await click(page!,'#stage-comment');}
-async function addGeneral(text:string){await click(page!,'[data-comment-general]');await wait(`!!document.querySelector('.stage-comment-composer input')`,'general composer');await page!.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(text)};f.requestSubmit();})()`);await wait(`!document.querySelector('.stage-comment-composer')`,'general saved');}
+async function addGeneral(text:string){
+ const failure=await withDeadline('715 record Comments list finalized',20_000,()=>page!.evaluate<string|null>('window.__recordCommentsReady715'));
+ assert.equal(failure,null,'record Comments ready after the exact display acknowledgment');
+ await click(page!,generalCommentButton);await wait(`!!document.querySelector('.stage-comment-composer input')`,'general composer');await page!.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(text)};f.requestSubmit();})()`);await wait(`!document.querySelector('.stage-comment-composer')`,'general saved');
+}
 type RecordScreenState={
  open:boolean;workspaceReady?:string;dialogState:{id:string;open:boolean}[];language:string;capabilityState:string;
  sendCommentsVisible:boolean;backdropMessage:string;visibleText:string;width:number;height:number;
@@ -169,7 +220,7 @@ try{
   fixture.fake.pending({askId:'ask-signoff',publicationId:fixture.display.publication.publicationId,source:fixture.display.publication.source,subject:{kind:'signoff',stage:'plan-approved'},status:'pending'},fixture.display.publication.generation);
   const before=await jobInputHashes(fixture.root),catalog=language==='en'?enCatalog:koCatalog;
   try{
-   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href);
+   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await openRecord(url,fixture.display.publication);
    if(picture){
     await wait(`globalThis.__access756==='pending'`,'capability result held');
     const pending:{state:string;text:string}=await page.evaluate<{state:string;text:string}>(`({state:globalThis.__access756,text:document.body.innerText})`);
@@ -300,7 +351,7 @@ try{
   const fixture=await recordScreenFixture('option-set',picture),out=join(output,'readonly-link',picture===true?'rig':'parts',language);await mkdir(out,{recursive:true});
   try{
    const url=new URL(fixture.ownerUrl);url.hash='';url.searchParams.set('lang',language);const before=await jobInputHashes(fixture.root);
-   await page.goto(url.href);await wait(`globalThis.__access756==='pending'`,'copied link pending access');
+   await openRecord(url,fixture.display.publication);await wait(`globalThis.__access756==='pending'`,'copied link pending access');
    const pending:{state:string;text:string}=await page.evaluate<{state:string;text:string}>(`({state:globalThis.__access756,text:document.body.innerText})`);
    for(const catalog of [enCatalog,koCatalog])assert.equal(pending.text.includes(catalog['Read-only view: reopen with rig-review open to edit.']),false);
    await shot(out,'pending');await page.evaluate(`globalThis.__releaseAccess756()`);
