@@ -22,7 +22,9 @@ const arg=(key:string)=>{const at=Bun.argv.indexOf(key);return at<0?undefined:Bu
 const restsOnQuestions=Bun.argv.includes('--rests-on-questions');
 const modalPreload=Bun.argv.includes('--modal-preload');
 const holdMixedDisplayed=Bun.argv.includes('--hold-mixed-displayed');
-const output=resolve(arg('--out')??'artifacts/715');await mkdir(output,{recursive:true});
+const plain715=Bun.argv.includes('--plain-715');
+const heldRecordOnly=Bun.argv.includes('--held-record-receipt');
+const output=resolve(arg('--out')??(heldRecordOnly?'.captures/1260':'artifacts/715'));await mkdir(output,{recursive:true});
 if(Bun.argv.includes('--serve')){
  const kinds=(arg('--kind')?[arg('--kind')]:['checkpoint']) as RecordScreenKind[];
  const fixtures=[];
@@ -156,6 +158,183 @@ async function addGeneral(text:string){
  assert.equal(failure,null,'record Comments ready after the exact display acknowledgment');
  await click(page!,generalCommentButton);await wait(`!!document.querySelector('.stage-comment-composer input')`,'general composer');await page!.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(text)};f.requestSubmit();})()`);await wait(`!document.querySelector('.stage-comment-composer')`,'general saved');
 }
+
+const composerSelector='.stage-comment-composer';
+const commentRows=`[...document.querySelectorAll('#stage-comment-list [data-comment-id]')].map(row=>({id:row.dataset.commentId,text:row.querySelector('.stage-comment-summary').textContent}))`;
+function watchOpenComposer(selector:string,generalButton:string){
+ const form=document.querySelector<HTMLFormElement>(selector)!;
+ const field=form.querySelector<HTMLInputElement>('input')!;
+ const list=document.getElementById('stage-comment-list')!;
+ const pane=form.parentElement;
+ const rowSelector=':scope > :is([data-comment-id], p)';
+ const add=document.querySelector(generalButton);
+ const row=list.querySelector(rowSelector);
+ const tracked=new Set<Node>([field,form]);
+ for(let ancestor=pane;ancestor;ancestor=ancestor.parentElement)tracked.add(ancestor);
+ let removals=0,focusLosses=0,trustedInputs=0;
+ const observe=(records:MutationRecord[])=>{
+  for(const {removedNodes} of records)for(const node of Array.from(removedNodes))if(tracked.has(node))removals++;
+ };
+ // Observe ancestors too. Comparing connected nodes only before and after would miss a remove/reinsert.
+ const observer=new MutationObserver(observe);
+ observer.observe(document,{childList:true,subtree:true});
+ field.addEventListener('blur',()=>focusLosses++);
+ field.addEventListener('input',event=>{if(event.isTrusted)trustedInputs++;});
+ return ()=>{
+  observe(observer.takeRecords());
+  return {sameForm:document.querySelector(selector)===form,sameField:form.querySelector('input')===field,
+   connected:form.isConnected&&field.isConnected,location:form.parentElement?.id,focused:document.activeElement===field,
+   editable:!field.readOnly&&!field.disabled,text:field.value,selection:[field.selectionStart,field.selectionEnd],
+   removals,focusLosses,trustedInputs,listRefreshed:!!add&&!add.isConnected&&!!row&&!row.isConnected&&
+    !!document.querySelector(generalButton)&&!!list.querySelector(rowSelector)};
+ };
+}
+type ComposerState=ReturnType<ReturnType<typeof watchOpenComposer>>;
+const composerState=()=>page!.evaluate<ComposerState>('window.__receiptComposer1260()');
+
+function holdRecordReceipt(fixture:Awaited<ReturnType<typeof recordScreenFixture>>){
+ const {publication}=fixture.display,acknowledge=fixture.ports.ackDisplayed;
+ let capture!:(value:{result:JobResult<JobDisplayReceipt>;request:JobDisplayAcknowledgment;authorized:boolean})=>void;
+ let release!:()=>void;
+ const held=new Promise<Parameters<typeof capture>[0]>(resolve=>{capture=resolve;});
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ fixture.ports.ackDisplayed=async(jobId,request)=>{
+  const body=await request.clone().json() as JobDisplayAcknowledgment;
+  const result=await acknowledge(jobId,request);
+  if(body.publicationId===publication.publicationId&&body.sourceHash===publication.source.sourceHash){
+   capture({result,request:body,authorized:request.headers.has('X-Review-Capability')});
+   await gate;
+  }
+  return result;
+ };
+ return {held,release,restore(){fixture.ports.ackDisplayed=acknowledge;release();}};
+}
+
+async function pressComposerKey(key:'ArrowLeft'|'Enter'|'Escape'){
+ const windowsVirtualKeyCode={ArrowLeft:37,Enter:13,Escape:27}[key];
+ for(const type of ['keyDown','keyUp'])await command!('Input.dispatchKeyEvent',{
+  type,key,code:key,windowsVirtualKeyCode,...(key==='Enter'&&type==='keyDown'?{text:'\r'}:{}),
+ });
+}
+
+async function recordComposerReceiptCase(language:'en'|'ko'){
+ const out=join(output,'held-record-receipt',language);
+ await mkdir(out,{recursive:true});
+ const fixture=await recordScreenFixture('checkpoint',true,out);
+ const trace:Record<string,unknown>={language};
+ const text=language==='en'?'Keep this exact draft · EN':'이 댓글을 그대로 남겨요 · KO';
+ const catalog=language==='en'?enCatalog:koCatalog;
+ const {publicationId,source:{sourceHash}}=fixture.display.publication;
+ const rows=()=>page!.evaluate<{id:string;text:string}[]>(commentRows);
+ const actPostCount=()=>actTransport.filter(row=>row.path===`/jobs/${fixture.session.jobId}/ui/acts`).length;
+ const evidence=()=>writeFile(join(out,'observations.json'),JSON.stringify(trace,null,2)+'\n');
+ async function refreshWithComposer(owner:boolean,draft:string){
+  const mode=owner?'pinned':'copied',url=new URL(fixture.ownerUrl);
+  url.searchParams.set('lang',language);
+  if(!owner)url.hash='';
+  const hold=holdRecordReceipt(fixture);
+  try{
+   await page!.goto(url.href);
+   await wait(`globalThis.__access756==='pending'`,`${mode} rig access`);
+   await page!.evaluate(`globalThis.__releaseAccess756()`);
+   const {result,request,authorized}=await withDeadline(`1260 ${mode} held displayed receipt`,20_000,()=>hold.held);
+   assert.equal(authorized,owner);
+   assert.ok(result.ok&&request.pageId&&result.value.pageId===request.pageId&&
+    result.value.publicationId===publicationId&&result.value.displayedNonce,'receipt for exact displayed record and page');
+   await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')`,`${mode} rig mounted`);
+   assert.equal(await page!.evaluate('document.documentElement.lang'),language);
+   if(!owner)assert.equal(await page!.evaluate(`document.getElementById('message')?.textContent`),catalog['Read-only view: reopen with rig-review open to edit.']);
+   await ensureComment();
+   const target=owner?'#rig-viewport.stage-comment-mode':generalCommentButton;
+   await wait(`document.querySelector(${JSON.stringify(target)})?.checkVisibility()`,`${mode} composer opener`);
+   await click(page!,target);
+   await wait(`!!document.querySelector('${composerSelector} input')`,`${mode} composer opened with receipt held`);
+   await page!.evaluate(`void (window.__receiptComposer1260=(${watchOpenComposer.toString()})(${JSON.stringify(composerSelector)},${JSON.stringify(generalCommentButton)}))`);
+   await command!('Input.insertText',{text:draft});
+   await pressComposerKey('ArrowLeft');
+   const before=await composerState(),beforeRows=await rows();
+   const phase={receiptHeldAtOpen:true,authorized,before,beforeRows,after:undefined as ComposerState|undefined,afterRows:undefined as typeof beforeRows|undefined};
+   trace[mode]=phase;
+   const expected={sameForm:true,sameField:true,connected:true,location:owner?'rig-viewport':'stage-comment-list',
+    focused:true,editable:true,text:draft,selection:[draft.length-1,draft.length-1],removals:0,focusLosses:0,trustedInputs:1,listRefreshed:false};
+   assert.deepEqual(before,expected,`${mode} trusted typing and interior caret before receipt release`);
+   assert.equal(beforeRows.length,owner?1:0);
+   assert.equal(actPostCount(),0);
+   await shot(out,`${mode}-held`);
+   hold.release();
+   await wait(`window.__receiptComposer1260().listRefreshed`,`${mode} receipt refreshed neighboring list rows`);
+   phase.after=await composerState();
+   phase.afterRows=await rows();
+   assert.deepEqual(phase.after,{...expected,listRefreshed:true},`${mode} composer survives the receipt refresh without losing focus, caret or draft`);
+   assert.deepEqual(phase.afterRows,beforeRows,`${mode} refresh preserves the comment rows`);
+   await shot(out,`${mode}-refreshed`);
+   return result.value;
+  }finally{hold.restore();}
+ }
+
+ try{
+  // Replay only the active publication. The retained backdrop is still available by ID, and no pending event can race the receipt refresh.
+  const recordEvent=fixture.fake.events.find(event=>event.type==='published'&&event.publication.publicationId===publicationId);
+  assert.ok(recordEvent);
+  fixture.fake.events.splice(0,fixture.fake.events.length,recordEvent);
+  const before=await jobInputHashes(fixture.root);
+  const copiedReceipt=await refreshWithComposer(false,text);
+  await pressComposerKey('Enter');
+  await wait(`!document.querySelector('${composerSelector}')`, '1260 copied general saved locally');
+  const localRows=await rows(),row=localRows[0];
+  assert.ok(row?.id);
+  assert.deepEqual(localRows,[{id:row.id,text:`1 · ${catalog['General comment']} · ${text}`}]);
+  const drafts=await page!.evaluate<{publicationId:string;sourceHash:string;comments:unknown[]}[]>(
+   `Object.entries(localStorage).filter(([key])=>key.startsWith('rig-review-record-comments/1:')).map(([,value])=>JSON.parse(value))`);
+  assert.equal(drafts.length,1);
+  assert.equal(drafts[0]!.publicationId,publicationId);
+  assert.equal(drafts[0]!.sourceHash,sourceHash);
+  assert.deepEqual(drafts[0]!.comments,[{id:row.id,summary:text}]);
+  assert.equal(await page!.evaluate(`document.getElementById('send-comments')?.disabled`),true,'copied link keeps Send comments disabled');
+  const copiedPosts=actPostCount();
+  assert.equal(copiedPosts,0);
+  assert.equal(fixture.submissions.length,0);
+  trace.copiedSave={localDraftRows:drafts[0]!.comments,actPosts:copiedPosts,sendDisabled:true};
+  await shot(out,'copied-local-draft');
+
+  await page!.goto('about:blank');
+  const ownerReceipt=await refreshWithComposer(true,'Unsent pin · '+language);
+  assert.notEqual(ownerReceipt.pageId,copiedReceipt.pageId);
+  assert.deepEqual(await rows(),localRows,'the owner opens the same source-bound general draft');
+  // This viewport shows the prior rig. Its pins bind to the prior rig source, while the act binds to the plan.
+  await pressComposerKey('Escape');
+  await wait(`!document.querySelector('${composerSelector}')`, '1260 owner pin dismissed');
+  await click(page!,'#send-comments');
+  await wait(`document.getElementById('review-draft-state')?.dataset.saveState==='saved'`, '1260 owner sent comments');
+  assert.equal(await page!.evaluate(`document.getElementById('send-comments')?.disabled`),true,'submitted row cannot be sent again');
+  const ownerPosts=actPostCount();
+  assert.equal(ownerPosts,1);
+  assert.equal(fixture.submissions.length,1);
+  const submission=fixture.submissions[0]!;
+  assert.equal(submission.kind,'comments');
+  assert.equal(submission.publicationId,publicationId);
+  assert.equal(submission.pageId,ownerReceipt.pageId);
+  assert.equal(submission.displayedNonce,ownerReceipt.displayedNonce);
+  assert.deepEqual(submission.value,{comments:[{text}]});
+  assert.equal(fixture.files.length,1);
+  const act=parseCommentOnlyAct(JSON.parse(await readFile(fixture.files[0]!,'utf8')));
+  assert.equal(act.publicationId,publicationId);
+  assert.equal(act.source.sourceHash,sourceHash);
+  assert.deepEqual(act.value,{comments:[{text}]});
+  assert.deepEqual(await jobInputHashes(fixture.root),before);
+  trace.ownerSend={actPosts:ownerPosts,comments:act.value.comments,receiptBound:true,sourceImmutable:true};
+  await shot(out,'owner-submitted');
+  await evidence();
+  cases.push({kind:'held-record-receipt',...trace});
+  console.log(`1260_RECORD_COMPOSER_PASS ${language} copiedDrafts=1 copiedActs=0 pinnedRetained=true ownerActs=1`);
+ }catch(error){
+  trace.error=String(error);
+  if(!trace.copiedSave||!trace.ownerSend)trace.composer=await composerState().catch(()=>null);
+  await evidence();
+  await shot(out,'failure');
+  throw error;
+ }finally{try{await page!.goto('about:blank');}finally{await fixture.close();}}
+}
 type RecordScreenState={
  open:boolean;workspaceReady?:string;dialogState:{id:string;open:boolean}[];language:string;capabilityState:string;
  sendCommentsVisible:boolean;backdropMessage:string;visibleText:string;width:number;height:number;
@@ -204,6 +383,7 @@ try{
  await command!('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{const all=Promise.all;Promise.all=function(values){return all.call(this,values).then(rows=>{if(rows.length===2&&rows.some(row=>row&&typeof row==='object'&&'capabilityRequired' in row)){globalThis.__access756='pending';return new Promise(resolve=>{globalThis.__releaseAccess756=()=>{globalThis.__access756='resolved';resolve(rows);};});}return rows;});};})();`});
  await page.setViewport(1600,1000);
  const boundary=Bun.argv.includes('--parts-only'),sample=Bun.argv.includes('--sample'),kinds:RecordScreenKind[]=modalPreload?[]:['checkpoint'];
+ if(!heldRecordOnly){
  const planOptions=restsOnQuestions?{
   text:{does:'Assemble post scene',produces:'Post composition pass',bar:'Matches declared timing and framing',rests_on:['post_timing','rig_type','bones_guide','step_weights','unknown_question_id']},
   interview:{
@@ -364,6 +544,10 @@ try{
    assert.equal(fixture.submissions.length,0);assert.deepEqual(await jobInputHashes(fixture.root),before);
    await shot(out,'resolved');const result={kind:'readonly-link',picture,language,pending,resolved,sourceImmutable:true,submissions:fixture.submissions.length};cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('756_READONLY_LINK_PASS '+picture+' '+language);
   }catch(error){await shot(out,'failure');throw error;}finally{await page.goto('about:blank');await fixture.close();}
+ }
+ }
+ if(heldRecordOnly||!plain715&&!boundary&&!sample&&!restsOnQuestions&&!modalPreload&&!holdMixedDisplayed){
+  for(const language of ['en','ko'] as const)await recordComposerReceiptCase(language);
  }
  assert.equal(errors.length,0,JSON.stringify(errors));await writeFile(join(output,'result.json'),JSON.stringify({cases:cases.length,viewport:[1600,1000],errors,sample,results:cases},null,2)+'\n');console.log('715_BROWSER_PASS cases='+cases.length);
 }catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),errors,cases},null,2)+'\n');if(page)await shot(output,'failure');throw error;}

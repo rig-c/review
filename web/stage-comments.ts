@@ -263,42 +263,73 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   setCapture(layers.size>0);for(const view of layers.keys())poseFor(view);
  };
  const openComment=async(f:Row)=>{const mark=readMark(f);if(!mark){if(host.general?.matches(f))openComposer(null,{x:0,y:0,width:0,height:0},f);return;}if(list.hidden)setOpen(true);if(list.hidden)return;if(await jump(f)){const reason=updateRefusal();setCapture(!reason&&!host.blocked());const pose=poseFor(mark.viewport),picture=host.codec?null:host.picture?.(mark as StageComment),screen=pose&&(host.codec?.geometry||picture&&typeof picture==='object')?region(projectMark(mark.world,pose.camera),projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera)):mark.screen;openComposer(mark.viewport,screen,f,pose?.mode??mark.mode);}};
- const renderList=()=>{placeList();list.setAttribute('aria-label',t('Comments'));list.replaceChildren();const title=document.createElement('strong');title.textContent=t('Comments');list.append(title);const rawReason=host.refusal?.()??null,reason=rawReason?t(rawReason):null;if(reason){const note=document.createElement('small');note.className='stage-comment-refusal-note';note.title=reason;note.textContent=reason;Object.assign(note.style,{display:'block',marginTop:'4px',maxWidth:'100%',whiteSpace:inline?'normal':'nowrap',overflow:'hidden',textOverflow:'ellipsis'});list.append(note);}if(host.general&&host.general.available?.()!==false){const add=document.createElement('button');add.type='button';add.textContent=t('Add general comment');add.dataset.commentGeneral='';add.onclick=()=>openComposer(null,{x:0,y:0,width:0,height:0});list.append(add);}const all=host.feedback().filter(f=>readMark(f)||host.general?.matches(f));if(host.general?.rows)all.push(...host.general.rows);toggle.textContent=t(host.busy?.()?'Comment · C ({0}) · Rendering':'Comment · C ({0})').replace('{0}',String(all.length));if(!all.length){
-  const empty=document.createElement('p');
-  const canPin=!reason&&layers.size>0&&host.hasPicture?.()!==false;
-  empty.textContent=t(inline
-   ? (canPin?'Comment · C → click the image to pin':'No comments yet.')
-   : (reason?'Read only · Escape closes':'Mark a point or region, then type. Enter saves · Escape cancels.'));
-  list.append(empty);
- }
- for(const feedback of host.answeredDirectionFeedback??[])for(const comment of feedback.comments){
-  const row=commentItem();
-  row.classList.add('stage-comment-answered');
-  row.setAttribute('translate','no');
-  const kind=document.createElement('span');
-  kind.textContent=`${t(comment.kind==='general'?'General comment':'Stage comments')} · v${feedback.postVersion}`;
-  const body=document.createElement('div');
-  body.textContent=comment.text;
-  const status=document.createElement('span');
-  status.textContent=t('Answered by v{0}').replace('{0}',String(feedback.answeredByPostVersion));
-  row.append(kind,body,status);
-  list.append(row);
- }
- for(const [i,f]of all.entries()){
-  const mark=readMark(f),row=commentItem();row.dataset.commentId=f.id;
-  const picture=mark&&!host.codec?host.picture?.(mark as StageComment)??null:null;
-  const [timing,frameReason]=mark&&!host.codec&&!picture&&!mark.frame?feedbackTimingLabel(f as unknown as Feedback).split(' · '):[];
-  const rigFeedback=!host.codec&&host.rigAnchor&&mark?.viewport==='rig'&&'target' in f?f as unknown as Feedback:null;
-  const place=picture?t(mark!.world.width>0||mark!.world.height>0?'Region':'Point'):'';
-  const picturePlace=typeof picture==='string'?`${picture} · ${place}`:picture?place+t(' on {0}').replace('{0}',picture.name):null;
-  const go=document.createElement('button');go.type='button';go.className='stage-comment-summary';if(frameReason)go.title=t(frameReason);
-  const frameLabel=rigFeedback?rigCommentLabel(rigFeedback,mark?.frame??null,t(timing??'')):mark?.frame?t(`F${mark.frame.index} (${mark.frame.basis})`):t(timing??'');
-  go.textContent=!mark?`${i+1} · ${t('General comment')} · ${f.summary}`:host.codec?`${i+1} · ${host.codec.label(f,mark)}`:picture?`${i+1} · ${picturePlace} · ${f.summary}`:`${i+1} · ${t(commentLabels[mark.mode]??mark.mode)} · ${t(commentLabels[mark.viewport]??mark.viewport)} · ${frameLabel} · ${f.summary}${frameReason?` · ${t('Frame unavailable')}`:''}`;
-  go.onclick=()=>openComment(f);row.append(go);
-  if(host.locked(f.id)){const submitted=document.createElement('span');submitted.textContent=t('Submitted');row.append(submitted);}
-  list.append(row);
-  host.renderRow?.(f,row);
- }};
+ const renderList=()=>{
+  placeList();
+  list.setAttribute('aria-label',t('Comments'));
+  // Refresh the rows in place so a list-hosted composer never loses focus or selection.
+  const retained=composer?.parentElement===list?composer:null;
+  if(retained){
+   for(const child of Array.from(list.children)){
+    if(child!==retained)child.remove();
+   }
+  }else{
+   list.replaceChildren();
+  }
+  const append=(node:HTMLElement)=>retained?retained.before(node):list.append(node);
+  const title=document.createElement('strong');
+  title.textContent=t('Comments');
+  append(title);
+  const rawReason=host.refusal?.()??null,reason=rawReason?t(rawReason):null;
+  if(reason){
+   const note=document.createElement('small');note.className='stage-comment-refusal-note';note.title=reason;note.textContent=reason;
+   Object.assign(note.style,{display:'block',marginTop:'4px',maxWidth:'100%',whiteSpace:inline?'normal':'nowrap',overflow:'hidden',textOverflow:'ellipsis'});
+   append(note);
+  }
+  if(host.general&&host.general.available?.()!==false){
+   const add=document.createElement('button');add.type='button';add.textContent=t('Add general comment');add.dataset.commentGeneral='';
+   add.onclick=()=>openComposer(null,{x:0,y:0,width:0,height:0});
+   append(add);
+  }
+  const all=host.feedback().filter(f=>readMark(f)||host.general?.matches(f));
+  if(host.general?.rows)all.push(...host.general.rows);
+  toggle.textContent=t(host.busy?.()?'Comment · C ({0}) · Rendering':'Comment · C ({0})').replace('{0}',String(all.length));
+  if(!all.length){
+   const empty=document.createElement('p');
+   const canPin=!reason&&layers.size>0&&host.hasPicture?.()!==false;
+   empty.textContent=t(inline
+    ? (canPin?'Comment · C → click the image to pin':'No comments yet.')
+    : (reason?'Read only · Escape closes':'Mark a point or region, then type. Enter saves · Escape cancels.'));
+   append(empty);
+  }
+  for(const feedback of host.answeredDirectionFeedback??[])for(const comment of feedback.comments){
+   const row=commentItem();
+   row.classList.add('stage-comment-answered');
+   row.setAttribute('translate','no');
+   const kind=document.createElement('span');
+   kind.textContent=`${t(comment.kind==='general'?'General comment':'Stage comments')} · v${feedback.postVersion}`;
+   const body=document.createElement('div');
+   body.textContent=comment.text;
+   const status=document.createElement('span');
+   status.textContent=t('Answered by v{0}').replace('{0}',String(feedback.answeredByPostVersion));
+   row.append(kind,body,status);
+   append(row);
+  }
+  for(const [i,f]of all.entries()){
+   const mark=readMark(f),row=commentItem();row.dataset.commentId=f.id;
+   const picture=mark&&!host.codec?host.picture?.(mark as StageComment)??null:null;
+   const [timing,frameReason]=mark&&!host.codec&&!picture&&!mark.frame?feedbackTimingLabel(f as unknown as Feedback).split(' · '):[];
+   const rigFeedback=!host.codec&&host.rigAnchor&&mark?.viewport==='rig'&&'target' in f?f as unknown as Feedback:null;
+   const place=picture?t(mark!.world.width>0||mark!.world.height>0?'Region':'Point'):'';
+   const picturePlace=typeof picture==='string'?`${picture} · ${place}`:picture?place+t(' on {0}').replace('{0}',picture.name):null;
+   const go=document.createElement('button');go.type='button';go.className='stage-comment-summary';if(frameReason)go.title=t(frameReason);
+   const frameLabel=rigFeedback?rigCommentLabel(rigFeedback,mark?.frame??null,t(timing??'')):mark?.frame?t(`F${mark.frame.index} (${mark.frame.basis})`):t(timing??'');
+   go.textContent=!mark?`${i+1} · ${t('General comment')} · ${f.summary}`:host.codec?`${i+1} · ${host.codec.label(f,mark)}`:picture?`${i+1} · ${picturePlace} · ${f.summary}`:`${i+1} · ${t(commentLabels[mark.mode]??mark.mode)} · ${t(commentLabels[mark.viewport]??mark.viewport)} · ${frameLabel} · ${f.summary}${frameReason?` · ${t('Frame unavailable')}`:''}`;
+   go.onclick=()=>openComment(f);row.append(go);
+   if(host.locked(f.id)){const submitted=document.createElement('span');submitted.textContent=t('Submitted');row.append(submitted);}
+   append(row);
+   host.renderRow?.(f,row);
+  }
+ };
  const refresh=()=>{last='';renderList();renderPins();};
  const openComposer=(view:StageComment['viewport']|null,screen:MarkRegion,existing?:Row,placementMode=view?poseFor(view)?.mode:undefined)=>{
   if(view&&!available(view))return;
