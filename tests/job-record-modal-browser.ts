@@ -9,16 +9,19 @@ import {tmpdir} from 'node:os';
 import {recordScreenFixture,type RecordScreenKind} from './helpers/job-record-screen-fixture.ts';
 import {realJobWindowFixture,scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
-import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
+import {launchCdpSession,type CdpPageEvent,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {withDeadline} from './helpers/walk-deadline.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
 import {parseCommentOnlyAct,parseCommentsAct} from '../src/job-api.ts';
-import {JOB_API_SCHEMA,type PendingAskV3} from '../src/job-contract.ts';
+import {JOB_API_SCHEMA,type JobDisplayAcknowledgment,type JobDisplayReceipt,type JobResult,type PendingAskV3,type UISubmissionV3} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
+import {tr} from '../web/i18n.ts';
 const arg=(key:string)=>{const at=Bun.argv.indexOf(key);return at<0?undefined:Bun.argv[at+1];};
 const restsOnQuestions=Bun.argv.includes('--rests-on-questions');
 const modalPreload=Bun.argv.includes('--modal-preload');
+const holdMixedDisplayed=Bun.argv.includes('--hold-mixed-displayed');
 const output=resolve(arg('--out')??'artifacts/715');await mkdir(output,{recursive:true});
 if(Bun.argv.includes('--serve')){
  const kinds=(arg('--kind')?[arg('--kind')]:['checkpoint']) as RecordScreenKind[];
@@ -32,6 +35,72 @@ const errors:unknown[]=[],cases:unknown[]=[],commentPosts:string[]=[],actTranspo
 const dialogViewer='dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,#zoom-in,#zoom-out,#fit,#native-one,#view-menu)';
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(25);}throw new Error('715_WAIT '+label);}
 async function shot(out:string,name:string){await writeFile(join(out,name+'.png'),await page!.screenshot());}
+type ObservedPost={id:string;postData?:string;networkId?:string};
+function observeMixedDisplay(owner:URL){
+ const url=new URL('ui/displayed',owner).href,actUrl=new URL('ui/acts',owner).href;
+ let onHeld!:(post:ObservedPost)=>void,onFinished!:(failure?:string)=>void;
+ const held=new Promise<ObservedPost>(resolve=>{onHeld=resolve;});
+ const finished=new Promise<string|undefined>(resolve=>{onFinished=resolve;});
+ const requests:ObservedPost[]=[],acts:ObservedPost[]=[];
+ let status:number|undefined;
+ return {url,held,finished,requests,acts,get status(){return status;},observe({method,params}:CdpPageEvent){
+  if(!params)return;
+  const id=String(params.requestId),request=params.request as {method:string;url:string;postData?:string}|undefined;
+  if(request?.method==='POST'){
+   const post={id,postData:request.postData};
+   if(method==='Fetch.requestPaused'&&request.url===url)onHeld({...post,networkId:params.networkId as string|undefined});
+   if(method==='Network.requestWillBeSent'){
+    if(request.url===url)requests.push(post);
+    if(request.url===actUrl)acts.push(post);
+   }
+  }
+  if(id!==requests[0]?.id)return;
+  if(method==='Network.responseReceived')status=(params.response as {status:number}).status;
+  if(method==='Network.loadingFinished')onFinished();
+  if(method==='Network.loadingFailed')onFinished(String(params.errorText));
+ }};
+}
+let mixedDisplay:ReturnType<typeof observeMixedDisplay>|undefined;
+async function postData<T>(post:ObservedPost):Promise<T>{
+ const body=post.postData??(await command!('Network.getRequestPostData',{requestId:post.networkId??post.id}) as {postData:string}).postData;
+ return JSON.parse(body) as T;
+}
+type SaveClicks={ready:boolean;earlyClicks:number;trustedSaveClicks:number};
+type HeldDisplay=SaveClicks&{acts:number;actPosts:number;labelDisplayed:boolean};
+const saveClicks='globalThis.__mixedSaveClicks';
+const countSaveClicks=`(()=>{
+ const counts=${saveClicks}={ready:false,earlyClicks:0,trustedSaveClicks:0};
+ document.addEventListener('click',event=>{
+  const save=document.getElementById('save');
+  if(!event.isTrusted||!save||!event.composedPath().includes(save))return;
+  counts.trustedSaveClicks++;
+  if(!counts.ready)counts.earlyClicks++;
+ },true);
+})()`;
+async function waitForMixedDisplay(display:ReturnType<typeof observeMixedDisplay>,
+ expected:Pick<JobDisplayAcknowledgment,'publicationId'|'sourceHash'>,label:string):Promise<JobDisplayReceipt>{
+ const failure=await withDeadline('715 mixed displayed response',20_000,()=>display.finished);
+ assert.equal(failure,undefined,'displayed response finished');
+ assert.equal(display.status,200,'displayed response succeeded');
+ assert.equal(display.requests.length,1,'one displayed POST for the active publication');
+ const post=display.requests[0]!;
+ const request=await postData<JobDisplayAcknowledgment>(post);
+ assert.ok(request?.publicationId===expected.publicationId&&request.sourceHash===expected.sourceHash&&request.pageId,
+  'displayed POST identifies the active publication, source and page');
+ const {body,base64Encoded}=await command!('Network.getResponseBody',{requestId:post.id}) as {body:string;base64Encoded:boolean};
+ const result=JSON.parse(base64Encoded?Buffer.from(body,'base64').toString('utf8'):body) as JobResult<JobDisplayReceipt>;
+ assert.ok(result.ok&&result.value.publicationId===expected.publicationId&&result.value.pageId===request.pageId&&result.value.displayedNonce,
+  'displayed response carries the exact publication and page receipt');
+ // The fresh mixed screen emits this footer label from changed() after installing the receipt and clearing preparing.
+ await page!.evaluate(`new Promise(resolve=>{
+  const node=document.getElementById('message');
+  if(!node)throw new Error('715 mixed display status missing');
+  const observer=new MutationObserver(check);
+  function check(){if(node.textContent!==${JSON.stringify(label)})return;observer.disconnect();${saveClicks}.ready=true;resolve(true);}
+  observer.observe(node,{childList:true,characterData:true,subtree:true});check();
+ })`);
+ return result.value;
+}
 const bottomState=`(()=>{const i=document.getElementById('workspace-inspector');return JSON.stringify({hidden:i?.hidden??null,rows:getComputedStyle(document.querySelector('.layout').parentElement).gridTemplateRows,height:Math.round(i?.getBoundingClientRect().height??0),tab:document.querySelector('.block-row [aria-selected=true]')?.dataset.blockTarget??null});})()`;
 const removedAnswerSelector='form.interview'+'-answer';
 async function ensureComment(){if(await page!.evaluate(`document.getElementById('stage-comment')?.getAttribute('aria-pressed')!=='true'`))await click(page!,'#stage-comment');}
@@ -78,7 +147,7 @@ async function screen(out:string,fixture?:Awaited<ReturnType<typeof recordScreen
  await shot(out,'modal');return state;
 }
 try{
- page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Network.responseReceived'){const row=visualRequests.find(row=>row.id===event.params?.requestId);if(row)row.status=(event.params!.response as {status:number}).status;}if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request?.method==='GET')visualRequests.push({id:String(event.params!.requestId),path:new URL(request.url).pathname});}if(event.method==='Runtime.exceptionThrown')errors.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request?.method==='POST'){const path=new URL(request.url).pathname;if(path.endsWith('/comment'))commentPosts.push(request.url);if(path.endsWith('/ui/acts'))actTransport.push({method:request.method,path});}}}});await command!('Network.enable');
+ page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;mixedDisplay?.observe(event);if(event.method==='Network.responseReceived'){const row=visualRequests.find(row=>row.id===event.params?.requestId);if(row)row.status=(event.params!.response as {status:number}).status;}if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request?.method==='GET')visualRequests.push({id:String(event.params!.requestId),path:new URL(request.url).pathname});}if(event.method==='Runtime.exceptionThrown')errors.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request?.method==='POST'){const path=new URL(request.url).pathname;if(path.endsWith('/comment'))commentPosts.push(request.url);if(path.endsWith('/ui/acts'))actTransport.push({method:request.method,path});}}}});await command!('Network.enable');
  // Hold the exact access result at the existing main-screen bootstrap boundary. Host reads normally
  // resolve in memory, so a network-only delay would never exercise this capability-pending state.
  await command!('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{const all=Promise.all;Promise.all=function(values){return all.call(this,values).then(rows=>{if(rows.length===2&&rows.some(row=>row&&typeof row==='object'&&'capabilityRequired' in row)){globalThis.__access756='pending';return new Promise(resolve=>{globalThis.__releaseAccess756=()=>{globalThis.__access756='resolved';resolve(rows);};});}return rows;});};})();`});
@@ -143,6 +212,7 @@ try{
  }
  if(!sample&&!restsOnQuestions)for(const parts of boundary?[true]:[false,true])for(const language of ['en','ko'] as const){
   const fixture=parts?await scriptedJobWindowFixture({c5Parts:'mesh'}):await realJobWindowFixture(),out=join(output,parts?'mixed-parts':'mixed',language);await mkdir(out,{recursive:true});
+  let intercepting=false;
   try{
    const publication=parts?await (fixture as Awaited<ReturnType<typeof scriptedJobWindowFixture>>).publish('parts'):await (fixture as Awaited<ReturnType<typeof realJobWindowFixture>>).publish(),asks:PendingAskV3[]=[];
    const verdictSubject=parts?{kind:'parts-verdict',draftId:'synthetic-parts'} as const:{kind:'review-verdict',stage:'rig-review'} as const;
@@ -152,7 +222,20 @@ try{
     const refused=await (await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'ask',expectedGeneration:fixture.host.session.status().generation,idempotencyKey:randomUUID(),publicationId:publication.publicationId,subject:retiredSubject})).json();
     assert.equal(refused.ok,false,JSON.stringify(refused));assert.equal(refused.error.code,'JOB_ASK_INVALID');
    }
-   const before=await jobInputHashes(fixture.input.root),url=new URL(fixture.host.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href);await wait(`globalThis.__access756==='pending'`,'mixed capability');await page.evaluate(`globalThis.__releaseAccess756()`);await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#stage-comment-list')&&!!document.querySelector(${parts?"'#parts-canvas'":"'#rig-root canvas'"})&&!document.querySelector('#save').disabled&&document.querySelector('#workspace-pending-ask').hidden`,'mixed ready');
+   const before=await jobInputHashes(fixture.input.root),url=new URL(fixture.host.ownerUrl);url.searchParams.set('lang',language);
+   const displayWatch=mixedDisplay=observeMixedDisplay(url),{publicationId,source:{sourceHash}}=publication;
+   const label=tr(publication.label,language);
+   if(holdMixedDisplayed){
+    await command!('Fetch.enable',{patterns:[{urlPattern:displayWatch.url,requestStage:'Request'}]});intercepting=true;
+   }
+   await page.goto(url.href);await wait(`globalThis.__access756==='pending'`,'mixed capability');
+   await page.evaluate(countSaveClicks);
+   await page.evaluate(`globalThis.__releaseAccess756()`);await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#stage-comment-list')&&!!document.querySelector(${parts?"'#parts-canvas'":"'#rig-root canvas'"})&&!document.querySelector('#save').disabled&&document.querySelector('#workspace-pending-ask').hidden`,'mixed ready');
+   const readActs=async()=>{
+    const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0});
+    const next=await response.json();assert.equal(next.ok,true);
+    return next.value.events.filter((event:any)=>event.type==='act').map((event:any)=>event.act);
+   };
    if(modalPreload){
     const display=fixture.host.session.displayPublication(publication.publicationId),prefix=new URL(display.routes.entry,url.origin).pathname;
     if(parts){
@@ -176,9 +259,40 @@ try{
     if(!await page.evaluate(`document.getElementById('view-menu').open`))await click(page,'#view-menu summary');await click(page,'#view-menu [data-view="rig"]');await shot(out,'workspace-parts-or-rig');
    }
    const catalog=language==='en'?enCatalog:koCatalog;
+   const [receipt,heldSave]=await Promise.all([
+    waitForMixedDisplay(displayWatch,{publicationId,sourceHash},label),
+    holdMixedDisplayed?(async():Promise<HeldDisplay>=>{
+     const paused=await withDeadline('715 mixed displayed hold',20_000,()=>displayWatch.held);
+     const body=await postData<JobDisplayAcknowledgment>(paused);
+     assert.ok(body?.publicationId===publicationId&&body.sourceHash===sourceHash&&body.pageId,'hold the active publication acknowledgment');
+     const acts=await readActs();
+     const snapshot:HeldDisplay={...await page!.evaluate<SaveClicks>(saveClicks),acts:acts.length,actPosts:displayWatch.acts.length,
+      labelDisplayed:await page!.evaluate<boolean>(`document.getElementById('message')?.textContent===${JSON.stringify(label)}`)};
+     await writeFile(join(out,'display-held.json'),JSON.stringify(snapshot,null,2)+'\n');
+     assert.deepEqual(snapshot,{ready:false,earlyClicks:0,trustedSaveClicks:0,acts:0,actPosts:0,labelDisplayed:false});
+     assert.equal(displayWatch.status,undefined,'acknowledgment has no response before release');
+     await command!('Fetch.continueRequest',{requestId:paused.id});
+     return snapshot;
+    })():undefined,
+   ]);
    await click(page,'#save');await wait(`(()=>{const node=document.getElementById('review-draft-state');return node?.textContent===${JSON.stringify(catalog['job.review.approved'])}&&node.dataset.saveState==='saved';})()`,'mixed verdict approved');
-   const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0}),next=await response.json();assert.equal(next.ok,true);const acts=next.value.events.filter((event:any)=>event.type==='act').map((event:any)=>event.act);assert.deepEqual(acts.map((act:any)=>act.kind),[parts?'parts-verdict':'review-verdict']);for(const act of acts){parseCommentsAct(act);assert.equal(act.source.sourceHash,publication.source.sourceHash);}assert.deepEqual(await jobInputHashes(fixture.input.root),before);await shot(out,'submitted');const submittedUi=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.value,saveDisabled:document.querySelector('#save')?.disabled,actState:['dirty','review-draft-state','draft-state'].map(id=>{const node=document.getElementById(id);return {id,text:node?.textContent,kind:node?.dataset.saveState,visible:!!node?.getClientRects().length};})})`);const result={kind:parts?'mixed-parts':'mixed',language,submittedUi,transport:actTransport.filter(event=>event.path.includes('/jobs/'+fixture.host.session.jobId+'/')),acts,sourceImmutable:true};cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('715_MIXED_PASS '+language);
-  }catch(error){const ui=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.value,saveDisabled:document.querySelector('#save')?.disabled,activeElement:document.activeElement?.id,dialogs:[...document.querySelectorAll('dialog')].map(n=>({id:n.id,open:n.open}))})`);const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0});const next=await response.json();await writeFile(join(out,'failure-state.json'),JSON.stringify({error:String(error),ui,next,actTransport},null,2)+'\n');await shot(out,'failure');throw error;}finally{await page.goto('about:blank');await fixture.close();}
+   const acts=await readActs();assert.equal(acts.length,1);
+   const act=parseCommentsAct(acts[0]);assert.ok(act.kind===(parts?'parts-verdict':'review-verdict'));
+   assert.equal(act.value.verdict,'approved');assert.equal(act.askId,asks[0]!.askId);
+   assert.equal(act.publicationId,publicationId);assert.equal(act.source.sourceHash,sourceHash);
+   assert.equal(displayWatch.acts.length,1,'one approval POST');
+   const submission=await postData<UISubmissionV3>(displayWatch.acts[0]!);
+   assert.ok(submission.publicationId===receipt.publicationId&&submission.pageId===receipt.pageId&&
+    submission.displayedNonce===receipt.displayedNonce,'approval POST uses the observed display receipt');
+   const clicks:SaveClicks=await page.evaluate<SaveClicks>(saveClicks);
+   assert.deepEqual(clicks,{ready:true,earlyClicks:0,trustedSaveClicks:1});
+   assert.deepEqual(await jobInputHashes(fixture.input.root),before);await shot(out,'submitted');const submittedUi=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.value,saveDisabled:document.querySelector('#save')?.disabled,actState:['dirty','review-draft-state','draft-state'].map(id=>{const node=document.getElementById(id);return {id,text:node?.textContent,kind:node?.dataset.saveState,visible:!!node?.getClientRects().length};})})`);const result={kind:parts?'mixed-parts':'mixed',language,submittedUi,transport:actTransport.filter(event=>event.path.includes('/jobs/'+fixture.host.session.jobId+'/')),acts,displayed:{publicationId,sourceHash,status:displayWatch.status,label,receiptBound:true,clicks,heldSave},sourceImmutable:true};cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('715_MIXED_PASS '+language);
+  }catch(error){const ui=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.value,saveDisabled:document.querySelector('#save')?.disabled,activeElement:document.activeElement?.id,dialogs:[...document.querySelectorAll('dialog')].map(n=>({id:n.id,open:n.open}))})`);const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0});const next=await response.json();await writeFile(join(out,'failure-state.json'),JSON.stringify({error:String(error),ui,next,actTransport},null,2)+'\n');await shot(out,'failure');throw error;}finally{
+   try{await page.goto('about:blank');}finally{
+    mixedDisplay=undefined;
+    try{if(intercepting)await command!('Fetch.disable');}finally{await fixture.close();}
+   }
+  }
  }
  // #1229 / #1230: both the checkpoint Pass/Fail form and the Question answer form are retired; mixed package Question + checkpoint case is retired.
  // A copied capability-free link has no act authority (#send-comments stays disabled), even though its backdrop is still readable.
