@@ -478,9 +478,6 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-main-toolbar .zoom-controls{padding-right:var(--space-1);min-width:0;max-width:100%;flex-wrap:wrap}
 .workspace-main-toolbar .zoom-controls>*{flex:none}
 .workspace-main-toolbar .zoom-controls>.view-menu{margin-left:0}
-/* Synchronous intrinsic-width read in workspace-ui; the normal toolbar still wraps. */
-.workspace-main-toolbar[data-measure-one-row]{width:max-content;flex-wrap:nowrap}
-.workspace-main-toolbar[data-measure-one-row] :is([data-workspace-camera],.zoom-controls){max-width:none;flex-wrap:nowrap}
 .workspace-bottom-tabs{display:flex;align-items:center;gap:var(--space-1);flex-wrap:nowrap}
 .workspace-bottom-tabs [aria-selected=true]{background:var(--rv-pressed-bg);border-color:var(--rv-pressed-border)}
 .workspace-act-bar{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2);padding:var(--space-3) 0;border-top:1px solid var(--border)}
