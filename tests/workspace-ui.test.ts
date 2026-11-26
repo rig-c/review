@@ -179,15 +179,16 @@ test('Setup holds no control that seeks or plays: the angle tool and panel and e
  const html=await indexHtml(),setup=between(html,'<section id="inspector-rig"','<section id="inspector-playback"'),animate=between(html,'<section id="inspector-playback"','</main>');
  for(const id of seekOrPlay){expect(setup).not.toContain(`id="${id}"`);expect(animate).toContain(`id="${id}"`);}
  for(const marker of ['data-proposal="angle"','id="angle-panel"','id="axis-state"']){expect(setup).not.toContain(marker);expect(animate).toContain(marker);}
- for(const id of ['selected-part','modeling-tools','part-set'])expect(setup).toContain(`id="${id}"`);for(const tool of ['mesh','contour','chest'])expect(setup).toContain(`data-proposal="${tool}"`);
- expect(await mainSource()).toContain("if (tool === 'angle' && !input('axis-value').disabled) { showInspector('playback');chooseAxis(); return; }");
+ for(const id of ['selected-part','modeling-tools','part-set'])expect(setup).toContain(`id="${id}"`);
+ expect([...html.matchAll(/data-proposal="([^"]+)"/g)].map(match=>match[1])).toEqual(['angle']);
 });
 const mainSource=()=>readFile(new URL('../web/main.ts',import.meta.url),'utf8');
-/** Every id of the former Feedback section, unchanged so drafts, the control page and tests keep resolving them. */
-const feedbackIds=['inspector-feedback','review-status','provenance-version','provenance-rig','provenance-motion','provenance-full','source-files','checkpoint-detail','detail-title','detail-note','checkpoint-note','proposal-panel','feedback-start','feedback-end','feedback-range-hint','feedback-target-kind','feedback-target-name','feedback-target-names','feedback-target-hint','feedback-category','comments-list-host','proposal-boundary','feedback-warnings','proposal-list','strip-panel','strip-scope','strip-reference','strip-format','strip-export','strip-status'];
+/** Static Comments controls that move with the rest of the review dialog. */
+const feedbackIds=['inspector-feedback','review-status','provenance-version','provenance-rig','provenance-motion','provenance-full','source-files','checkpoint-detail','detail-title','detail-note','checkpoint-note','proposal-panel','correction-controls','correction-stage','correction-selector','correction-model','correction-post-fields','comments-list-host','proposal-boundary','feedback-warnings','feedback-applied-check','proposal-list','strip-panel','strip-scope','strip-reference','strip-format','strip-export','strip-status'];
 test('the real review decision and Submit nodes move once to their actHome without a proxy submit',async()=>{
  const html=await indexHtml(),dialog=between(html,'<dialog id="review-dialog"','</dialog>');
  for(const id of feedbackIds){expect(dialog).toContain(` id="${id}"`);expect(html.split(` id="${id}"`).length).toBe(2);}
+ for(const id of ['feedback-start','feedback-end','feedback-range-hint','feedback-target-kind','feedback-target-name','feedback-target-names','feedback-target-hint','feedback-category','correction-path','correction-words','add-proposal'])expect(dialog).not.toContain(` id="${id}"`);
  expect(dialog.match(/id="save"/g)?.length).toBe(1);
  const composition=await readFile(new URL('../web/inspector-blocks.ts',import.meta.url),'utf8');
  expect(composition).toContain("label,status,actions");expect(composition).toContain('bottom.actHome.append(act)');expect(composition).toContain('actHome:actHome??heading');expect(composition).toContain('dialog.remove()');
@@ -646,8 +647,8 @@ test('#809 pending ask heading uses full subject sentences in EN/KO and names th
 });
 
 test('#743 workspace owns detached portal lookup, settles redocking, and disposes only its drawers',async()=>{
- const first=openHost({ownedRoot:true,bottomPanel:true,tabs:['rig','feedback']}),fieldA=new Host('input');fieldA.id='feedback-target-name';first.panels.rig!.append(fieldA);
- const second=openHost({ownedRoot:true,bottomPanel:true,tabs:['rig','feedback']}),fieldB=new Host('input');fieldB.id=fieldA.id;second.panels.rig!.append(fieldB);
+ const first=openHost({ownedRoot:true,bottomPanel:true,tabs:['rig','feedback']}),fieldA=new Host('select');fieldA.id='part-set';first.panels.rig!.append(fieldA);
+ const second=openHost({ownedRoot:true,bottomPanel:true,tabs:['rig','feedback']}),fieldB=new Host('select');fieldB.id=fieldA.id;second.panels.rig!.append(fieldB);
  try{
   first.layout.clientWidth=0;first.layout.clientHeight=0;first.ui.refresh();second.flush();
   expect(first.ownedRoot.contains(fieldA)).toBe(false);expect(first.ui.element(fieldA.id)).toBe(fieldA as unknown as HTMLElement);expect(second.ui.element(fieldB.id)).toBe(fieldB as unknown as HTMLElement);

@@ -5,7 +5,7 @@ import type {Feedback} from '../src/session.ts';
 import type {JobAnsweredDirectionFeedback} from '../src/job-contract.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
 import {drawnSlots,region,projectMark,unprojectMark,parseStageComment,feedbackTimingLabel,type MarkRegion,type MarkPoint,type StageComment} from '../src/stage-comment.ts';
-import {getLanguage as i18nLang,onLanguageChange as i18nOnChange,t as i18nT,tr as i18nTr} from './i18n.ts';
+import {applyDomI18n,getLanguage as i18nLang,onLanguageChange as i18nOnChange,t as i18nT,tr as i18nTr} from './i18n.ts';
 import {panSpaceHeld,textEntryFocused} from './view-controls.ts';
 import {boxesIntersect} from './label-placement.ts';
 export interface CommentPose {
@@ -26,6 +26,11 @@ export interface CommentCodec<Row extends CommentRow,Pose extends CommentUiPose>
  update?:(row:Row,summary:string,parts?:string[],geometry?:{pose:Pose;screen:MarkRegion;crop:StageComment['crop']})=>Promise<Row>|Row;
  create:(pose:Pose,view:StageComment['viewport'],screen:MarkRegion,crop:StageComment['crop'],bookmark:unknown,summary:string,parts?:string[])=>Promise<Row>;
 }
+interface RigAnchor {
+ lastFrame:(animation:string|null)=>number|null;
+ targetNames:(kind:Feedback['target']['kind'])=>readonly string[]|null;
+ selectedTarget:()=>Feedback['target']|null;
+}
 interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose> {
  toolbar:HTMLElement;toggle?:HTMLButtonElement;listHost?:HTMLElement;openList?:()=>void;hasPicture?:()=>boolean;viewports:Partial<Record<StageComment['viewport'],HTMLElement>>;
  pose:(view:StageComment['viewport'])=>Pose|null;pause:()=>Promise<void>;
@@ -35,6 +40,8 @@ interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=Commen
  add:(feedback:Row,side?:'a'|'b')=>void;changed:()=>void|Promise<void>;draftChanged?:()=>void;error:(message:string)=>void;
  general?:{create:(summary:string)=>Row;matches:(row:Row)=>boolean;rows?:Row[];available?:()=>boolean;refusal?:()=>string|null};
  answeredDirectionFeedback?:readonly JobAnsweredDirectionFeedback[];
+ rigAnchor?:RigAnchor;
+ renderRow?:(row:Row,element:HTMLElement)=>void;
  /** #1062: the shown still picture a mark names, if any. A still picture has no clock, so its row shows the picture and the place, not a time. */
  picture?:(mark:StageComment)=>string|{name:string}|null;
  refusal?:()=>string|null;blocked:()=>boolean;busy?:()=>boolean;busyError?:(message:string)=>void;shortcutBlocked?:()=>boolean;shortcutActive?:()=>boolean;codec?:CommentCodec<Row,Pose>;
@@ -52,6 +59,114 @@ const toEn=(s:string)=>typeof i18nTr==='function'?i18nTr(s,'en'):s;
 const onLang=(fn:()=>void)=>typeof i18nOnChange==='function'?i18nOnChange(fn):()=>{};
 const curLang=()=>typeof i18nLang==='function'?i18nLang():'en';
 const spaceHeld=()=>typeof panSpaceHeld==='function'&&panSpaceHeld();
+const categoryLabels={defect:'Defect',quality:'Quality'} as const;
+type RigAnchorFields=Pick<Feedback,'target'|'category'>&{frameStart:number;frameEnd:number};
+const intervalOf=({frameStart,frameEnd}:RigAnchorFields)=>({frameStart,frameEnd,inclusive:true});
+
+// The frame, target and category fields from Structured feedback, in the composer layout.
+const rigAnchorMarkup=`<div class="stage-comment-anchor-row">
+  <div class="label">Frame range · inclusive</div>
+  <div class="frame-range">
+   <label>Start<input id="feedback-start" type="number" min="0" step="1" inputmode="numeric"></label>
+   <label>End<input id="feedback-end" type="number" min="0" step="1" inputmode="numeric"></label>
+  </div>
+ </div>
+ <small id="feedback-range-hint" hidden></small>
+ <div class="stage-comment-anchor-row">
+  <label for="feedback-target-kind" class="label space-top">Target type</label>
+  <select id="feedback-target-kind"><option value="rig">Entire rig</option><option value="bone">Bone</option><option value="slot">Slot</option></select>
+  <label for="feedback-target-name" class="label space-top">Target name</label>
+  <input id="feedback-target-name" type="text" list="feedback-target-names" autocomplete="off" placeholder="Actual bone or slot name">
+  <datalist id="feedback-target-names"></datalist>
+ </div>
+ <div class="stage-comment-anchor-row">
+  <label for="feedback-category" class="label space-top">Category</label>
+  <select id="feedback-category"><option value="defect">Defect</option><option value="quality">Quality</option></select>
+ </div>`;
+
+function mountRigAnchor(
+ hint:HTMLElement,anchor:RigAnchor,pin:number,animation:string|null,fallback:Feedback['target'],
+ existing:Feedback|undefined,readOnly:boolean,draftChanged?:()=>void
+) {
+ const box=document.createElement('div');
+ box.className='stage-comment-anchor';
+ box.innerHTML=rigAnchorMarkup;
+ const start=box.querySelector<HTMLInputElement>('#feedback-start')!;
+ const end=box.querySelector<HTMLInputElement>('#feedback-end')!;
+ const kind=box.querySelector<HTMLSelectElement>('#feedback-target-kind')!;
+ const name=box.querySelector<HTMLInputElement>('#feedback-target-name')!;
+ const names=box.querySelector<HTMLDataListElement>('#feedback-target-names')!;
+ const category=box.querySelector<HTMLSelectElement>('#feedback-category')!;
+ const bounds=box.querySelector<HTMLElement>('#feedback-range-hint')!;
+ const last=anchor.lastFrame(animation);
+ const selection=existing?existing.target:anchor.selectedTarget();
+ const target=selection&&(existing||anchor.targetNames(selection.kind)?.includes(selection.name))?selection:fallback;
+ start.value=String(existing?.frameStart??pin);start.max=String(pin);
+ end.value=String(existing?.frameEnd??pin);end.min=String(pin);
+ if(last!==null)end.max=String(last);
+ kind.value=target.kind;name.value=target.name;category.value=existing?.category??'defect';
+ const targetNames=()=>kind.value?anchor.targetNames(kind.value as Feedback['target']['kind']):null;
+ const syncTargets=()=>{
+  const options=(targetNames()??[]).map(value=>{
+   const option=document.createElement('option');
+   option.value=value;
+   return option;
+  });
+  names.replaceChildren(...options);
+  name.readOnly=readOnly||kind.value==='rig';
+ };
+ kind.onchange=()=>{
+  syncTargets();
+  name.value=kind.value==='rig'?targetNames()?.[0]??'':'';
+ };
+ const syncBounds=()=>{
+  bounds.hidden=!(start.valueAsNumber<0||last!==null&&end.valueAsNumber>last);
+  bounds.textContent=bounds.hidden?'':last===null?t('Bounds unknown · enter an inclusive integer frame range. FPS is not inferred.')
+   :last<0?t('No frames overlap the explicit clock and selected clip.')
+   :t('F0–F{0} for the explicit clock and current clip · inclusive').replace('{0}',String(last));
+ };
+ box.oninput=()=>{syncBounds();draftChanged?.();};
+ const controls=[start,end,kind,name,category];
+ const setBusy=(busy:boolean)=>{for(const control of controls)control.disabled=busy||readOnly;};
+ syncTargets();setBusy(false);
+ hint.before(box);
+ const localize=()=>{applyDomI18n(box);syncBounds();};
+ localize();
+ return {
+  localize,setBusy,
+  read():RigAnchorFields{
+   const frameStart=start.valueAsNumber,frameEnd=end.valueAsNumber;
+   if(!Number.isSafeInteger(frameStart)||!Number.isSafeInteger(frameEnd)||frameStart<0||frameEnd<frameStart)
+    throw new Error('Enter nonnegative integer start and end frames, with the end at or after the start.');
+   if(frameStart>pin||frameEnd<pin)throw new Error('COMMENT_CONTEXT_MISMATCH: frame, time or animation differs');
+   if(last!==null&&frameEnd>last)
+    throw new Error(t('feedback.frameEnd: {0} beyond clip last frame {1}').replace('{0}',String(frameEnd)).replace('{1}',String(last)));
+   const targetKind=kind.value;
+   const classification=category.value;
+   if((targetKind!=='rig'&&targetKind!=='bone'&&targetKind!=='slot')||(classification!=='defect'&&classification!=='quality'))
+    throw new Error('Select a target type and defect or quality category.');
+   if(!name.value.trim())throw new Error('Enter the actual target name and a one-line summary of up to 1,000 characters.');
+   if(!targetNames()?.includes(name.value))throw new Error('feedback.target.name: not in inspected model/package');
+   return {frameStart,frameEnd,target:{kind:targetKind,name:name.value},category:classification};
+  }
+ };
+}
+
+function rigCommentGeometry(pose:CommentPose,screen:MarkRegion) {
+ const world=region(unprojectMark(screen,pose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},pose.camera));
+ const slots=pose.posed?drawnSlots(pose.posed,world):[];
+ const target:Feedback['target']=slots[0]?{kind:'slot',name:slots[0].slot}:{kind:'rig',name:pose.rig};
+ return {world,slots,target};
+}
+
+function rigCommentLabel(feedback:Feedback,frame:StageComment['frame'],seconds:string):string {
+ if(!frame)return `${seconds} · ${feedback.target.name} · ${t(categoryLabels[feedback.category])}`;
+ const start=feedback.frameStart??frame.index,end=feedback.frameEnd??frame.index;
+ const label=start===end?`F${start}`:t('F{0}–{1}').replace('{0}',String(start)).replace('{1}',String(end));
+ const timing=t(`F{0} (${frame.basis})`).replace('F{0}',label);
+ return `${timing} · ${feedback.target.name} · ${t(categoryLabels[feedback.category])}`;
+}
+
 const resizeHandles=[['nw',0,0],['n',.5,0],['ne',1,0],['e',1,.5],['se',1,1],['s',.5,1],['sw',0,1],['w',0,.5]] as const;
 function rectElement(r:MarkRegion):HTMLDivElement{const node=document.createElement('div');node.className='stage-comment-region';Object.assign(node.style,{left:r.x+'px',top:r.y+'px',width:Math.max(2,r.width)+'px',height:Math.max(2,r.height)+'px'});return node;}
 async function crop(pose:CommentUiPose,r:MarkRegion):Promise<StageComment['crop']>{
@@ -173,11 +288,16 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   const mark=readMark(f),row=commentItem();row.dataset.commentId=f.id;
   const picture=mark&&!host.codec?host.picture?.(mark as StageComment)??null:null;
   const [timing,frameReason]=mark&&!host.codec&&!picture&&!mark.frame?feedbackTimingLabel(f as unknown as Feedback).split(' · '):[];
+  const rigFeedback=!host.codec&&host.rigAnchor&&mark?.viewport==='rig'&&'target' in f?f as unknown as Feedback:null;
   const place=picture?t(mark!.world.width>0||mark!.world.height>0?'Region':'Point'):'';
   const picturePlace=typeof picture==='string'?`${picture} · ${place}`:picture?place+t(' on {0}').replace('{0}',picture.name):null;
-  const go=document.createElement('button');go.type='button';go.className='stage-comment-summary';if(frameReason)go.title=t(frameReason);go.textContent=!mark?`${i+1} · ${t('General comment')} · ${f.summary}`:host.codec?`${i+1} · ${host.codec.label(f,mark)}`:picture?`${i+1} · ${picturePlace} · ${f.summary}`:`${i+1} · ${t(commentLabels[mark.mode]??mark.mode)} · ${t(commentLabels[mark.viewport]??mark.viewport)} · ${mark.frame?t(`F${mark.frame.index} (${mark.frame.basis})`):t(timing!)} · ${f.summary}${frameReason?` · ${t('Frame unavailable')}`:''}`;go.onclick=()=>openComment(f);row.append(go);
+  const go=document.createElement('button');go.type='button';go.className='stage-comment-summary';if(frameReason)go.title=t(frameReason);
+  const frameLabel=rigFeedback?rigCommentLabel(rigFeedback,mark?.frame??null,t(timing??'')):mark?.frame?t(`F${mark.frame.index} (${mark.frame.basis})`):t(timing??'');
+  go.textContent=!mark?`${i+1} · ${t('General comment')} · ${f.summary}`:host.codec?`${i+1} · ${host.codec.label(f,mark)}`:picture?`${i+1} · ${picturePlace} · ${f.summary}`:`${i+1} · ${t(commentLabels[mark.mode]??mark.mode)} · ${t(commentLabels[mark.viewport]??mark.viewport)} · ${frameLabel} · ${f.summary}${frameReason?` · ${t('Frame unavailable')}`:''}`;
+  go.onclick=()=>openComment(f);row.append(go);
   if(host.locked(f.id)){const submitted=document.createElement('span');submitted.textContent=t('Submitted');row.append(submitted);}
   list.append(row);
+  host.renderRow?.(f,row);
  }};
  const refresh=()=>{last='';renderList();renderPins();};
  const openComposer=(view:StageComment['viewport']|null,screen:MarkRegion,existing?:Row,placementMode=view?poseFor(view)?.mode:undefined)=>{
@@ -274,6 +394,15 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   }
   // Capture all view context now; camera or dial changes while typing cannot rebind the mark.
   const pose=view?poseFor(view):null,bookmark=general?null:copy(host.bookmark()),turn=pose?.turn===undefined?null:copy(pose.turn);
+  const previous=existing?readMark(existing):null;
+  const rigGeometry=view==='rig'&&host.rigAnchor&&!existing&&!host.codec&&pose?.frame?.basis==='producer'
+   ?rigCommentGeometry(pose as unknown as CommentPose,screen):null;
+  const anchorSource=existing?previous:pose;
+  const existingFeedback=existing&&'target' in existing?existing as unknown as Feedback:undefined;
+  const rigTarget=existingFeedback?.target??rigGeometry?.target;
+  const rigFields=view==='rig'&&host.rigAnchor&&!host.codec&&anchorSource?.frame?.basis==='producer'&&rigTarget
+   ?mountRigAnchor(hint,host.rigAnchor,anchorSource.frame.index,anchorSource.animation??null,rigTarget,existingFeedback,composerReadOnly,host.draftChanged):null;
+  if(rigFields)form.classList.add('stage-comment-composer-rig');
   const initialParts = pose ? host.codec?.chips?.(pose, screen, existing) : undefined;
   let selectedParts = initialParts?.selected.slice(),partsTouched=!!existing;
   const chipBox = initialParts ? document.createElement('div') : null;
@@ -299,9 +428,8 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   if (chipBox) {chipBox.className = 'stage-comment-parts';chipBox.setAttribute('role', 'group');form.append(chipBox);syncChips();}
   if(initialRefusal){errorSource=toEn(host.refusal?.()??initialRefusal);error.textContent=t(errorSource);host.error(t(errorSource));}
   else if(!host.codec&&!existing&&pose&&!pose.frame&&!pose.timeBasis){errorSource=toEn(pose.frameReason??'COMMENT_FRAME_UNAVAILABLE: no explicit frame index');error.textContent=t(errorSource);}
-  syncComposerLang=()=>{if(composer!==form)return;form.setAttribute('aria-label',t('Comment composer'));if(general)form.style.position='relative';field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');hint.textContent=t(composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels');if(removeBtn)removeBtn.textContent=t('Delete');if(errorSource)error.textContent=t(errorSource);syncChips();};
+  syncComposerLang=()=>{if(composer!==form)return;form.setAttribute('aria-label',t('Comment composer'));if(general)form.style.position='relative';field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');hint.textContent=t(composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels');if(removeBtn)removeBtn.textContent=t('Delete');if(errorSource)error.textContent=t(errorSource);syncChips();if(rigFields){rigFields.localize();place();}};
   pane.append(form);place();
-  const previous=existing?readMark(existing):null;
   let prepared=general?Promise.resolve(null):previous?Promise.resolve(previous.crop):pose?crop(pose,screen):Promise.reject(new Error('COMMENT_VIEW_UNAVAILABLE'));
   prepared.catch(()=>{});
   if(view&&pose&&host.codec?.geometry&&!composerReadOnly){
@@ -317,9 +445,10 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   }
   const submitComposer=composerSubmit=async():Promise<boolean>=>{if(busy)return false;if(generation!==interaction||view&&(!available(view)||poseFor(view)&&poseFor(view)?.mode!==placementMode)){cancel();return false;}const summary=field.value.trim();if(!summary){field.focus();return false;}try{
    if(selectedParts && !selectedParts.length)throw new Error(t('Select at least one part.'));
+   const editedAnchor=rigFields?.read();
    if(existing){
     assertEdit(general);if(host.locked(existing.id))throw new Error(t('COMMENT_SUBMITTED: submitted evidence is immutable'));
-    busy=true;field.disabled=true;syncChips();
+    busy=true;field.disabled=true;rigFields?.setBusy(true);syncChips();
     if(!general&&host.codec?.update){
      const geometry=geometryEdit?.changed&&pose?{pose,screen:{...screen},crop:(await prepared)!}:undefined;
      if(disposed||generation!==interaction)return false;assertEdit(general);
@@ -329,29 +458,36 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
      const all=host.feedback(),index=all.indexOf(existing);
      if(index<0)return false;
      all.splice(index,1,replacement);
+    }else if(editedAnchor&&existingFeedback){
+     const context=existingFeedback.context;
+     Object.assign(existingFeedback,editedAnchor,{summary,context:{
+      ...(context&&typeof context==='object'&&!Array.isArray(context)?context:{}),
+      interval:intervalOf(editedAnchor)
+     }});
     }else existing.summary=summary;
    }else if(general){
     assertEdit(true);const row=host.general!.create(summary);
     if(host.general!.rows)host.general!.rows.push(row);else host.add(row);
    }else{
     assertCapture();if(!pose||!host.codec&&!pose.frame&&!pose.timeBasis)throw new Error(t(pose?.frameReason??'COMMENT_FRAME_UNAVAILABLE: provide an explicit producer clock or a decoded reference frame index'));
-    busy=true;field.disabled=true;syncChips();
+    busy=true;field.disabled=true;rigFields?.setBusy(true);syncChips();
     if(host.codec){const pixels=await prepared;if(disposed||generation!==interaction)return false;assertCapture();const row=await host.codec.create(pose,view!,screen,pixels!,bookmark,summary,selectedParts?.slice());if(disposed||generation!==interaction)return false;assertCapture();if(poseFor(view!)?.mode!==placementMode)return false;host.add(row);}
     else {const rigPose=pose as unknown as CommentPose;
-    const world=region(unprojectMark(screen,rigPose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},rigPose.camera));
-    const slots=rigPose.posed?drawnSlots(rigPose.posed,world):[];
+    const {world,slots,target}=rigGeometry??rigCommentGeometry(rigPose,screen);
     const comment:StageComment={schema:'rig-review-comment/1',mode:placementMode as StageComment['mode'],viewport:view!,frame:rigPose.frame,...(rigPose.timeBasis?{timeBasis:rigPose.timeBasis}:{}),time:rigPose.time,animation:rigPose.animation,sourceHash:rigPose.sourceHash,modelHash:rigPose.modelHash,referenceHash:rigPose.referenceHash,referenceId:rigPose.referenceId,camera:copy(rigPose.camera),screen,world,slots,crop:(await prepared)!,bookmark};
     assertCapture();
     if(disposed||generation!==interaction||poseFor(view!)?.mode!==placementMode)return false;
-    const n=rigPose.frame?.index??null;host.add({id:crypto.randomUUID(),frameStart:n,frameEnd:n,target:slots[0]?{kind:'slot',name:slots[0].slot}:{kind:'rig',name:rigPose.rig},category:'defect',summary,context:{animation:rigPose.animation,time:rigPose.time,frame:rigPose.frame?.basis==='producer'?n:null,...(turn?{turn:turn as any}:{}),interval:n===null?null:{frameStart:n,frameEnd:n,inclusive:true},comment:comment as any} } as unknown as Row,rigPose.side);
+    const n=rigPose.frame?.index??null;
+    const anchor=editedAnchor??{frameStart:n,frameEnd:n,target,category:'defect'};
+    host.add({id:crypto.randomUUID(),...anchor,summary,context:{animation:rigPose.animation,time:rigPose.time,frame:rigPose.frame?.basis==='producer'?n:null,...(turn?{turn:turn as any}:{}),interval:editedAnchor?intervalOf(editedAnchor):n===null?null:{frameStart:n,frameEnd:n,inclusive:true},comment:comment as any} } as unknown as Row,rigPose.side);
     }
    }
    busy=true;field.disabled=true;syncChips();
    await host.changed();
    if(disposed||generation!==interaction)return false;
    cancel();refresh();revealLatest();return true;
-  }catch(e){if(disposed||generation!==interaction)return false;const rawMsg=e instanceof Error?e.message:String(e),msg=/^PARTS_COMMENT_OUT_OF_BOUNDS:/.test(rawMsg)?'PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image':/^JOB_[A-Z_]+$/.test(rawMsg)&&t('job.submit.'+rawMsg)!=='job.submit.'+rawMsg?'job.submit.'+rawMsg:rawMsg;errorSource=toEn(msg);error.textContent=t(errorSource);place();host.error(t(errorSource));field.disabled=false;field.focus();return false;}finally{busy=false;if(composer===form)syncChips();}};
-  form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cancel();renderPins();pane.focus();}else if(e.key==='Enter'&&!e.isComposing&&!composerReadOnly){e.preventDefault();e.stopPropagation();void submitComposer();}};
+  }catch(e){if(disposed||generation!==interaction)return false;const rawMsg=e instanceof Error?e.message:String(e),msg=/^PARTS_COMMENT_OUT_OF_BOUNDS:/.test(rawMsg)?'PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image':/^JOB_[A-Z_]+$/.test(rawMsg)&&t('job.submit.'+rawMsg)!=='job.submit.'+rawMsg?'job.submit.'+rawMsg:rawMsg;errorSource=toEn(msg);error.textContent=t(errorSource);place();host.error(t(errorSource));field.disabled=false;field.focus();return false;}finally{busy=false;if(composer===form){rigFields?.setBusy(false);syncChips();}}};
+  form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cancel();renderPins();pane.focus();}else if(e.key==='Enter'&&!e.isComposing&&!composerReadOnly){e.stopPropagation();if(rigFields&&(e.target as Element|null)?.closest?.('select,button'))return;e.preventDefault();void submitComposer();}};
   form.onsubmit=e=>{e.preventDefault();return submitComposer();};
   field.focus();last='';host.draftChanged?.();
  };

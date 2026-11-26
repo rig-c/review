@@ -10,6 +10,7 @@ import { loadCompare } from '../src/compare.ts';
 import { compareSessionFile, freshCompareSession, parseCompareSession, readCompareSession, saveCompareSession } from '../src/compare-session.ts';
 import { startServer } from '../src/server.ts';
 import { startCompareServer } from '../src/compare-server.ts';
+import { markedFeedback } from './helpers/verdict-feedback-746.ts';
 
 const dirs:string[]=[];
 afterEach(async()=>{for(const root of dirs.splice(0))await rm(root,{recursive:true,force:true});});
@@ -63,6 +64,39 @@ test('safe inclusive intervals reject malformed values without using inspection 
  const saved=parseSession({...base,feedback:[{...note(),frameStart:0,frameEnd:1,context:{animation:'inspect',time:0.9,frame:3}}]},p);expect(saved.feedback[0]?.context).toEqual({animation:'inspect',time:0.9,frame:3,interval:{frameStart:0,frameEnd:1,inclusive:true}});
  expect(()=>parseSession({...base,feedback:[{...note(),context:{animation:'inspect',frame:2,interval:{frameStart:2,frameEnd:2,inclusive:true}}}]},p)).toThrow('feedback.context.interval');
  expect(()=>parseSession({...base,feedback:[{...note(),context:{animation:7}}]},p)).toThrow('feedback.context.animation');
+});
+
+test('standalone pinned saves keep legacy marks and accept catalog targets on inclusive ranges',async()=>{
+ const f=await fixture(),p=await loadReview(f.path),state=await directory(),base=freshSession(p);
+ const row=markedFeedback.feedback[0]!,mark=row.context.comment,modelHash=p.reviewedSource.rig!.sha256;
+ const comment={
+  ...mark,sourceHash:p.sourceHash,modelHash,frame:{index:2,basis:'producer'},time:0.6,animation:'inspect',slots:[{slot:'slot_a',z:0}],
+  bookmark:{...mark.bookmark,binding:{mode:'single',sourceHash:p.sourceHash,rigs:[modelHash]},time:0.6,animation:'inspect'},
+ };
+ const legacy={
+  ...row,frameStart:2,frameEnd:2,target:{kind:'slot',name:'slot_a'},
+  context:{...row.context,comment,frame:2,time:0.6,animation:'inspect',interval:{frameStart:2,frameEnd:2,inclusive:true}},
+ };
+ const saved=await saveSession(p,{...base,feedback:[legacy]},state);
+ expect(saved.feedback).toEqual<unknown>([legacy]);
+
+ const ranged=(frameStart:number,frameEnd:number)=>({
+  ...legacy,id:`range-${frameStart}-${frameEnd}`,frameStart,frameEnd,target:{kind:'bone',name:'bone_a'},category:'quality',
+  context:{...legacy.context,interval:{frameStart,frameEnd,inclusive:true}},
+ });
+ const accepted=[legacy,ranged(1,2),ranged(2,3)];
+ await saveSession(p,{...saved,feedback:accepted},state);
+ expect(await readSession(p,state)).toMatchObject({feedback:accepted,feedbackWarnings:[]});
+
+ const save=(candidate:unknown)=>saveSession(p,{...saved,feedback:[...accepted,candidate]},state);
+ for(const [start,end] of [[0,1],[3,3]] as const){
+  await expect(save(ranged(start,end))).rejects.toThrow('COMMENT_CONTEXT_MISMATCH: frame, time or animation differs');
+ }
+ await expect(save(ranged(2,4))).rejects.toThrow('feedback.frameEnd: 4 beyond clip last frame 3');
+ const candidate=ranged(1,3);
+ await expect(save({...candidate,target:{kind:'bone',name:'missing'}})).rejects.toThrow('feedback.target.name: bone "missing" not in model');
+ await expect(save({...candidate,context:{...candidate.context,comment:{...comment,screen:{...comment.screen,x:51}}}})).rejects.toThrow('COMMENT_CONTEXT_MISMATCH: screen/world region projection');
+ await expect(save({...candidate,context:{...candidate.context,comment:{...comment,slots:[{slot:'missing',z:0}]}}})).rejects.toThrow('COMMENT_SLOT_UNKNOWN');
 });
 
 test('legacy invalid names remain readable with warnings, immutable identity and unchanged saved evidence',async()=>{
