@@ -1,6 +1,7 @@
 import {expect,test} from 'bun:test';
 import {allocateWorkspaceLayout,bindWorkspaceDrawer,bindWorkspaceSeparator,InspectorScrollMemory,parseInspectorScroll,SETTLE_FRAME_TIMEOUT_MS,settleAnimationFrames,workspaceMinimums,type ScrollScheduler,type WorkspacePanel} from '../web/workspace-layout.ts';
 import {defaultWorkspacePanels,panelBounds,type WorkspacePanels} from '../web/workspace-preferences.ts';
+import {workspaceResizeRange,workspaceResizeTarget} from '../web/workspace-ui.ts';
 /** Drawn separator thickness the allocator charges; every expectation below derives from it. */
 const gap=workspaceMinimums.separator;
 test('resize separators are drawn 4px, half the former 8px',()=>{expect(gap).toBe(4);});
@@ -93,6 +94,48 @@ test('settled programmatic clamping survives before-hide capture but intentional
 });
 
 const explorerLeft={left:'rightWidth',right:null} as const;
+const reviewColumns={...explorerLeft,right:'communicationWidth'} as const;
+test('#1248 prioritizes the measured toolbar and keeps Communication docked when the toolbar wraps',()=>{
+ const desired={...defaultWorkspacePanels};
+ const at=(width:number,toolbarWidth:number)=>allocateWorkspaceLayout({width,height:700,toolbarWidth},desired,reviewColumns);
+ expect(at(1024,766)).toMatchObject({rightMode:'drawer',communicationMode:'panel',communicationWidth:280,stageWidth:740,stageMinimumSatisfied:true});
+ expect(at(1100,766)).toMatchObject({rightMode:'drawer',communicationMode:'panel',communicationWidth:330,stageWidth:766});
+ expect(at(1024,632)).toMatchObject({rightMode:'drawer',communicationMode:'panel',communicationWidth:360,stageWidth:660});
+ expect(at(1024,700)).toMatchObject({rightMode:'drawer',communicationMode:'panel',communicationWidth:320,stageWidth:700});
+ expect(at(1350,766)).toMatchObject({rightMode:'panel',rightWidth:260,communicationWidth:316,stageWidth:766});
+ expect(at(1280,766)).toMatchObject({rightMode:'panel',rightWidth:226,communicationWidth:280,stageWidth:766});
+ const wide=at(1440,766);
+ expect(wide).toMatchObject({rightMode:'panel',rightWidth:260,communicationMode:'panel',communicationWidth:360,stageWidth:812,inspectorHeight:240,stageHeight:456});
+ expect(wide.separators.communicationWidth.max).toBe(406);
+ expect(desired).toEqual(defaultWorkspacePanels);
+});
+test('#1248 collapses Parts at the one-row boundary and Communication at the physical stage boundary',()=>{
+ const toolbarWidth=766.5;
+ const at=(width:number)=>allocateWorkspaceLayout({width,height:700,toolbarWidth},defaultWorkspacePanels,reviewColumns);
+ const partsEdge=toolbarWidth+panelBounds.rightWidth.min+panelBounds.communicationWidth.min+2*gap;
+ expect(at(partsEdge)).toMatchObject({rightMode:'panel',rightWidth:180,communicationMode:'panel',communicationWidth:280,stageWidth:toolbarWidth});
+ expect(at(partsEdge-0.5)).toMatchObject({rightMode:'drawer',communicationMode:'panel',communicationWidth:360});
+ const communicationEdge=workspaceMinimums.stageWidth+panelBounds.communicationWidth.min+gap;
+ expect(at(communicationEdge)).toMatchObject({rightMode:'drawer',communicationMode:'panel',communicationWidth:280,stageWidth:240});
+ expect(at(communicationEdge-1)).toMatchObject({rightMode:'drawer',communicationMode:'drawer',stageWidth:communicationEdge-1});
+ expect(allocateWorkspaceLayout({width:240,height:700,toolbarWidth:200},defaultWorkspacePanels,reviewColumns)).toEqual(
+  allocateWorkspaceLayout({width:240,height:700},defaultWorkspacePanels,reviewColumns));
+ expect(allocateWorkspaceLayout({width:1024,height:700,toolbarWidth},defaultWorkspacePanels,explorerLeft)).toMatchObject({rightMode:'panel',rightWidth:253.5,communicationMode:'absent',stageWidth:toolbarWidth});
+});
+test('#1248 separator ranges and targets follow the reachable widths with the measured toolbar',()=>{
+ const desired=defaultWorkspacePanels,available={width:1350,height:700,toolbarWidth:766};
+ const left=workspaceResizeRange(available,desired,'rightWidth',reviewColumns);
+ expect(left).toEqual({min:180,max:296,value:260,enabled:true});
+ const rightWidth=workspaceResizeTarget(available,desired,'rightWidth',288,reviewColumns);
+ const resized=allocateWorkspaceLayout(available,{...desired,rightWidth},reviewColumns);
+ expect(resized.rightWidth).toBeCloseTo(288,8);
+ expect(resized.communicationWidth).toBeCloseTo(288,8);
+ const narrow={...available,width:1100};
+ expect(workspaceResizeRange(narrow,desired,'communicationWidth',reviewColumns)).toEqual({min:280,max:330,value:330,enabled:true});
+ const communicationWidth=workspaceResizeTarget(narrow,desired,'communicationWidth',302,reviewColumns);
+ expect(allocateWorkspaceLayout(narrow,{...desired,communicationWidth},reviewColumns).communicationWidth).toBeCloseTo(302,8);
+ expect(workspaceResizeRange({...available,width:1024},desired,'communicationWidth',reviewColumns)).toEqual({min:280,max:280,value:280,enabled:false});
+});
 test('a single left column uses its own saved width and bounds; the absent side has no size or separator',()=>{
  const wide=allocateWorkspaceLayout({width:1280,height:900},defaultWorkspacePanels,explorerLeft);
  expect(wide).toMatchObject({rightWidth:260,leftWidth:0,leftMode:'absent',rightMode:'panel',stageWidth:1280-260-gap});expect(wide.separators.leftWidth.enabled).toBe(false);expect(wide.separators.rightWidth).toMatchObject({min:180,value:260,enabled:true});

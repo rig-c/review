@@ -16,6 +16,8 @@ const output=resolve(arg('--out')??'artifacts/view-toolbar-wrap');
 const baselineCss=arg('--baseline-css');
 const directionOnly=Bun.argv.includes('--direction-only');
 const languages=['en','ko'] as const;
+// 240 px stage + 280 px docked Communication + 4 px separator.
+const recordWidths=[390,524,768];
 const order=['zoom-in','zoom-out','fit','native-one','view-menu'];
 const settle='new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))';
 const standaloneReady='!document.body.inert && !!document.querySelector("#stage-comment-list")';
@@ -23,7 +25,7 @@ const jobReady='document.body.dataset.ready==="true" && !document.body.inert && 
 
 type Reading={
  width:number;lang:string;dpr:number;bar:PartsViewRect;client:number;scroll:number;order:string[];clipped:string[];
- menu:PartsViewRect|null;summary:PartsViewRect;
+ menu:PartsViewRect|null;summary:PartsViewRect;communicationWidth:number|null;
 };
 type ReadingRow={name:string;state:string;reading:Reading};
 type Target={screen:string;url:string;ready:string;widths:number[]};
@@ -44,8 +46,10 @@ const readback=`(()=>{
   return false;
  });
  const list=bar.querySelector('#view-menu[open] .view-menu-list');
+ const communication=bar.closest('.workspace-layout')?.querySelector(':scope > #workspace-communication:not([hidden])');
  return {width:innerWidth,lang:document.documentElement.lang,dpr:devicePixelRatio,
   bar:bounds.toJSON(),client:bar.clientWidth,scroll:bar.scrollWidth,
+  communicationWidth:communication?.getBoundingClientRect().width??null,
   order:[...bar.querySelector('.zoom-controls').children].map(id).filter(id=>${JSON.stringify(order)}.includes(id)),
   clipped:clipped.map(id),menu:list?.getBoundingClientRect().toJSON()??null,
   summary:bar.querySelector('#view-menu summary').getBoundingClientRect().toJSON()};
@@ -128,7 +132,9 @@ async function runCase(target:Target,width:number,lang:'en'|'ko') {
   const closed=await record(page,name,'closed');
   if(width===390&&target.screen==='direction')await writeFile(join(output,name+'-closed.png'),await page.screenshot());
   assertFits(closed,name,width,lang);
-  if(width===768)assert.equal(closed.client,240,name+' exercises the 240 px stage');
+  if(width===524||width===768)assert.equal(closed.communicationWidth,280,name+' keeps Communication docked at 280 px');
+  if(width===524)assert.equal(closed.client,240,name+' exercises the 240 px stage');
+  if(width===768)assert.equal(closed.client,484,name+' exercises the 484 px stage');
   await click(page,'#view-menu summary');
   await wait(page,`!!document.querySelector('#view-menu[open] .view-menu-list')?.checkVisibility()`);
   const opened=await record(page,name,'open');
@@ -171,13 +177,13 @@ try{
   const optionSet=await optionSetsJobFixture({count:2,distinctImages:true,subjectless:true});
   cleanup.push(()=>optionSet.close());
   targets.push({screen:'interview',url:optionSet.ownerUrl,
-   ready:'document.body.dataset.ready==="true" && !document.body.inert && !!document.querySelector("#view-menu [data-view^=interview-image]") && !!document.querySelector("#reference-content img")?.naturalWidth',widths:[390,768]});
+   ready:'document.body.dataset.ready==="true" && !document.body.inert && !!document.querySelector("#view-menu [data-view^=interview-image]") && !!document.querySelector("#reference-content img")?.naturalWidth',widths:recordWidths});
 
-  // #1228: a displayed record publication with no ask holds the right panel open, so the 768 px stage stays 240 px.
+  // #1228: a displayed record publication with no ask still holds Communication open.
   const job=await recordScreenFixture('checkpoint',true,undefined,'plan-approved',false,true,undefined,false,true);
   job.fake.publish(job.display);
   cleanup.push(()=>job.close());
-  targets.push({screen:'job',url:job.ownerUrl,ready:jobReady+' && !!document.querySelector("#reference-content img")?.naturalWidth',widths:[390,768]});
+  targets.push({screen:'job',url:job.ownerUrl,ready:jobReady+' && !!document.querySelector("#reference-content img")?.naturalWidth',widths:recordWidths});
  }
  for(const target of targets)for(const width of target.widths)for(const lang of width>=1280?['en'] as const:languages){
   try{await runCase(target,width,lang);}

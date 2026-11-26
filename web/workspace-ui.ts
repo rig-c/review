@@ -146,6 +146,15 @@ const boxHeight=(node:Element)=>node.getBoundingClientRect().height;
 function preferredChromeHeight(node:HTMLElement,style:CSSStyleDeclaration):number {
  return node.scrollHeight>node.clientHeight?Math.max(boxHeight(node),node.scrollHeight+blockBorders(style)):boxHeight(node);
 }
+/** Measure the live locale and controls independently of the currently docked columns. */
+function measureToolbar(toolbar:HTMLElement,zoom:HTMLElement|null|undefined) {
+ toolbar.setAttribute('data-measure-one-row','');
+ try{
+  const width=toolbar.getBoundingClientRect().width;
+  return {width:Math.ceil(width),controlsWidth:Math.round(width-(zoom?.getBoundingClientRect().width??0))};
+ }
+ finally{toolbar.removeAttribute('data-measure-one-row');}
+}
 /** `currentTheme`, when given, is the appearance the Settings theme select shows; otherwise it shows the saved default. */
 export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceRegions;changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{kind:string;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
  const scope=options.root??document,dialogs={} as Record<WorkspacePanel,HTMLDialogElement>;
@@ -174,6 +183,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  let languageMigrated=false;
  const store=new WorkspacePreferenceStore({onStatus:value=>{status.textContent=tr(value.detail);}});let desired={...store.get().panels};
  const stack=document.createElement('div');stack.className='workspace-stage-stack';for(const child of [...main.children])if(child!==inspector)stack.append(child);main.prepend(stack);
+ const toolbar=stack.querySelector<HTMLElement>('.workspace-main-toolbar'),zoom=toolbar?.querySelector<HTMLElement>('#zoom-value');
  const rigPane=stage.querySelector<HTMLElement>('#rig-pane');
  const rigViewport=rigPane?.querySelector<HTMLElement>('#rig-viewport');
  const referencePane=rigViewport?stage.querySelector<HTMLElement>('#reference-pane'):null;
@@ -211,6 +221,12 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  if(bottom){try{collapsed=localStorage.getItem(bottomCollapseKey)==='true';}catch{}}
  const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=selectedInspector(scope) as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
  let disposed=false,frame=0,applying=false,available:WorkspaceLayoutSpace={width:0,height:0},shownColumns:WorkspaceColumns=columns,effective=allocateWorkspaceLayout(available,desired,columns);
+ let lastHeight=0,lastDesired=desired;
+ let zoomFit:{before:number;after:number;controlsWidth:number;floor?:number}|undefined;
+ const preferredToolbarWidth=(measurement:ReturnType<typeof measureToolbar>)=>{
+  if(zoomFit&&(zoomFit.controlsWidth!==measurement.controlsWidth||measurement.width!==zoomFit.before&&measurement.width!==zoomFit.after))zoomFit=undefined;
+  return Math.max(measurement.width,zoomFit?.floor??0);
+ };
  const panelFor=(tab:InspectorTab)=>require('inspector-'+tab);
  const userByTab=new Map<InspectorTab,boolean>(),extentByTab=new Map<InspectorTab,string>(),extentOf=(panel:HTMLElement)=>`${panel.scrollWidth}:${panel.scrollHeight}:${panel.clientWidth}:${panel.clientHeight}`;
  const capture=()=>{if(!tabs.length)return;const tab=active(),section=require('inspector-'+tab),panel=panelFor(tab),saved=memory.snapshot()[tab];if(!section.hidden&&(!saved||saved.x<=Math.max(0,panel.scrollWidth-panel.clientWidth)&&saved.y<=Math.max(0,panel.scrollHeight-panel.clientHeight)))memory.capture(tab,panel,false);};
@@ -230,15 +246,19 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  function apply():void {
   if(disposed||applying)return;applying=true;
   try{
-   const quiet=!!communicationKey&&!communicationShown(),shown:WorkspaceColumns=quiet?{...columns,right:null}:columns;shownColumns=shown;
+   const quiet=!!communicationKey&&!communicationShown(),shown:WorkspaceColumns=quiet?{...columns,right:null}:columns;
    if(communicationKey){explorer!.hidden=quiet;handles[communicationKey].hidden=quiet;if(quiet){buttons[communicationKey].hidden=true;if(dialogs[communicationKey].open)dialogs[communicationKey].close();}}
    const width=Math.max(0,layout.clientWidth),height=layout.clientHeight;
+   if(width!==available.width||height!==lastHeight||desired!==lastDesired||shown.right!==shownColumns.right)zoomFit=undefined;
+   lastHeight=height;lastDesired=desired;shownColumns=shown;
    // Authored JSON can fill the same slot as the rig while Direction metadata stays above it.
    const chrome=[...stack.children].filter((node):node is HTMLElement=>node!==stage&&node.id!=='direction-authored-body'&&!(node as HTMLElement).hidden);
    const direction=rigPane&&!rigPane.hidden&&rigViewport&&!rigViewport.hidden&&!stage.hidden?chrome.find((node):node is HTMLDetailsElement=>node.id==='direction-panel'):undefined;
    const authored=direction?.querySelector<HTMLDetailsElement>('#direction-authored-keys');
    const rigStage=direction&&!(direction.open&&authored?.open&&!authored.hidden)?direction:undefined;
-   available={width,height:rigStage?0:Math.max(0,height-chrome.reduce((sum,node)=>sum+boxHeight(node),0))};
+   const measurement=toolbar?measureToolbar(toolbar,zoom):null;
+   available={width,height:0};
+   if(measurement)available.toolbarWidth=preferredToolbarWidth(measurement);
    effective=allocateWorkspaceLayout(available,desired,shown);
    const mode=(panel:WorkspacePanel)=>effective[panel==='leftWidth'?'leftMode':panel==='rightWidth'?'rightMode':panel==='communicationWidth'?'communicationMode':'inspectorMode'];
    for(const panel of present)if(panel!=='inspectorHeight'&&!(quiet&&panel===communicationKey))dock(panel,mode(panel)==='drawer');
@@ -272,7 +292,6 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
      const legacyInspectorRoom=height-fixedChrome-legacyDirection-workspaceMinimums.stageHeight-gap;
      available.keepInspectorDocked=legacyInspectorRoom>=nominalInspectorMin&&inspectorRoom>compactHeight+blockBorders(getComputedStyle(inspector));
     }
-    effective=allocateWorkspaceLayout(available,desired,shown);
     stack.dataset.rigStageFloor='true';
    }else if(stack.dataset.rigStageFloor){
     delete stack.dataset.rigStageFloor;
@@ -281,6 +300,9 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
     rigPaneFloor=undefined;
     syncStageRows();
    }
+   // The toolbar and drawer triggers can change height once the new columns are in place.
+   if(!rigStage)available.height=Math.max(0,height-chrome.reduce((sum,node)=>sum+boxHeight(node),0));
+   effective=allocateWorkspaceLayout(available,desired,shown);
    dock('inspectorHeight',effective.inspectorMode==='drawer');
    let bottomHeight=effective.inspectorHeight;
    if(bottom){
@@ -301,7 +323,20 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
     const visibleHeight=Math.min(viewport.bottom,bounds.bottom)-Math.max(viewport.top,bounds.top);
     stageMinimumSatisfied=width>=workspaceMinimums.stageWidth&&visibleHeight>=workspaceMinimums.stageHeight;
    }
-   layout.dataset.stageMinimum=String(stageMinimumSatisfied);for(const binding of bindings)binding.refresh();options.changed();restore();
+   layout.dataset.stageMinimum=String(stageMinimumSatisfied);for(const binding of bindings)binding.refresh();
+   const previousZoom=zoom?.textContent;
+   options.changed();
+   // A fitted image can cross a zoom digit boundary when the Parts drawer trigger takes height.
+   // If Fit reverses its previous width change, keep the wider reading until the inputs change.
+   if(toolbar&&measurement&&!zoomFit?.floor&&previousZoom!==zoom?.textContent){
+    const fitted=measureToolbar(toolbar,zoom);
+    if(measurement.controlsWidth===fitted.controlsWidth&&measurement.width!==fitted.width){
+     const reverses=zoomFit?.before===fitted.width&&zoomFit.after===measurement.width;
+     zoomFit={before:measurement.width,after:fitted.width,controlsWidth:measurement.controlsWidth};
+     if(reverses)zoomFit.floor=Math.max(measurement.width,fitted.width);
+    }
+   }
+   restore();
   }finally{applying=false;}
  }
  const renderSettings=()=>{const value=store.get();
@@ -344,6 +379,17 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
   disposers.push(()=>{if(timer)clearTimeout(timer);for(const type of ['wheel','pointerdown','touchstart','keydown','click'])panel.removeEventListener(type,intent,{capture:true});panel.removeEventListener('scroll',scrolled);content.disconnect();});
  }
  const observer=new ResizeObserver(schedule);observer.observe(layout);
+ if(toolbar){
+  const toolbarWatch=new MutationObserver(()=>{
+   // A redraw can write the same readout again. Only a different intrinsic width needs new geometry.
+   if(!disposed&&!frame&&preferredToolbarWidth(measureToolbar(toolbar,zoom))!==available.toolbarWidth)schedule();
+  });
+  toolbarWatch.observe(toolbar,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['hidden','class','style']});
+  const metricsChanged=()=>{zoomFit=undefined;schedule();};
+  const offLanguage=onLanguageChange(metricsChanged);
+  document.fonts?.addEventListener('loadingdone',metricsChanged);
+  disposers.push(()=>{toolbarWatch.disconnect();offLanguage();document.fonts?.removeEventListener('loadingdone',metricsChanged);});
+ }
  if(rigPane&&bottomHeading)observer.observe(bottomHeading);
  // A region above the stage that is shown or hidden (the chest editor bar, #1035) lays the workspace out before the
  // next frame, so the stage is never drawn under its minimum with a stale allocation.
