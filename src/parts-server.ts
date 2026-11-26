@@ -1,7 +1,7 @@
 /** Serves the parts workspace: the page, its bundle, indexed images, and the sign-off. */
 import { PNG } from 'pngjs';
 import { readFile } from 'node:fs/promises';
-import { appRoot, buildWeb, setupEntryHtml } from './build.ts';
+import { appRoot, buildWeb, entryHtml } from './build.ts';
 import { accessGate } from './open-protocol.ts';
 import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
@@ -51,7 +51,7 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
   const by = options.by;
   if (by !== undefined && (typeof by !== 'string' || !by.trim())) throw new Error('PARTS_VERDICT_INVALID: reviewer name must be nonblank');
   const bundle = await buildWeb();
-  const page = await setupEntryHtml('parts');
+  const page = await entryHtml('parts');
   let rawStop: ((closeActiveConnections?: boolean) => void) | null = null;
   let pendingSaves = 0, saveCount = 0;
   let saveQueue: Promise<void> = Promise.resolve();

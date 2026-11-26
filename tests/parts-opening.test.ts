@@ -118,7 +118,7 @@ test('#748: real server startup refuses atlas before bundle, entry HTML, or list
       appRoot: ${JSON.stringify(resolve('.') + '/')},
       PLAY_SOURCE_CONDITION: '@rig-c/source', playBuildConditions: () => [],
       buildWeb: async () => { calls.bundle++; throw new Error('UNEXPECTED_BUNDLE'); },
-      setupEntryHtml: async () => { calls.entry++; throw new Error('UNEXPECTED_ENTRY'); },
+      entryHtml: async () => { calls.entry++; throw new Error('UNEXPECTED_ENTRY'); },
     }));
     const listener = spyOn(Bun, 'serve').mockImplementation(() => {
       calls.listener++; throw new Error('UNEXPECTED_LISTENER');
