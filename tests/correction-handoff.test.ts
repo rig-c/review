@@ -5,6 +5,10 @@ import type { AppliedAnimation, AppliedPatch } from '../src/applied-context.ts';
 import type { PartsVerdict } from '../src/parts-view.ts';
 import type { Feedback, ReviewSession } from '../src/session.ts';
 import { loadReview } from '../src/manifest.ts';
+import { hasStageComment } from '../src/stage-comment.ts';
+import { t } from '../web/i18n.ts';
+import { markedFeedback } from './helpers/verdict-feedback-746.ts';
+import { statusDom } from './helpers/workspace-status-dom.ts';
 
 const hash = (digit: string) => digit.repeat(64);
 const source = {
@@ -137,41 +141,70 @@ test('checked handoff refuses missing and unknown producer check sources without
   }
 });
 
-test('#735 Made correction records from the existing UTF-8 file path on applied scratch without comment capture', async () => {
+test('#1249 the comment row attaches settled Made correction evidence to the original pin', async () => {
   const {readFile}=await import('node:fs/promises');
   const {parseFeedback}=await import('../src/session.ts');
-  const {validateFeedbackSelection,validateTimedFeedbackSelection}=await import('../src/feedback-validation.ts');
   const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
-  const record=main.slice(main.indexOf('function recordFeedback('),main.indexOf('\n\nfunction bind():',main.indexOf('function recordFeedback(')));
-  const selection=main.slice(main.indexOf('function correctionSelection('),main.indexOf('function propose('));
-  const handler=main.slice(main.indexOf("  button('add-proposal').onclick = "),main.indexOf("  button('save').onclick = "));
-  const guard=main.slice(main.indexOf('function commentCaptureRefusal():'),main.indexOf('function setupComments():'));
-  const values:Record<string,any>={
-    'feedback-start':{value:'3'},'feedback-end':{value:'9'},'feedback-target-kind':{value:'bone'},'feedback-target-name':{value:'elbow'},'feedback-category':{value:'quality'},
-    'correction-path':{value:'made'},'correction-stage':{value:'rig-review'},'correction-selector':{value:'1'},
-    'reference-select':{value:''},'axis-select':{value:''},'axis-value':{value:''},
+  const rowStart=main.indexOf('function hasPinnedComment('),rowEnd=main.indexOf('function download(',rowStart);
+  const guardStart=main.indexOf('function commentCaptureRefusal():'),guardEnd=main.indexOf('function sealedReferenceCamera(',guardStart);
+  expect(rowStart).toBeGreaterThanOrEqual(0);expect(rowEnd).toBeGreaterThan(rowStart);
+  expect(guardStart).toBeGreaterThanOrEqual(0);expect(guardEnd).toBeGreaterThan(guardStart);
+  const js=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(rowStart,rowEnd)+main.slice(guardStart,guardEnd));
+
+  const pinned=markedFeedback.feedback[0]!,mark=pinned.context.comment,modelHash=source.reviewedSource.rig!.sha256;
+  const exact='Keep these precise words.  ',saved=sessionInput().session;
+  const row=parseFeedback({...pinned,frameEnd:9,target:{kind:'bone',name:'elbow'},category:'quality',summary:exact,
+    context:{...pinned.context,interval:{frameStart:3,frameEnd:9,inclusive:true},comment:{
+      ...mark,sourceHash:source.sourceHash,modelHash,
+      bookmark:{...mark.bookmark,binding:{mode:'single',sourceHash:source.sourceHash,rigs:[modelHash]}},
+    }},
+  });
+  saved.feedback=[row];
+  const original=structuredClone(row),errors:string[]=[],updates:string[]=[];
+  const {doc,root}=await statusDom();
+  const scope={
+    document:doc,hasStageComment,session:saved,data:{direction:null},
+    saving:false,readOnly:null,isSubmittedFeedback:()=>false,appliedOnStage:null as AppliedPatch|null,rebuildBusy:false,rigDifference:null,
+    input:(id:string)=>{expect(id).toBe('correction-selector');return {value:'1'};},
+    select:(id:string)=>{expect(id).toBe('correction-stage');return {value:'rig-review'};},
+    actionButton:(label:string,click:()=>void)=>Object.assign(doc.createElement('button'),{textContent:label,onclick:click}),
+    setSourceText:(element:HTMLElement,value:string)=>{element.textContent=value;},
+    t:(key:string)=>t(key,undefined,'en'),tr:(value:string)=>value,
+    message:(value:string,error:boolean)=>{if(error)errors.push(value);},errorText:(error:Error)=>error.message,
+    feedbackEnvironment:()=>null,feedbackSchedule:()=>null,readingsContext:()=>null,requirementsPanel:null,
+    markDirty:()=>updates.push('dirty'),renderProposals:()=>updates.push('render'),persistence:{save:()=>updates.push('save')},
   };
-  const exact='Keep these precise words.  \r\n', bytes=new TextEncoder().encode(exact),saved=sessionInput().session;
-  saved.feedback=[];const errors:string[]=[],button:any={};
-  values['correction-words']={value:'request.txt',files:[{size:bytes.length,arrayBuffer:async()=>bytes.buffer}]};
-  const scope:any={input:(id:string)=>values[id],select:(id:string)=>values[id],button:()=>button,session:saved,appliedOnStage:applied,rigDifference:null,
-    data:{feedbackCatalog:{rig:'package',bones:['elbow'],slots:[],animations:null,clock:null,clockAnimation:null}},
-    tr:(value:string)=>value,t:(value:string)=>value,message:(value:string,error:boolean)=>{if(error)errors.push(value);},errorText:(error:Error)=>error.message,
-    validateFeedbackSelection,validateTimedFeedbackSelection,feedbackAnimation:()=>null,assets:null,player:null,viewport:{state:{cameraCenter:null,zoom:1}},
-    turnPad:null,parts:null,checkpoint:null,time:.25,activeFrameClock:()=>null,frameAtTime:()=>null,selectedPerson:null,sequence:null,
-    serializableView:()=>({}),numericView:()=>({}),appearance:null,layers:{},axisInspection:false,feedbackEnvironment:()=>null,feedbackSchedule:()=>null,
-    readingsContext:()=>null,requirementsPanel:null,selectedReportEvent:null,markDirty(){},renderProposals(){},
+  const {renderFeedbackDetails,recordCommentCorrection,commentCaptureRefusal}=new Function('scope',
+    `with(scope){${js};return {renderFeedbackDetails,recordCommentCorrection,commentCaptureRefusal};}`)(scope);
+  const renderActions=():{textContent:string;onclick:()=>void}[]=>{
+    root.replaceChildren();renderFeedbackDetails(row,root);return root.querySelectorAll('button');
   };
-  const js=new Bun.Transpiler({loader:'ts'}).transformSync(record+selection+guard+handler);
-  const readGuard=new Function('scope','with(scope){'+js+';return commentCaptureRefusal;}')(scope);
-  expect(readGuard()).toStartWith('COMMENT_APPLIED_BUILD_UNSUPPORTED:');
-  await button.onclick();expect(errors).toEqual([]);expect(saved.feedback).toHaveLength(1);
-  const row=saved.feedback[0]!;expect(parseFeedback(row)).toEqual(row);expect(row.summary).toBe(exact);
-  expect(row).toMatchObject({frameStart:3,frameEnd:9,target:{kind:'bone',name:'elbow'},category:'quality',context:{applied,correction:{path:'made',selector}}});
-  expect((row.context as any).comment).toBeUndefined();expect((row.context as any).applied).not.toBe(applied);
+  const describedLabel='Use as described correction',madeLabel='Use as made correction';
+  const pending='CORRECTION_APPLY_PENDING: Apply and check the correction first.';
+
+  expect(renderActions().map(action=>action.textContent)).toEqual([describedLabel]);
+  recordCommentCorrection(row,'made');
+  expect(errors.splice(0)).toEqual([pending]);expect(row).toEqual(original);
+
+  scope.appliedOnStage=applied;
+  const actions=renderActions();
+  expect(actions.map(action=>action.textContent)).toEqual([describedLabel,madeLabel]);
+  const made=actions[1]!;
+  scope.rebuildBusy=true;
+  expect(renderActions().map(action=>action.textContent)).toEqual([describedLabel]);
+  made.onclick();
+  expect(errors.splice(0)).toEqual([pending]);expect(row).toEqual(original);expect(updates).toEqual([]);
+
+  scope.rebuildBusy=false;
+  expect(commentCaptureRefusal()).toStartWith('COMMENT_APPLIED_BUILD_UNSUPPORTED:');
+  renderActions().find(action=>action.textContent===madeLabel)!.onclick();
+  expect(errors).toEqual([]);expect(updates).toEqual(['dirty','render','save']);
+  expect(saved.feedback).toHaveLength(1);expect(saved.feedback[0]).toBe(row);
+  expect(row).toEqual<unknown>({...original,context:{...(original.context as Record<string,unknown>),
+    correction:{path:'made',selector},applied,environment:null,environmentSchedule:null,readings:null,requirements:null,
+  }});
+  expect((row.context as {applied:unknown}).applied).not.toBe(applied);
+  expect(parseFeedback(row)).toEqual(row);
   const projected=projectSessionCorrection({session:saved,sessionBytes:Buffer.from(JSON.stringify(saved)),source,selector,itemId:row.id,path:'made',settled});
   expect(projected).toMatchObject({kind:'checked-patch',verbatim:exact,applied});
-  // A replaced Apply during file decoding must retain the original CORRECTION_APPLY_PENDING refusal.
-  values['correction-words'].files=[{size:bytes.length,arrayBuffer:async()=>{scope.appliedOnStage={...applied,buildId:hash('1')};return bytes.buffer;}}];
-  await button.onclick();expect(saved.feedback).toHaveLength(1);expect(errors.at(-1)).toStartWith('CORRECTION_APPLY_PENDING:');
 });

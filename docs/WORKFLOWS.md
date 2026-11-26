@@ -74,7 +74,7 @@ The header counts feedback records by defect/quality and by build; blocks group 
 
 ## Frame strip export
 
-The strip panel exports the explicitly entered inclusive feedback interval, or all current in-memory feedback intervals, as a PNG or JSON download. Batch selections include unsaved annotations; they do not submit or approve a review. Choose a declared reference video in single-package mode and an explicit clock basis A/B in compare mode. Every selected feedback interval must identify the selected animation. Separate intervals remain separate strip groups, including overlaps.
+The single-package strip panel exports all current in-memory feedback ranges as a PNG or JSON download. The compare panel also accepts an explicitly entered inclusive interval. Batch selections include unsaved annotations; they do not submit or approve a review. Choose a declared reference video in single-package mode and an explicit clock basis A/B in compare mode. Every selected feedback interval must identify the selected animation. Separate intervals remain separate strip groups, including overlaps.
 
 The same export is available without a browser:
 
@@ -712,13 +712,12 @@ refusal when the browser cannot display a bound image.
 
 In the active standing live-job cycle ([Standing live job workflow](#standing-live-job-workflow), [Create #182](https://github.com/rig-c/create/issues/182), [Create #184](https://github.com/rig-c/create/issues/184), [Parts #1159](https://github.com/rig-c/parts/issues/1159)), `described-correction` and `mesh-edit` remain reserved disabled act kinds (`JOB_ACT_KIND_DISABLED`), and agents never build, parse, reshape or carry Review session, feedback, applied-record or verbatim files. The `--correction`, `--feedback-file`, reshaped feedback JSON and `--verbatim-file` commands below are preserved as legacy/history one-shot handoffs and are bypass findings if used in the active cycle.
 
-In **Write review**, choose described or made under **Correction handoff** and
-supply the Create review stage and its draft ID or version. A direction-review
-version also needs its declared post model path. Add the feedback and submit.
-A described request stays unresolved. An optional UTF-8 text file supplies
-exact words, including trailing spaces and CRLF. To use an unsent pointed
-comment, fill the Create identity and select **Use as described correction**
-on its row.
+In standalone review, pin a comment on the inspected build. Fill **Correction
+handoff** with the Create review stage and its draft ID or version. A
+direction-review version also needs its declared post model path. Choose **Use as
+described correction** on the comment row for an unresolved request, or **Use as
+made correction** after Apply settles. Submit the review to save the comment
+and its correction evidence.
 
 ```sh
 rig-review feedback <review-package> --correction <saved-item-id> --format issue
