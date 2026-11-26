@@ -1545,6 +1545,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Redo · Shift-Cmd/Ctrl-Z": "Redo · Shift-Cmd/Ctrl-Z",
   "Reference": "Reference",
   "Reference {0}": "Reference {0}",
+  "Pair {0}": "Pair {0}",
   "Reference back in its domain at the held time.": "Reference back in its domain at the held time.",
   "Reference changed during streaming": "Reference changed during streaming",
   "Reference decoded {0} s · requested {1} s. The rig and saved view use the decoded timestamp.": "Reference decoded {0} s · requested {1} s. The rig and saved view use the decoded timestamp.",

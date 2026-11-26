@@ -108,10 +108,12 @@ export function describeLayerToggles(root:{getElementById(id:string):unknown},re
 /** Finite composition: target rig; compare/Parts/job compatibility expires at steps 3/2/5. */
 export interface ViewSwitchMode {
  id:string;labelKey:string;pressed:boolean;hidden?:boolean;
+ /** Producer text kept verbatim after the localized label. */
+ labelSuffix?:string;
  /** Localized explanation shown on the disabled choice. */
  disabledReason?:string;
 }
-export interface ViewSwitchGroup {modes:readonly ViewSwitchMode[];hidden?:boolean}
+export interface ViewSwitchGroup {modes:readonly ViewSwitchMode[];hidden?:boolean;keepSummary?:boolean}
 export interface ViewSwitchConfig {
  groups:readonly ViewSwitchGroup[];
  currentMode:string;
@@ -177,8 +179,9 @@ export function createViewControls(options:ViewControlsOptions) {
   for(const item of viewSwitch!.querySelectorAll?.('button')??[])(item as HTMLButtonElement).onclick=null;
   if(viewSwitch!.children.length)viewSwitch!.replaceChildren();
   viewSwitch!.open=false;
-  const groups=next.groups.filter(group=>!group.hidden).map(group=>group.modes.filter(mode=>!mode.hidden)).filter(modes=>modes.length);
-  const current=groups.flat().find(mode=>mode.id===next.currentMode);
+  const groups=next.groups.filter(group=>!group.hidden)
+   .map(group=>({...group,modes:group.modes.filter(mode=>!mode.hidden)})).filter(group=>group.modes.length);
+  const current=groups.flatMap(group=>group.modes).find(mode=>mode.id===next.currentMode);
   const label=viewLabel=panelMake('span',{id:'view-menu-label',textContent:current?t(current.labelKey):''});
   const summary=panelMake('summary',{},t('View switch')+' ',label);summary.setAttribute('aria-label',t('View layout'));
   if(next.disabled){
@@ -205,13 +208,16 @@ export function createViewControls(options:ViewControlsOptions) {
    };
   }
   const list=panelMake('div',{className:'view-menu-list'});list.setAttribute('role','group');list.setAttribute('aria-label',t('View'));
-  for(const [index,group] of groups.entries()){
+  for(const [index,{modes:group,keepSummary}] of groups.entries()){
    if(index)list.append(panelMake('hr',{role:'separator'}));
    for(const mode of group){
     const button=actionButton(t(mode.labelKey),()=>{
      if(next.disabled||button.disabled)return;
-     setMode(mode.id);viewSwitch!.open=false;next.onChange?.(mode.id);
+     setMode(mode.id,keepSummary?null:mode.id);viewSwitch!.open=false;next.onChange?.(mode.id);
     });
+    if(mode.labelSuffix!==undefined){
+     const suffix=panelMake('span',{},' · '+mode.labelSuffix);suffix.setAttribute('translate','no');button.append(suffix);
+    }
     button.dataset.view=mode.id;button.setAttribute('aria-pressed',String(mode.pressed));
     modes.set(mode.id,{mode,button,group});
     if(mode.disabledReason)setDisabled(mode.id,mode.disabledReason);

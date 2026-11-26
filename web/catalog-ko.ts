@@ -1545,6 +1545,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Redo · Shift-Cmd/Ctrl-Z": "다시 실행 · Shift-Cmd/Ctrl-Z",
   "Reference": "레퍼런스",
   "Reference {0}": "레퍼런스 {0}",
+  "Pair {0}": "쌍 {0}",
   "Reference back in its domain at the held time.": "유지된 시간에서 레퍼런스가 도메인 내로 복귀했어요.",
   "Reference changed during streaming": "스트리밍 중 레퍼런스가 변경됐어요",
   "Reference decoded {0} s · requested {1} s. The rig and saved view use the decoded timestamp.": "레퍼런스 디코딩 {0}초 · 요청 {1}초. 리그와 저장된 뷰는 디코딩된 타임스탬프를 사용해요.",
