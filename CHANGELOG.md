@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+* Adds the `current` publication selector (`{kind: 'current', output: 'parts' | 'rig' | 'direction', record}`) on the server and contract surface, with `JOB_CURRENT_RECORD_MISSING`, `JOB_CURRENT_RECORD_MISMATCH` and `JOB_CURRENT_OUTPUT_MISMATCH` publication refusals, `JOB_ASK_INVALID` on asks, and send-time `rig-review/act@10` checks that re-hash output seals without re-hashing `project.json` (#1267, refs rig-c/create#1063).
+
 ## 4.22.0
 
 Reviewers now give feedback through comments. Fresh sign-off, checkpoint and interview-picks asks are refused. The sign-off, checkpoint Pass / Fail and interview answer forms are removed. Edit Mesh and chest landmarks travel on the comment-only act. Rig, direction and parts verdict asks keep their Approve / Request changes buttons.

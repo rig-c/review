@@ -80,7 +80,7 @@ export function jobInteger(value: unknown, max = Number.MAX_SAFE_INTEGER): numbe
 
 export function parseJobSelector(value: unknown): JobSelector | null {
   if (value === null) return null;
-  const item = jobObject(value, ['kind', 'id', 'version', 'rigVersion']);
+  const item = jobObject(value, ['kind', 'id', 'version', 'rigVersion', 'output', 'record']);
   if (item.kind === 'draft') {
     jobObject(item, ['kind', 'id']);
     return { kind: 'draft', id: jobId(item.id) };
@@ -96,6 +96,13 @@ export function parseJobSelector(value: unknown): JobSelector | null {
     const version = jobInteger(item.version), rigVersion = jobInteger(item.rigVersion);
     if (!version || !rigVersion) throw new JobError('JOB_REQUEST_INVALID');
     return { kind: 'post', version, rigVersion };
+  }
+  if (item.kind === 'current') {
+    jobObject(item, ['kind', 'output', 'record']);
+    if (item.output !== 'parts' && item.output !== 'rig' && item.output !== 'direction') {
+      throw new JobError('JOB_REQUEST_INVALID');
+    }
+    return { kind: 'current', output: item.output, record: jobSha(item.record) };
   }
   throw new JobError('JOB_REQUEST_INVALID');
 }

@@ -668,6 +668,9 @@ export class JobSession {
       } else if (input.verb === 'ask') {
         if (current.data.head === input.publicationId) {
           const stored = current.data.publications[input.publicationId];
+          if (stored && !isRetainedRecordSource(stored.retained) && stored.retained.source.selector?.kind === 'current') {
+            bindJobAsk(input.subject, stored.retained);
+          }
           if (stored && isRetainedRecordSource(stored.retained)) {
             bindJobRecordAsk(input.subject, stored.retained);
             if (!this.options.readRecordPublished) {
@@ -685,7 +688,12 @@ export class JobSession {
         // One freshness read for the whole batch; every subject binds and validates against it (#963).
         if (current.data.head !== input.publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
         const retained = current.data.publications[input.publicationId].retained;
-        if (!isRetainedRecordSource(retained)) throw new JobError('JOB_REQUEST_INVALID', 'ask-batch requires a record publication');
+        if (!isRetainedRecordSource(retained)) {
+          if (retained.source.selector?.kind === 'current') {
+            input.subjects.forEach((subject, index) => atSubject(index, () => bindJobAsk(subject, retained)));
+          }
+          throw new JobError('JOB_REQUEST_INVALID', 'ask-batch requires a record publication');
+        }
         input.subjects.forEach((subject, index) => atSubject(index, () => bindJobRecordAsk(subject, retained)));
         if (!this.options.readRecordPublished) {
           throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Record publication requires a trusted record reader');
@@ -927,7 +935,8 @@ export class JobSession {
       if (input.kind === 'comments') {
         // #1226: answers no ask and supersedes none; the receipt above is the binding.
         const retained = fresh.data.publications[input.publicationId].retained;
-        assertJobSourceCurrent(retained);
+        const currentOutput = !isRetainedRecordSource(retained) && retained.source.selector?.kind === 'current';
+        assertJobSourceCurrent(retained, currentOutput ? {skipRecord: true, staleCode: 'JOB_ACT_SOURCE_STALE'} : undefined);
         assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals, retained.snapshotIdentity, 'JOB_ACT_SOURCE_STALE');
         act = finalizeCommentOnlyAct({jobId: this.jobId, submission: input, retained, reviewer: fresh.data.reviewer});
         fresh.data.generation++;

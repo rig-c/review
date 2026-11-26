@@ -335,7 +335,8 @@ export function retainedPublicationRoutes(session: JobSession) {
                     capabilities: {playback: !!review?.manifest.model,
                         interview: questions.length > 0 || (retained.interview?.records.length ?? 0) > 0 ||
                             (retained.interview?.diagnostics.length ?? 0) > 0,
-                        preRig: retained.source.selector?.kind === 'draft' && !retainedRigDraftVerdict(retained), modeling: false, motion: false, feedback: true, audio: false},
+                        preRig: (retained.source.selector?.kind === 'draft' && !retainedRigDraftVerdict(retained)) ||
+                            (retained.source.selector?.kind === 'current' && retained.source.selector.output === 'parts'), modeling: false, motion: false, feedback: true, audio: false},
                 });
                 const interviewMetadata = (rigPicture = false, painting?: NonNullable<ReturnType<typeof retainedRecordPainting>>) => {
                     const interview = isRetainedRecordSource(retained) ? undefined :

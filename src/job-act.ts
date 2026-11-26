@@ -120,6 +120,7 @@ export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRet
     return bindJobRecordAsk(subject, retained);
   }
   const source = structuredClone(retained.source);
+  if (source.selector?.kind === 'current') throw new JobError('JOB_ASK_INVALID');
   const declared = retained.subjects.some(candidate => requestDigest(candidate) === requestDigest(subject));
   switch (subject.kind) {
     case 'parts-verdict':
