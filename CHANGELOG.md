@@ -1,12 +1,45 @@
 # Changelog
 
-## Unreleased
+## 4.22.0
+
+Reviewers now give feedback through comments. Fresh sign-off, checkpoint and interview-picks asks are refused. The sign-off, checkpoint Pass / Fail and interview answer forms are removed. Edit Mesh and chest landmarks travel on the comment-only act. Rig, direction and parts verdict asks keep their Approve / Request changes buttons.
+
+**Read before upgrading:**
+
+* **Three ask kinds are refused when they are new: `signoff` (including `plan-approved`), `checkpoint` and `interview-picks`.** A new ask, or `ask-batch` subject, of these kinds gets `JOB_ASK_INVALID`. A new page or record submission of these kinds gets `JOB_ACT_KIND_DISABLED`. The check runs after the replay lookup, so an act that was already accepted still replays byte for byte. Historical acts, records and `rig-review-session/1` files still read, publications that declare these subjects still parse, and the compatibility types stay. `review-verdict` (rig-review, direction-review) and `parts-verdict` asks are unchanged. No export is removed.
+  * **Sign-off and checkpoint:** a producer has nothing to do if it does not ask for them through Review. Create publishes neither as a Review ask. The checkpoint Before / After / Difference pair still shows from the evidence packet, without an ask.
+  * **Interview picks:** a producer that still publishes a picks ask at an interview step takes the answer through its own route instead. In Create, that route is the owner chat `rig-create interview-answer … --pick <ask>=<option-id>`. `open --project … --picks-dir` refuses with `INTERVIEW_PICKS_DISABLED`. Review no longer shows old interview answers or notes, and agents and the CLI read them unchanged.
+* **Edit Mesh and chest landmarks ride `rig-review/act@10`.** Mesh-edit and chest-landmark drafts are sent as `value.carriers` on a comment-only act bound to the displayed `source.model`. Request changes first sends the drafts as a carriers-only act@10, then sends the verdict without them. The rig verdict decision no longer carries `meshEdits` or `chestLandmarks`. Historical act@8 and act@9 verdicts read and replay unchanged. A producer that applies mesh edits or chest landmarks only from a verdict must read the act@10 carriers. Create 1.24.0 applies the mesh-edits carrier, and it records the chest-landmarks carrier with `COMMENT_CARRIER_UNSUPPORTED` but does not apply it.
+* **Frame range, target and category moved onto the pinned comment.** The rig workspace's separate Structured feedback block is removed. A pinned comment on the rig viewport carries:
+  * Frame range (Start and End, inclusive);
+  * Target type and name;
+  * Category (Defect or Quality).
+
+  The comment row reads `F0–12 (producer) · mesh · Quality`. General and parts comments are unchanged.
+* **Every declared checkpoint pair can be chosen.** When a record declares more than one Before / After pair, the View switch gets a second group: `Pair 1 · <step>`, `Pair 2 · <step>`. A single-pair record is unchanged.
+* **The main toolbar keeps one row.** The stage's minimum width is now the main toolbar's own one-row width, measured per language and screen, with 240px as the floor. When there is not enough room, Comments shrinks toward its 280px minimum first, and then Parts moves into the **Parts and settings** drawer. Saved panel sizes are untouched, and Compare is unchanged.
+
+### Added
+
+* Send comments is on the direction, parts and record screens, as on the rig screen (#1247, closes #1242).
+* Every declared checkpoint pair is reachable from the View switch (#1255, closes #1253).
+* Frame range, target and category are set on the pinned comment (#1257, closes #1249).
 
 ### Changed
 
-* Fresh `signoff` asks (including `plan-approved`) now refuse with `JOB_ASK_INVALID`, and page `signoff` submissions refuse with `JOB_ACT_KIND_DISABLED`. Publications that declare `signoff` subjects and finalized historical `signoff` acts and records keep their readers and exports (#1227, refs #1225).
-* Fresh `checkpoint` asks now refuse with `JOB_ASK_INVALID`, and page `checkpoint` submissions refuse with `JOB_ACT_KIND_DISABLED`; records show declared pairs without an ask and packages show the rig screen without the Pass/Fail form. Publications declaring `checkpoint` subjects, finalized historical `checkpoint` acts and records, and standalone `rig-review-session/1` checkpoint outcomes keep their readers, and a committed submission still replays its stored act (#1229, refs #1225).
-* Fresh `interview-picks` asks now refuse with `JOB_ASK_INVALID`, and page `interview-picks` submissions refuse with `JOB_ACT_KIND_DISABLED`. Publications that declare picks subjects, finalized historical picks acts and `rig-review/interview-picks@1` files keep their readers, and a committed submission still replays its stored act (#1230, refs #1225).
+* Fresh `signoff` asks (including `plan-approved`) now refuse with `JOB_ASK_INVALID`, and page `signoff` submissions refuse with `JOB_ACT_KIND_DISABLED`. Publications that declare `signoff` subjects and finalized historical `signoff` acts and records keep their readers and exports (#1244, closes #1227).
+* The stage sign-off form, its "Approve…" opener and its headline are removed. A publication that still carries a sign-off subject shows no form and no error (#1246, closes #1228).
+* Fresh `checkpoint` asks now refuse with `JOB_ASK_INVALID`, and page `checkpoint` submissions refuse with `JOB_ACT_KIND_DISABLED`. Records show declared pairs without an ask, and packages show the rig screen without the Pass/Fail form. Publications declaring `checkpoint` subjects, finalized historical `checkpoint` acts and records, and standalone `rig-review-session/1` checkpoint outcomes keep their readers, and a committed submission still replays its stored act (#1252, closes #1229).
+* Fresh `interview-picks` asks now refuse with `JOB_ASK_INVALID`, and page `interview-picks` submissions refuse with `JOB_ACT_KIND_DISABLED`. The answer form is removed. Publications that declare picks subjects, finalized historical picks acts and `rig-review/interview-picks@1` files keep their readers, and a committed submission still replays its stored act (#1251, closes #1230).
+* Edit Mesh, chest landmarks and the Answered-by marker ride the comment-only act. `answeredDirectionFeedback` also resolves to an act@10 on an earlier direction post. The mesh editor hint now names Send comments (#1243, closes #1231 and #1245).
+* The development pin on `@rig-c/parts` is 2.59.0 (#1265, refs #1170).
+
+### Fixed
+
+* With the comments panel open, the main toolbar stays on one row at narrow widths (#1256, closes #1248).
+* The checkpoint View switch no longer moves when the label changes from After to Difference (#1263, closes #1258).
+* A comment being typed is no longer closed when the list refreshes. Its text, focus and cursor stay (#1264, closes #1260).
+* Browser tests wait for the displayed receipt before approving or commenting (#1261, #1262).
 
 ## 4.21.0
 
