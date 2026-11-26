@@ -117,6 +117,8 @@ export interface ViewSwitchGroup {modes:readonly ViewSwitchMode[];hidden?:boolea
 export interface ViewSwitchConfig {
  groups:readonly ViewSwitchGroup[];
  currentMode:string;
+ /** Reserve the widest localized label among the modes that can name the summary. */
+ reserveSummaryWidth?:boolean;
  disabled?:boolean;
  onChange?:(id:string)=>void;
 }
@@ -183,7 +185,15 @@ export function createViewControls(options:ViewControlsOptions) {
    .map(group=>({...group,modes:group.modes.filter(mode=>!mode.hidden)})).filter(group=>group.modes.length);
   const current=groups.flatMap(group=>group.modes).find(mode=>mode.id===next.currentMode);
   const label=viewLabel=panelMake('span',{id:'view-menu-label',textContent:current?t(current.labelKey):''});
-  const summary=panelMake('summary',{},t('View switch')+' ',label);summary.setAttribute('aria-label',t('View layout'));
+  let summaryLabel=label;
+  if(next.reserveSummaryWidth){
+   summaryLabel=panelMake('span',{className:'view-menu-label-size'},label);
+   for(const group of groups)if(!group.keepSummary)for(const mode of group.modes){
+    const sample=panelMake('span',{textContent:t(mode.labelKey)});
+    sample.setAttribute('aria-hidden','true');summaryLabel.append(sample);
+   }
+  }
+  const summary=panelMake('summary',{},t('View switch')+' ',summaryLabel);summary.setAttribute('aria-label',t('View layout'));
   if(next.disabled){
    summary.tabIndex=-1;
    viewSwitch!.setAttribute('aria-disabled','true');summary.setAttribute('aria-disabled','true');

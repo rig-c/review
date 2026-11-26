@@ -1,9 +1,12 @@
 /** Ordinary Nova acceptance for Review #716, using public synthetic PNGs and real retained jobs.
  * main: bun tests/job-checkpoint-pair-browser.ts --baseline --out <baseline-dir>
  * head: bun tests/job-checkpoint-pair-browser.ts --compare <baseline-dir>/observations.json --out <head-dir>
+ * #1258: run this same file on both product revisions with --view-switch --out <run-dir>.
+ * Add --view-switch-captures for separate owner-look replays at 1024×768 and 1440×900.
  */
 import assert from 'node:assert/strict';
 import {createHash, randomUUID} from 'node:crypto';
+import {once} from 'node:events';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
@@ -283,8 +286,6 @@ async function capture(page: InputCdpSession, directory: string, name: string, s
 
 async function chooseView(page: InputCdpSession, mode: string) {
     if (!(await page.evaluate<boolean>("document.querySelector('#view-menu').open"))) {
-        // A mode label change can reflow the toolbar before the summary receives the next click.
-        await settle(page);
         await click(page, '#view-menu summary');
     }
     await click(page, '#view-menu [data-view="' + mode + '"]');
@@ -718,6 +719,264 @@ function arg(name: string) {
     return value;
 }
 
+const checkpointSummary = '#view-menu:has([data-view="after"]) > summary';
+const firstPairView = 'checkpoint-pair-' + checkpointId;
+const secondPairView = 'checkpoint-pair-' + secondCheckpointId;
+const checkpointSwitchBinding = 'checkpoint1258Ready';
+const checkpointSwitchState = 'window.checkpoint1258';
+
+type SwitchFrame = {
+    frame: number;
+    at: number | null;
+    summary: {x: number; y: number; width: number; height: number} | null;
+    difference: boolean;
+};
+
+// CDP installs this before the document scripts. Its runtime dependencies are passed in.
+function installCheckpointSwitchProbe(summarySelector: string, language: Language, readyBinding: string, heldPath: string | null) {
+    const notifyReady = (window as unknown as Record<string, (value: string) => void>)[readyBinding]!;
+    const selectors = [summarySelector, '#checkpoint-difference-canvas'];
+    const visibleAtRegistration = new Map<Element, boolean>();
+    const frames: SwitchFrame[] = [];
+    const clicks: {at: number; control: string | null; trusted: boolean; held: boolean; x: number; y: number}[] = [];
+    let heldAt: number | null = null, releaseFetch: (() => void) | undefined;
+    const held = new Promise<void>(resolveHeld => {
+        if (!heldPath) return;
+        const network: {fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>} = window;
+        const original = network.fetch;
+        const gate = new Promise<void>(resolveGate => {releaseFetch = resolveGate;});
+        network.fetch = async (input, init) => {
+            if (String(input).endsWith(heldPath)) {
+                network.fetch = original;
+                heldAt = performance.now();
+                resolveHeld();
+                await gate;
+            }
+            return original.call(window, input, init);
+        };
+    });
+    function onClick(event: MouseEvent) {
+        const target = event.target instanceof Element ? event.target.closest('#view-menu summary, #view-menu [data-view]') : null;
+        clicks.push({at: performance.now(), control: target?.tagName === 'SUMMARY' ? 'summary' : target?.getAttribute('data-view') ?? null,
+            trusted: event.isTrusted, held: heldAt !== null, x: event.clientX, y: event.clientY});
+    }
+    document.addEventListener('click', onClick, true);
+
+    let frame = 0, raf = 0, sampled = false, stopped = false, readyFrame: number | null = null;
+    let finish!: () => void;
+    const terminal = new Promise<void>(resolveTerminal => {finish = resolveTerminal;});
+    const inView = ({target, intersectionRect}: IntersectionObserverEntry) =>
+        visibleAtRegistration.get(target) && intersectionRect.width > 0 && intersectionRect.height > 0;
+    const observer = new IntersectionObserver(collect);
+    const mutations = new MutationObserver(track);
+    function track() {
+        for (const selector of selectors) {
+            const target = document.querySelector(selector);
+            if (!target || visibleAtRegistration.has(target)) continue;
+            // Keep the outgoing target registered until the frame drains. Chromium's unobserve
+            // discards its queued entries, including a visible sample captured before replacement.
+            visibleAtRegistration.set(target, target.checkVisibility({visibilityProperty: true, opacityProperty: true}));
+            observer.observe(target);
+        }
+    }
+    function stop() {
+        stopped = true;
+        cancelAnimationFrame(raf);
+        mutations.disconnect();
+        observer.disconnect();
+        document.removeEventListener('click', onClick, true);
+    }
+    function collect(entries: IntersectionObserverEntry[]) {
+        if (sampled || stopped) return;
+        const summaryEntry = entries.find(entry => entry.target.tagName === 'SUMMARY' && inView(entry));
+        const canvasEntry = entries.find(entry => entry.target.tagName === 'CANVAS' && inView(entry));
+        const sample = summaryEntry ?? canvasEntry;
+        if (!sample) return;
+        sampled = true;
+        const rect = summaryEntry?.boundingClientRect;
+        if (rect || frames.length) frames.push({frame, at: sample.time,
+            summary: rect ? {x: rect.x, y: rect.y, width: rect.width, height: rect.height} : null, difference: !!canvasEntry});
+        // Live DOM checks only gate the click. The first measured position is the first visible observer entry.
+        const summary = summaryEntry?.target;
+        if (readyFrame === null && summary?.isConnected && !summary.closest('[inert], [aria-disabled="true"]') &&
+            document.documentElement.lang === language) {
+            const difference = document.querySelector<HTMLButtonElement>('#view-menu [data-view="difference"]');
+            if (difference && !difference.disabled) {
+                readyFrame = frame;
+                notifyReady(language);
+            }
+        }
+        if (canvasEntry && frames.length) {
+            stop();
+            finish();
+        }
+    }
+    function nextFrame() {
+        // Drain a queued entry before assigning the next frame, even if its delivery task was delayed.
+        collect(observer.takeRecords());
+        if (stopped) return;
+        if (!sampled && frames.length) frames.push({frame, at: null, summary: null, difference: false});
+        frame++;
+        sampled = false;
+        // A fresh registration queues an entry on the rendering update even when geometry is unchanged.
+        observer.disconnect();
+        visibleAtRegistration.clear();
+        track();
+        raf = requestAnimationFrame(nextFrame);
+    }
+    // A later rAF callback can replace the summary or insert the canvas before the same rendering update.
+    mutations.observe(document, {subtree: true, childList: true});
+    track();
+    raf = requestAnimationFrame(nextFrame);
+    Object.assign(window, {checkpoint1258: {held, terminal, report() {
+        collect(observer.takeRecords());
+        stop();
+        releaseFetch?.();
+        return {frames, clicks, readyFrame, heldAt, viewport: [innerWidth, innerHeight], dpr: devicePixelRatio,
+            language: document.documentElement.lang, visibility: document.visibilityState, browser: navigator.userAgent};
+    }}});
+}
+
+type SwitchReport = {frames: SwitchFrame[]; readyFrame: number | null; heldAt: number | null;
+    viewport: [number, number]; dpr: number; language: string; visibility: string; browser: string;
+    clicks: {control: string | null; trusted: boolean; held: boolean}[]};
+
+const switchPaths = ['first-mount', 'held-difference'] as const;
+const switchSizes = [[1024, 768], [1280, 800]] as const;
+const switchCaptureSizes = [[1024, 768], [1440, 900]] as const;
+const switchError = (error: unknown) => String(error).replace(/#cap=[^\s"']+/g, '#cap=<redacted>');
+
+async function measureCheckpointSwitch(page: InputCdpSession, readyEvents: EventTarget, scratch: string,
+    size: readonly [number, number], language: Language, path: typeof switchPaths[number]) {
+    const held = path === 'held-difference';
+    const send = command;
+    assert.ok(send);
+    const fixture = await openFixture(scratch, 'plan', held ? 'two-pairs' : 'pair', language);
+    const errors: string[] = [];
+    let identifier: string | undefined, report: SwitchReport | undefined;
+    let pixels: Awaited<ReturnType<typeof differenceBytes>> | undefined;
+    try {
+        const url = new URL(fixture.host.ownerUrl);
+        url.searchParams.set('lang', language);
+        const heldPath = held ? '/checkpoint-evidence/' + checkpointId + '/difference' : null;
+        const args = [checkpointSummary, language, checkpointSwitchBinding, heldPath].map(value => JSON.stringify(value));
+        const source = `if (location.origin === ${JSON.stringify(url.origin)}) (${installCheckpointSwitchProbe.toString()})(${args.join(', ')});`;
+        ({identifier} = await send('Page.addScriptToEvaluateOnNewDocument', {source}) as {identifier: string});
+        const ready = once(readyEvents, checkpointSwitchBinding, {signal: AbortSignal.timeout(15_000)});
+        void ready.catch(() => {}); // Navigation can fail before the readiness event arrives.
+        // Navigate directly since goto waits before its first poll.
+        const navigation = await send('Page.navigate', {url: url.href}) as {errorText?: string};
+        assert.equal(navigation.errorText, undefined, 'checkpoint navigation');
+        await ready;
+        if (held) await chooseView(page, 'before');
+        await chooseView(page, 'difference');
+        if (held) {
+            await page.evaluate(checkpointSwitchState + '.held');
+            await chooseView(page, secondPairView);
+        }
+        await page.evaluate(checkpointSwitchState + '.terminal');
+        const evidence = held ? fixture.secondEvidence! : fixture.evidence;
+        await pairView(page, {evidence}, language, 'difference', true, 6_000, held ? secondPairView : undefined);
+        pixels = await differenceBytes(page, evidence);
+    } catch (error) {
+        errors.push(switchError(error));
+    } finally {
+        try {
+            report = await page.evaluate<SwitchReport | undefined>(checkpointSwitchState + '?.report()');
+        } catch (error) {
+            errors.push(switchError(error));
+        }
+        try {
+            if (identifier) await send('Page.removeScriptToEvaluateOnNewDocument', {identifier});
+            await page.goto('about:blank');
+        } finally {
+            await fixture.close();
+        }
+    }
+    const frames = report?.frames ?? [];
+    const first = frames[0] ?? null, last = frames.at(-1) ?? null;
+    const origin = first?.summary;
+    const positions = origin ? frames.flatMap(({summary}) => summary ? [summary] : []) : [];
+    const maxDx = origin ? Math.max(...positions.map(({x}) => Math.abs(x - origin.x))) : null;
+    const maxDy = origin ? Math.max(...positions.map(({y}) => Math.abs(y - origin.y))) : null;
+    if (!origin || report?.readyFrame == null || !last?.difference || !pixels)
+        errors.push('mounted summary, click readiness or visible Difference missing');
+    if (frames.some(({summary}) => !summary)) errors.push('summary missing from a rendering update');
+    if (report?.language !== language || report.dpr !== 1 || report.viewport.join() !== size.join() || report.visibility !== 'visible')
+        errors.push('browser viewport, visibility or language mismatch');
+    if (!report?.clicks.some(click => click.trusted && click.control === 'difference')) errors.push('trusted Difference click missing');
+    if (held && !report?.clicks.some(click => click.trusted && !click.held && click.control === 'before'))
+        errors.push('trusted Before click before holding Pair 1 Difference missing');
+    if (held && !report?.clicks.some(click => click.trusted && click.held && click.control === secondPairView))
+        errors.push('trusted Pair 2 click during held Pair 1 Difference missing');
+    if (maxDx !== null && maxDy !== null && (maxDx > 2 || maxDy > 2)) errors.push('summary moved more than 2 CSS px on either axis');
+    const name = '1258-' + size.join('x') + '-' + language + '-' + path;
+    const result = {name, first, last, maxDx, maxDy, frames: frames.length, readyFrame: report?.readyFrame ?? null, errors};
+    return {result, report, pixels, sourceHash: fixture.sourceHash, language, viewport: size, path};
+}
+
+async function replayCheckpointSwitchCaptures(page: InputCdpSession, scratch: string, directory: string) {
+    const replays = [];
+    for (const size of switchCaptureSizes) {
+        await page.setViewport(size[0], size[1]);
+        for (const language of languages) for (const path of switchPaths) {
+            const held = path === 'held-difference';
+            const fixture = await openFixture(scratch, 'plan', held ? 'two-pairs' : 'pair', language);
+            const name = '1258-' + size.join('x') + '-' + language + '-' + path;
+            const files: string[] = [];
+            const shot = async (phase: string) => {
+                await capture(page, directory, name + '-' + phase, [...size]);
+                files.push('owner-look/' + name + '-' + phase + '.png');
+            };
+            // The visual replay selects Pair 2 before requesting Difference so a baseline click miss still yields both views.
+            const activate = (mode: string) => page.evaluate(`document.querySelector(${JSON.stringify('#view-menu [data-view="' + mode + '"]')}).click()`);
+            const replay = {name, viewport: size, dpr: 1, format: 'png', language, path, files, error: null as string | null};
+            try {
+                await showFixture(page, fixture, language);
+                if (held) await activate('before');
+                await pairView(page, fixture, language, held ? 'before' : 'after', true, 6_000, held ? firstPairView : undefined);
+                await shot('before-difference');
+                if (held) await activate(secondPairView);
+                await activate('difference');
+                const evidence = held ? fixture.secondEvidence! : fixture.evidence;
+                await pairView(page, {evidence}, language, 'difference', true, 6_000, held ? secondPairView : undefined);
+                await differenceBytes(page, evidence);
+                await shot('after-difference');
+            } catch (error) {
+                replay.error = switchError(error);
+            } finally {
+                try {await page.goto('about:blank');}
+                finally {await fixture.close();}
+            }
+            replays.push(replay);
+        }
+    }
+    return replays;
+}
+
+async function checkpointViewSwitch(page: InputCdpSession, readyEvents: EventTarget, scratch: string, output: string, captures?: string) {
+    assert.ok(command);
+    await command('Runtime.addBinding', {name: checkpointSwitchBinding});
+    const harnessSha256 = sha256(await readFile(import.meta.path));
+    const cases = [];
+    for (const size of switchSizes) {
+        await page.setViewport(size[0], size[1]);
+        for (const language of languages) for (const path of switchPaths) {
+            const measurement = await measureCheckpointSwitch(page, readyEvents, scratch, size, language, path);
+            const {result} = measurement;
+            await writeFile(join(output, result.name + '.json'), JSON.stringify({harnessSha256, ...measurement}, null, 2) + '\n');
+            cases.push(result);
+            console.log('1258_VIEW_SWITCH ' + JSON.stringify(result));
+        }
+    }
+    const replays = captures ? await replayCheckpointSwitchCaptures(page, scratch, captures) : [];
+    const failures = [...cases.filter(result => result.errors.length), ...replays.filter(replay => replay.error)].map(item => item.name);
+    const result = {harnessSha256, cases, captureReplays: replays, failures};
+    await writeFile(join(output, '1258-view-switch.json'), JSON.stringify(result, null, 2) + '\n');
+    assert.deepEqual(failures, [], 'checkpoint View switch regression; see 1258-view-switch.json');
+    return result;
+}
+
 /** #1253 uses the same sealed fixtures on the base and the candidate at the owner's viewport size. */
 async function recordPairSelection(page: InputCdpSession, scratch: string, captures: string, baseline: boolean) {
     const size = [1280, 800] as const;
@@ -945,8 +1204,10 @@ async function checkpointAskRefusalKeepsScreen(page: InputCdpSession, scratch: s
 async function run() {
     const baseline = Bun.argv.includes('--baseline');
     const recordNoAskOnly = Bun.argv.includes('--record-no-ask');
+    const viewSwitchCaptures = Bun.argv.includes('--view-switch-captures');
+    const viewSwitchOnly = viewSwitchCaptures || Bun.argv.includes('--view-switch');
     const comparisonPath = arg('--compare');
-    const output = resolve(arg('--out') ?? (baseline ? 'artifacts/716-baseline' : 'artifacts/716'));
+    const output = resolve(arg('--out') ?? (viewSwitchOnly ? 'artifacts/1258' : baseline ? 'artifacts/716-baseline' : 'artifacts/716'));
     const captures = join(output, 'owner-look');
     await mkdir(captures, {recursive: true});
     const comparison = comparisonPath ? JSON.parse(await readFile(comparisonPath, 'utf8')) as {
@@ -955,11 +1216,14 @@ async function run() {
     const scratch = await mkdtemp(join(tmpdir(), 'review-716-browser-'));
     const results = {baseline, noPair: {} as Record<string, ViewObservation>, cases: {} as Record<string, unknown>};
     const replayFailures: string[] = [];
+    const readyEvents = new EventTarget();
     let page: InputCdpSession | undefined;
     let active = '';
     try {
         page = await launchCdpSession(join(scratch, 'profile'), {sendDeadlineMs: 15_000, onEvent: async (event, send) => {
             if (event.sessionId) command = send;
+            if (event.method === 'Runtime.bindingCalled' && event.params?.name === checkpointSwitchBinding)
+                readyEvents.dispatchEvent(new Event(checkpointSwitchBinding));
             if (event.method !== 'Page.javascriptDialogOpening') return;
             assert.equal(event.params?.type, 'beforeunload', 'only departure with unsent test pins is allowed');
             await send('Page.handleJavaScriptDialog', {accept: true});
@@ -969,6 +1233,11 @@ async function run() {
             results.cases.recordPairSelection = await recordPairSelection(page, scratch, captures,
                 Bun.argv.includes('--pair-selection-baseline'));
             await writeFile(join(output, 'observations.json'), JSON.stringify(results, null, 2) + '\n');
+            return;
+        }
+        if (viewSwitchOnly) {
+            active = 'checkpoint-view-switch';
+            await checkpointViewSwitch(page, readyEvents, scratch, output, viewSwitchCaptures ? captures : undefined);
             return;
         }
         await page.setViewport(1440, 900);
@@ -1074,6 +1343,8 @@ async function run() {
             results.cases.refusedCheckpointAskScreen = await checkpointAskRefusalKeepsScreen(page, scratch);
             active = 'record-pair-selection';
             results.cases.recordPairSelection = await recordPairSelection(page, scratch, captures, false);
+            active = 'checkpoint-view-switch';
+            results.cases.checkpointViewSwitch = await checkpointViewSwitch(page, readyEvents, scratch, output);
         }
         await writeFile(join(output, 'observations.json'), JSON.stringify(results, null, 2) + '\n');
     } catch (error) {

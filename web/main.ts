@@ -2071,7 +2071,10 @@ async function showCheckpointPair(mode:CheckpointPairMode):Promise<void> {
  const label=checkpointPairLabels[mode==='compare'?'before':mode];
  text('reference-label',label);setSourceAttribute(el('reference-pane'),'aria-label',label);
  viewport.state.activeCamera='reference';viewport.state.cameraFrames={};viewport.state.cameraLayout='';
- viewport.requestFit();renderLayout();comments?.refresh();
+ viewport.requestFit();renderLayout();
+ // Allocate the new menu and fitted readout in the first mount's task, before paint.
+ if(generation===1&&mode!=='difference')workspace?.layoutNow();
+ comments?.refresh();
 }
 
 async function syncCheckpointPair(keepReplay=true,mode:CheckpointPairMode='after'):Promise<void> {
@@ -2108,7 +2111,7 @@ function mountCheckpointPair(pair:CheckpointPairView|undefined,mode:CheckpointPa
   id:checkpointPairPrefix+candidate.checkpointId,labelKey:t('Pair {0}',[index+1],'en'),
   labelSuffix:candidate.checkpointId,pressed:candidate===pair,
  }))});
- const restoreSwitch=controls.replaceViewSwitch({currentMode:mode,groups,onChange:chooseInspectionView});
+ const restoreSwitch=controls.replaceViewSwitch({currentMode:mode,groups,reserveSummaryWidth:true,onChange:chooseInspectionView});
  checkpointPair={pair,mode,requestedMode:mode,bookmark,difference:null,generation:0,release:()=>{
   checkpointPair=null;pair.after.image.remove();content.replaceChildren(...nodes);restoreSwitch();
   for(const {node,value}of hidden)node.hidden=value;
@@ -2119,7 +2122,10 @@ function mountCheckpointPair(pair:CheckpointPairView|undefined,mode:CheckpointPa
   viewport.cancelFit();Object.assign(viewport.state,camera);if(!disposed){renderLayout();comments?.refresh();}
  }};
  viewport.state.cameraSync=false;text('rig-label','After');setSourceAttribute(el('rig-pane'),'aria-label','After');
- if(mode==='difference'){content.replaceChildren();text('reference-label','Difference');setSourceAttribute(el('reference-pane'),'aria-label','Difference');renderLayout();}
+ if(mode==='difference'){
+  content.replaceChildren();text('reference-label','Difference');setSourceAttribute(el('reference-pane'),'aria-label','Difference');
+  renderLayout();workspace?.layoutNow();
+ }
  if(sourceTextContent(el('message'))==='This request has no picture.')message(sourceTextContent(el('dirty')),false,true);
  return true;
 }
