@@ -282,7 +282,11 @@ async function capture(page: InputCdpSession, directory: string, name: string, s
 }
 
 async function chooseView(page: InputCdpSession, mode: string) {
-    if (!(await page.evaluate<boolean>("document.querySelector('#view-menu').open"))) await click(page, '#view-menu summary');
+    if (!(await page.evaluate<boolean>("document.querySelector('#view-menu').open"))) {
+        // A mode label change can reflow the toolbar before the summary receives the next click.
+        await settle(page);
+        await click(page, '#view-menu summary');
+    }
     await click(page, '#view-menu [data-view="' + mode + '"]');
 }
 
