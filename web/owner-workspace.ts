@@ -40,9 +40,9 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
       const token = await grant(target.key);
       if (!retained.isCurrent(intent)) return;
       const frame = retained.createFrame(target.title, target.entry + '&lang=' + getLanguage() + '#cap=' + token);
-      // #655 slice 4 / #1213 owns legacy Compare chrome, including its build picker and feedback actions.
+      // The owner bar hosts frame modes. Compare also relays language changes from its own Settings.
+      frame.dataset.stageEmbed = 'owner';
       if (target.mode === 'compare') frame.dataset.workspaceLocale = 'legacy-compare';
-      else frame.dataset.stageEmbed = 'owner';
       entry = {frame, target}; retained.retain(entry);
     }
     retained.select(target.key);

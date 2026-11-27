@@ -11,6 +11,7 @@ import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.t
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {PROBE_MP4_BASE64} from './compare-mode-browser.ts';
 import {parseWorkspaceRecord, readPrivate} from '../src/open-workspace-state.ts';
+import type {CompareBinding} from '../src/compare.ts';
 
 const foreground = Bun.argv.includes('--foreground');
 const singleEntry = Bun.argv.includes('--single-entry');
@@ -33,6 +34,7 @@ const observations: Record<string, unknown> = {};
 let page: InputCdpSession | undefined, stateDir = join(root, 'state'), ownerURL = '';
 let port = 0;
 const events: unknown[] = [];
+let ownerPageCommand: ((method: string, params: Record<string, unknown>) => Promise<unknown>) | undefined;
 let expectedDeparture:{origin:string;paths:string[]}|undefined;
 const departureDialogs:{type:string;pathname:string;accepted:boolean}[]=[];
 async function record(name: string, value: unknown) {
@@ -251,7 +253,7 @@ async function stopOwner() {
   assert.equal(reachable, false);
   await record('cleanup-' + host.pid, {descriptorRemoved: true, listenerReachable: false});
 }
-let before: unknown;
+let before: Awaited<ReturnType<typeof jobInputHashes>>[] | undefined;
 try {
   const help = await cli(['open', '--help']);
   assert.ok(help.stdout.includes('rig-review open <dir>'));
@@ -282,6 +284,9 @@ try {
     await record('foreground-entry', {...initial, afterJoin: await foregroundInventory(), sameOwnerURL: true, joinerExits: [0, joined.exit]});
   }
   page = await launchCdpSession(join(root, 'browser'), {sendDeadlineMs:20_000,browserArgs: singleEntry ? ['--single-process', '--no-zygote', '--num-raster-threads=1', '--js-flags=--max-old-space-size=1024'] : [], onEvent(event,send) {
+    if (event.method === 'Page.frameNavigated' && !(event.params?.frame as {parentId?: string} | undefined)?.parentId) {
+      ownerPageCommand = send;
+    }
     // Same CDP departure handling as job-checkpoint-evidence-browser: only a planned departure may accept dirty-form beforeunload.
     if(event.method==='Page.javascriptDialogOpening'){
       const u=new URL(String(event.params?.url));
@@ -516,6 +521,28 @@ try {
   stateDir = join(root, 'compare-state'); ownerURL = '';
   const compared = await cli(['open', inputs[0]!, '--compare', inputs[1]!, '--reference', join(inputs[0]!, 'browser-reference.mp4'), '--animation', 'pair-inspect', '--view-only', '--control']);
   ownerURL = new URL(compared.stdout.trim()).href;
+  const compareActSelectors = [
+    '#mode-build-picker', '.actions:has(#submit)', '#mode-build-picker [data-build-side=a]', '#mode-build-picker [data-build-side=b]',
+    '#picked-build-label', '.actions #save-state', '.actions #export-json', '.actions #export-markdown', '.actions #submit',
+  ];
+  assert.ok(ownerPageCommand, 'owner page CDP session is available before Compare mounts');
+  // Capture the frame's legacy nodes during header assembly, before the shared shell moves them.
+  const {identifier: actProbe} = await ownerPageCommand('Page.addScriptToEvaluateOnNewDocument', {
+    source: `(()=>{
+      if(window===parent)return;
+      const append=Element.prototype.append;
+      Element.prototype.append=function(...nodes){
+        const result=Reflect.apply(append,this,nodes);
+        if(this.tagName==='HEADER' && nodes.some(node=>node?.id==='mode-build-picker') &&
+          nodes.some(node=>node?.classList?.contains('actions'))){
+          window.__ownerCompareOriginalActs={document,header:this,
+            nodes:${JSON.stringify(compareActSelectors)}.map(selector=>this.querySelector(selector))};
+          Element.prototype.append=append;
+        }
+        return result;
+      };
+    })()`,
+  }) as {identifier: string};
   await page.evaluate(`window.__comparePriorDocument=document`);
   let compareLoader: string | undefined;
   expectedDeparture=await page.evaluate(`({origin:location.origin,paths:[location.pathname,...[...document.querySelectorAll('.owner-stage>iframe')].map(frame=>new URL(frame.src).pathname)]})`);
@@ -535,6 +562,7 @@ try {
           !!document.querySelector('#'+side+'-root canvas'));
     }catch{return false;}
   })()`), 'decoded reference and drawn pair');
+  await ownerPageCommand('Page.removeScriptToEvaluateOnNewDocument', {identifier: actProbe});
   const renderObservations = await inside<any>(0, `(()=>{
     const trace=JSON.parse(document.querySelector('#trace').textContent);
     return {language:document.documentElement.lang,renderers:['a','b'].map(side=>({side,
@@ -543,11 +571,69 @@ try {
   })()`);
   assert.equal(renderObservations.language, language);
   assert.ok(renderObservations.renderers.every((renderer: any) => ['fresh', 'cached'].includes(renderer.kind)));
-  assert.ok(await page.evaluate(`document.querySelector('#app>.topbar .mode-switch').hidden &&
-    document.querySelector('#app>.topbar #package-title').textContent===document.querySelector('.owner-target-title').textContent &&
-    document.querySelector('#app>.topbar #settings-language').getClientRects().length>0`));
-  assert.ok(await inside(0, `!!document.querySelector('header #export-json')?.getClientRects().length &&
-    !!document.querySelector('header #export-markdown')?.getClientRects().length`));
+  const outerModes = '#app>.topbar .mode-switch';
+  const frameModeIs = (mode: 'rig' | 'playback' | 'compare') => frameExpression(0,
+    `document.querySelector('#stage-layout').dataset.workspaceMode==='${{rig: 'setup', playback: 'animate', compare: 'compare'}[mode]}' &&
+      document.querySelector('header .mode-switch [data-mode="${mode}"]').getAttribute('aria-pressed')==='true'`);
+  const outerModeIs = (mode: 'rig' | 'playback' | 'compare') =>
+    `document.querySelector('${outerModes} [data-mode="${mode}"]:enabled')?.getAttribute('aria-pressed')==='true'`;
+  await wait(`document.querySelector('${outerModes} [data-mode=compare]:enabled[aria-pressed=true]') &&
+    ${frameModeIs('compare')}`, 'owner Compare receives frame mode state');
+  const subtitle = localized('{0} · A/B order and reference video hash are fixed').replace('{0}', 'pair-inspect');
+  const compareChrome = await page.evaluate(`(()=>{
+    const frame=document.querySelector('.owner-stage>iframe'),child=frame.contentDocument;
+    const visible=node=>!!node && node.getClientRects().length>0 &&
+      node.ownerDocument.defaultView.getComputedStyle(node).visibility==='visible';
+    const count=(doc,selector)=>[...doc.querySelectorAll(selector)].filter(visible).length;
+    return {
+      headers:[count(document,'header'),count(child,'header')],
+      brands:[count(document,'.brand'),count(child,'.brand')],
+      modeGroups:[count(document,'.mode-switch'),count(child,'.mode-switch')],
+      outerModes:[...document.querySelectorAll('${outerModes} button')].filter(visible)
+        .map(button=>({mode:button.dataset.mode,label:button.textContent.trim(),enabled:!button.disabled})),
+      hiddenFrameHeader:child.querySelector('header').hidden,
+      titleMatchesTarget:document.querySelector('#app>.topbar #package-title').textContent===document.querySelector('.owner-target-title').textContent,
+      visibleOwnerLanguage:visible(document.querySelector('#app>.topbar #settings-language')),
+      visibleFrameSubtitle:visible(child.querySelector('#animation')) ||
+        child.body.innerText.includes(${JSON.stringify(subtitle)}) ||
+        child.body.innerText.includes('pair-inspect · A/B order and reference video hash are fixed'),
+      targetAnimation:document.querySelector('.owner-target-animation').textContent,
+    };
+  })()`);
+  assert.deepEqual(compareChrome, {
+    headers: [1, 0], brands: [1, 0], modeGroups: [1, 0],
+    outerModes: [
+      {mode: 'rig', label: localized('Setup'), enabled: true},
+      {mode: 'playback', label: localized('Animate'), enabled: true},
+      {mode: 'compare', label: localized('Compare'), enabled: true},
+    ],
+    hiddenFrameHeader: true, titleMatchesTarget: true, visibleOwnerLanguage: true,
+    visibleFrameSubtitle: false, targetAnimation: 'pair-inspect',
+  }, 'Option A and S1 on the selected Compare target');
+  // Record handlers after the original nodes have been wired in their frame.
+  await inside(0, `(()=>{
+    const original=window.__ownerCompareOriginalActs;
+    if(original)original.handlers=original.nodes.map(node=>node?.onclick);
+  })()`);
+  const compareActsIntact = `(()=>{
+    const row=document.querySelector('#workspace-act-row'),saved=window.__ownerCompareOriginalActs;
+    if(!saved)return ['original Compare act carriers were not observed'];
+    const issues=[];
+    if(!row || saved.document!==document || saved.header!==document.querySelector('header') ||
+      saved.header.nextElementSibling!==row || row.children.length!==2 ||
+      row.firstElementChild!==saved.nodes[0] || row.lastElementChild!==saved.nodes[1])issues.push('act row placement');
+    for(const [index,selector] of ${JSON.stringify(compareActSelectors)}.entries()){
+        const matches=document.querySelectorAll(selector),node=matches[0];
+        if(!(matches.length===1 && row?.contains(node) && node.ownerDocument===document &&
+          node===saved.nodes[index] && node.onclick===saved.handlers[index] &&
+          (node.tagName!=='BUTTON' || typeof node.onclick==='function')))issues.push(selector);
+    }
+    return issues;
+  })()`;
+  assert.deepEqual(await inside(0, compareActsIntact), [], 'Compare act row holds the original carriers and live frame handlers');
+  assert.ok(await inside(0, `document.querySelector('#mode-build-picker').hidden &&
+    ['#save-state','#export-json','#export-markdown','#submit'].every(selector=>
+      document.querySelector('#workspace-act-row '+selector).getClientRects().length>0)`), 'Compare shows the three acts and draft state');
   const compareSettingsCollapsed = await inside<boolean>(0, `document.querySelector('#settings-body').hidden`);
   if (compareSettingsCollapsed) await clickInside(0, '#settings-toggle');
   assert.ok(await inside(0, `document.querySelector('#settings-language').getClientRects().length>0`));
@@ -555,9 +641,11 @@ try {
   const otherLocale = language === 'en' ? 'ko' : 'en';
   const compareLocaleAgrees = (locale: 'en' | 'ko') => `(()=>{
     const compare=document.querySelector('.owner-stage>iframe').contentDocument;
+    const setup=${JSON.stringify((locale === 'ko' ? koCatalog : enCatalog).Setup)};
     return document.documentElement.lang==='${locale}' && document.querySelector('#app>.topbar select').value==='${locale}' &&
+      document.querySelector('${outerModes} [data-mode=rig]').textContent.trim()===setup &&
       compare.documentElement.lang==='${locale}' && compare.querySelector('#settings-language').value==='${locale}' &&
-      compare.querySelector('header [data-mode=rig]').textContent.trim()===${JSON.stringify((locale === 'ko' ? koCatalog : enCatalog).Setup)};
+      compare.querySelector('header [data-mode=rig]').textContent.trim()===setup;
   })()`;
   for (const locale of [otherLocale, language] as const) {
     await page.evaluate(`(()=>{const picker=document.querySelector('#app>.topbar select');picker.value='${locale}';picker.dispatchEvent(new Event('change'));})()`);
@@ -566,21 +654,75 @@ try {
     assert.ok(await page.evaluate(compareLocaleAgrees(locale)), 'Compare Settings refresh preserves the owner language');
   }
   await record('compare-render-observations', renderObservations);
-  const pair = await inside<any>(0, `({animation:document.querySelector('#animation').textContent,reference:{readyState:document.querySelector('#reference-video').readyState,width:document.querySelector('#reference-video').videoWidth,height:document.querySelector('#reference-video').videoHeight,time:document.querySelector('#reference-video').currentTime},trace:JSON.parse(document.querySelector('#trace').textContent)})`);
-  assert.ok(pair.animation.includes('pair-inspect'));
+  const pair = await inside<{binding: CompareBinding; reference: unknown; trace: unknown}>(0,
+    `({binding:JSON.parse(document.querySelector('#inspector-feedback #provenance-full').textContent),reference:{readyState:document.querySelector('#reference-video').readyState,width:document.querySelector('#reference-video').videoWidth,height:document.querySelector('#reference-video').videoHeight,time:document.querySelector('#reference-video').currentTime},trace:JSON.parse(document.querySelector('#trace').textContent)})`);
+  assert.equal(pair.binding.animation, 'pair-inspect');
+  const [hashesA, hashesB] = before;
+  assert.equal(pair.binding.a.reviewedSource.rig?.sha256, hashesA['build/skeleton.model.json']);
+  assert.equal(pair.binding.b.reviewedSource.rig?.sha256, hashesB['build/skeleton.model.json']);
+  assert.equal(pair.binding.reference.sha256, hashesA['browser-reference.mp4']);
   const pairPaint = {a: await capturePaint(0, '#a-root canvas', 'compare-a'), b: await capturePaint(0, '#b-root canvas', 'compare-b')};
-  await record('compare-decoded-paint', {...pair, paint: pairPaint});
+  await record('compare-decoded-paint', {...pair, animation: pair.binding.animation, paint: pairPaint});
   await record('compare-browser', await inside(0, `({title:document.title,renderers:[...document.querySelectorAll('[id*="renderer"]')].map(n=>({id:n.id,text:n.textContent}))})`));
-  await clickInside(0, '[data-mode="rig"]');
+  await page.evaluate(`document.querySelector('${outerModes} [data-mode="rig"]').click()`);
+  await wait(`${frameModeIs('rig')} && ${outerModeIs('rig')}`, 'outer Setup changes the Compare frame mode');
+  await inside(0, `new Promise(resolve=>window.requestAnimationFrame(resolve))`);
+  const playbackTab = await page.evaluate<{x: number; y: number} | null>(`(()=>{
+    const frame=document.querySelector('.owner-stage>iframe'),tab=frame.contentDocument.querySelector('#tab-playback');
+    const rect=tab.getBoundingClientRect(),frameRect=frame.getBoundingClientRect();
+    const x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+    return tab.contains(frame.contentDocument.elementFromPoint(x,y))
+      ? {x:frameRect.left+x,y:frameRect.top+y} : null;
+  })()`);
+  assert.ok(playbackTab, 'Compare frame Playback tab is visible and hittable in Setup');
+  await page.mouse('mousePressed', playbackTab.x, playbackTab.y);
+  await page.mouse('mouseReleased', playbackTab.x, playbackTab.y);
+  await wait(`${frameModeIs('playback')} && ${outerModeIs('playback')}`, 'Compare frame Playback tab updates outer Animate');
   for (const side of ['a', 'b']) {
-    await clickInside(0, '[data-mode="rig"]');
-    assert.ok(await inside(0, `!!document.querySelector('header #mode-build-picker [data-build-side="${side}"]').getClientRects().length`));
-    await clickInside(0, '#mode-build-picker [data-build-side="' + side + '"]');
-    await wait(frameExpression(0, `document.querySelector('#stage-layout').dataset.pickedSide===${JSON.stringify(side)}`), 'picked compare side ' + side);
-    await clickInside(0, '[data-mode="playback"]');
+    await page.evaluate(`document.querySelector('${outerModes} [data-mode="rig"]').click()`);
+    await wait(`${frameModeIs('rig')} && ${outerModeIs('rig')}`, 'Compare Setup before picking ' + side);
+    const picker = '#workspace-act-row #mode-build-picker [data-build-side="' + side + '"]';
+    assert.ok(await inside(0, `!!document.querySelector('${picker}').getClientRects().length`));
+    await clickInside(0, picker);
+    const sidePicked = frameExpression(0, `document.querySelector('#stage-layout').dataset.pickedSide==='${side}' &&
+      document.querySelector('${picker}').getAttribute('aria-pressed')==='true' &&
+      document.querySelector('#${side}-pane').dataset.picked==='true'`);
+    await wait(sidePicked, 'picked compare side ' + side);
+    await page.evaluate(`document.querySelector('${outerModes} [data-mode="playback"]').click()`);
+    await wait(`${frameModeIs('playback')} && ${outerModeIs('playback')} && ${sidePicked}`,
+      'Compare Animate keeps picked build ' + side);
     // Main pairPaint above retains both actual source canvas pixel checks (#735:8-11 / #741).
   }
-  await writeFile(join(output, 'owner-compare-' + language + '.png'), await page.screenshot());
+  assert.match(await inside<string>(0, `document.querySelector('#picked-build-label').innerText`), /\bB\b.*synthetic-2/,
+    'Animate shows the picked Build B label');
+  await inside(0, `new Promise(resolve=>window.requestAnimationFrame(()=>window.requestAnimationFrame(resolve)))`);
+  const compareFooters = await page.evaluate<{
+    frameFooterVisible: boolean; frameMessage: string; sourceLine: string; outerMessage: string;
+    frameFooterAboveOuter: boolean;
+  }>(`(()=>{
+    const frame=document.querySelector('.owner-stage>iframe'),child=frame.contentDocument;
+    const frameFooter=child.querySelector('footer'),message=frameFooter.querySelector('#message[role=status]');
+    const outerFooter=document.querySelector('#app>footer'),outerStatus=outerFooter.querySelector('[role=status]');
+    const frameBottom=frame.getBoundingClientRect().top+frameFooter.getBoundingClientRect().bottom;
+    return {
+      frameFooterVisible:!!message.getClientRects().length && !!message.nextElementSibling.getClientRects().length &&
+        frame.contentWindow.getComputedStyle(frameFooter).visibility==='visible' &&
+        frameFooter.getBoundingClientRect().top>=0 && frameFooter.getBoundingClientRect().bottom<=frame.contentWindow.innerHeight+1,
+      frameMessage:message.textContent.trim(),sourceLine:message.nextElementSibling.textContent.trim(),
+      outerMessage:outerStatus.textContent.trim(),
+      frameFooterAboveOuter:frameBottom<=outerFooter.getBoundingClientRect().top+1 && !!outerStatus.getClientRects().length,
+    };
+  })()`);
+  assert.ok(compareFooters.frameFooterVisible && compareFooters.frameFooterAboveOuter, 'F1 frame footer is visible above owner status');
+  assert.ok(compareFooters.frameMessage.length, 'F1 preserves the live Compare frame message');
+  assert.equal(compareFooters.sourceLine, localized('Source files remain unchanged.'));
+  assert.equal(compareFooters.outerMessage, localized('Select a target. Drafts stay with their original source.'));
+  const compareCapture = await page.screenshot();
+  const {width: compareWidth, height: compareHeight} = PNG.sync.read(compareCapture);
+  assert.deepEqual([compareWidth, compareHeight], [1600, 1000]);
+  await writeFile(join(output, 'owner-compare-' + language + '.png'), compareCapture);
+  await record('compare-owner-chrome', {chrome: compareChrome, footers: compareFooters,
+    mode: 'animate', pickedBuild: 'b', viewport: [compareWidth, compareHeight], modeSync: ['owner to frame', 'frame to owner']});
   await open([0]);
   await wait(`document.querySelectorAll('.owner-list button').length===2`, 'Compare and single rig share the workspace');
   await choose(1, 2); await ready(1, 'synthetic-animation-1');
@@ -594,6 +736,7 @@ try {
       'inner Compare picker updates the owner and retained rig in ' + locale);
   }
   if (compareSettingsCollapsed) await clickInside(0, '#settings-toggle');
+  assert.deepEqual(await inside(0, compareActsIntact), [], 'Compare act nodes and handlers survive mode, locale, and target changes');
   await record('compare-language-agreement', {outerPicker: true, innerPicker: true, settingsRefresh: true, retainedRig: true});
   assert.deepEqual(await Promise.all(inputs.map(jobInputHashes)), before);
   await record('input-immutability', {unchanged: true, targets: inputs.length});
