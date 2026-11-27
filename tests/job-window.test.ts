@@ -896,7 +896,7 @@ describe('the real standing owner host', () => {
         const asked = await (await f.call({...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
             idempotencyKey: 'real-checkpoint', publicationId: publication.publicationId,
             subject: {kind: 'checkpoint', checkpointId: 'step-one'}})).json();
-        expect(asked).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+        expect(asked).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
         const body = {publicationId: publication.publicationId, pageId: 'real-page', sourceHash: publication.source.sourceHash};
         expect((await f.ui('displayed', body, 'http://127.0.0.1:1')).status).toBe(403);
         expect((await f.ui('displayed', body, f.host.origin, f.credentials.agent)).status).toBe(403);
@@ -1174,7 +1174,7 @@ test('#1230 the real host carries a genuine retained pending question; a fresh p
     const asked = await (await f.call({...f.input.base(), verb: 'ask', expectedGeneration: generation,
         idempotencyKey: 'actual-interview', publicationId: publication.publicationId,
         subject: {kind: 'interview-picks', questionId: question.set.question, setId: question.set.id}})).json();
-    expect(asked).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+    expect(asked).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
     expect(f.host.session.status()).toMatchObject({generation, pending: []});
     // A pending picks ask stored before the refusal, with the removed binder's ask-specific option binding, still prepares.
     const historical = {askId: '00000000-0000-4000-8000-000000001230', publicationId: publication.publicationId, status: 'pending' as const,
@@ -1217,12 +1217,8 @@ test('the real UI act stays valid across an unrelated ask while future generatio
         pageId: 'generation-page', sourceHash: publication.source.sourceHash})).json();
     const captured = {...displayed.value, expectedGeneration: f.host.session.status().generation,
         submissionId: 'generation-save', kind: 'comments', value: {comments: [{text: 'generation save'}]}};
-    const ask = {...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
-        idempotencyKey: 'unrelated-ask', publicationId: publication.publicationId,
-        subject: {kind: 'review-verdict', stage: 'rig-review'} as const};
-    seedHistoricalVerdictAsk(f.host.session, ask.publicationId, ask.subject, ask.idempotencyKey);
-    const unrelated = await (await f.call(ask)).json();
-    expect(unrelated.ok).toBe(true);
+    const unrelated = seedHistoricalVerdictAsk(f.host.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
+    expect(f.host.session.status().pending).toContainEqual(unrelated);
     const saved = await (await f.ui('acts', captured)).json();
     expect(saved.ok).toBe(true);
     expect(saved.value.source).toEqual(publication.source);
@@ -2538,14 +2534,9 @@ test('#623: job stage-parts accepts a sealed source-only painting outside parts 
     expect((await diffRes.json()).error.code).toBe('JOB_SOURCE_MISMATCH');
 
     // Replay the historical ask, then send a separate comment with a nonempty Overlay issue.
-    const ask = {
-        ...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
-        idempotencyKey: 'parts-verdict-ask-623', publicationId: publication.publicationId,
-        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts'} as const,
-    };
-    seedHistoricalVerdictAsk(f.host.session, ask.publicationId, ask.subject, ask.idempotencyKey);
-    const asked = await (await f.call(ask)).json();
-    expect(asked.ok).toBe(true);
+    const asked = seedHistoricalVerdictAsk(f.host.session, publication.publicationId,
+        {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+    expect(f.host.session.status().pending).toContainEqual(asked);
     const ack = await (await f.ui('displayed', {
         publicationId: publication.publicationId, pageId: 'parts-page-623', sourceHash: publication.source.sourceHash,
     })).json();
@@ -2592,7 +2583,7 @@ test('#623: job stage-parts accepts a sealed source-only painting outside parts 
         },
     });
     expect(committed.value).not.toHaveProperty('askId');
-    expect(f.host.session.status().pending.find(ask => ask.askId === asked.value.askId)?.status).toBe('pending');
+    expect(f.host.session.status().pending.find(ask => ask.askId === asked.askId)?.status).toBe('pending');
     const fetchedAct = await (await fetch(f.locator + '/api', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + f.host.session.writerGrant().fetchCapability},
@@ -2834,14 +2825,9 @@ test('#626: retained job publication with producer.config, producer.parts, produ
     expect((await diffRes.json()).error.code).toBe('JOB_SOURCE_MISMATCH');
 
     // Replay the historical ask, then send a separate Overlay comment.
-    const ask = {
-        ...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
-        idempotencyKey: 'parts-verdict-ask-626', publicationId: publication.publicationId,
-        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts-626'} as const,
-    };
-    seedHistoricalVerdictAsk(f.host.session, ask.publicationId, ask.subject, ask.idempotencyKey);
-    const asked = await (await f.call(ask)).json();
-    expect(asked.ok).toBe(true);
+    const asked = seedHistoricalVerdictAsk(f.host.session, publication.publicationId,
+        {kind: 'parts-verdict', draftId: 'synthetic-parts-626'});
+    expect(f.host.session.status().pending).toContainEqual(asked);
     const ack = await (await f.ui('displayed', {
         publicationId: publication.publicationId, pageId: 'parts-page-626', sourceHash: publication.source.sourceHash,
     })).json();
@@ -2863,7 +2849,7 @@ test('#626: retained job publication with producer.config, producer.parts, produ
         },
     });
     expect(committed.value).not.toHaveProperty('askId');
-    expect(f.host.session.status().pending.find(ask => ask.askId === asked.value.askId)?.status).toBe('pending');
+    expect(f.host.session.status().pending.find(ask => ask.askId === asked.askId)?.status).toBe('pending');
 
     expect(await jobInputHashes(f.input.root)).toEqual(beforeHashes);
 });

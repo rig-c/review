@@ -403,7 +403,7 @@ test('#1230 real semantic next preserves verbatim nested human notes in a histor
     expectedGeneration: interviewFixture.session.status().generation, idempotencyKey: 'refused-picks',
     publicationId: interviewPublication.publicationId,
     subject: { kind: 'interview-picks', questionId: pendingQuestion.set.question, setId: pendingQuestion.set.id } })).json();
-  expect(refusedAsk).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+  expect(refusedAsk).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' } });
   const interviewPage = await interviewFixture.display(interviewPublication);
 
   const otherTextWords =

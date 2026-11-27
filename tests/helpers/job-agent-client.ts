@@ -88,7 +88,7 @@ if (mode === 'sqlite-crash') {
     });
     const result = await response.json();
     writeSync(1, JSON.stringify({ flow: { verb: value.verb, ok: result.ok, generation: result.generation,
-      ...(!result.ok ? {code: result.error.code} : {}) } }) + '\n');
+      ...(!result.ok ? {code: result.error.code, message: result.error.message} : {}) } }) + '\n');
     if (expectedRefusal ? result.ok || result.error.code !== expectedRefusal : !result.ok) {
       throw new Error(result.ok ? 'Expected ' + expectedRefusal : result.error.code);
     }
@@ -100,9 +100,9 @@ if (mode === 'sqlite-crash') {
   const first = await publish(0, 'agent-first');
   const ask = {verb: 'ask', expectedGeneration: first.generation, publicationId: first.value.publicationId,
     subject: {kind: 'review-verdict', stage: 'rig-review'}};
-  await invoke({...ask, idempotencyKey: 'agent-fresh-ask'}, 'JOB_ASK_INVALID');
-  const asked = await invoke({...ask, idempotencyKey: 'agent-ask'});
+  await invoke({...ask, idempotencyKey: 'agent-fresh-ask'}, 'JOB_REQUEST_INVALID');
   let next = await invoke({ verb: 'next', after: null, waitMs: 0 });
+  const sawPendingAsk = next.value.events.some((event: {type: string}) => event.type === 'pending');
   let event = next.value.events.find((event: { type: string }) => event.type === 'act');
   while (!event) {
     next = await invoke({ verb: 'next', after: next.value.cursor, waitMs: 30_000 });
@@ -114,5 +114,5 @@ if (mode === 'sqlite-crash') {
   await invoke({ verb: 'close', expectedGeneration: second.generation, idempotencyKey: 'agent-close', reason: 'explicit completion' });
   writeSync(1, JSON.stringify({ completed: true, actId: event.act.actId, schema: event.act.schema,
     texts: event.act.value.comments.map((comment: {text: string}) => comment.text),
-    firstPublication: first.value.publicationId, secondPublication: second.value.publicationId, askId: asked.value.askId }) + '\n');
+    firstPublication: first.value.publicationId, secondPublication: second.value.publicationId, sawPendingAsk }) + '\n');
 } else throw new Error('Unknown process control mode');

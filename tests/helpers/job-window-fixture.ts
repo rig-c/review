@@ -329,11 +329,11 @@ export async function scriptedJobWindowFixture(options: {c5Parts?: 'mesh' | 'no-
             if (!result.ok) throw new Error(JSON.stringify(result));
             return result.value as JobPublication;
         },
-        async ask(publication: JobPublication, subject: import('../../src/job-contract.ts').JobSubject) {
+        async requestRemovedAsk(publication: JobPublication, subject: import('../../src/job-contract.ts').JobSubject) {
             await agent('next', {after: null, waitMs: 0});
             const result = await agent('ask', {publicationId: publication.publicationId, subject});
-            if (!result.ok) throw new Error(JSON.stringify(result));
-            return result.value as JobPendingAsk;
+            assert.equal(result.ok, false);
+            return result.error;
         },
         async next() {
             const result = await agent('next', {after: null, waitMs: 0});

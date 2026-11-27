@@ -339,7 +339,7 @@ test('Bar E (#1267 §3, §8): output checks refuse JOB_CURRENT_OUTPUT_MISMATCH, 
   }
 });
 
-test('Bar F (#1267 §4): every ask and ask-batch subject on a current publication refuses JOB_ASK_INVALID', async () => {
+test('Bar F (#1267 §4): every ask and ask-batch subject on a current publication refuses JOB_REQUEST_INVALID', async () => {
   // Check on current rig, current direction, and current parts (including V3 ask-batch)
   const {f, recordHash} = await createCurrentFixture();
   const stateV3 = await mkdtemp(join(realpathSync(tmpdir()), 'review-1267-v3-'));
@@ -399,7 +399,7 @@ test('Bar F (#1267 §4): every ask and ask-batch subject on a current publicatio
         publicationId: rigPubId,
         subject,
       });
-      expect(res).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+      expect(res).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
     }
 
     const batchRes = await callV3({
@@ -409,7 +409,7 @@ test('Bar F (#1267 §4): every ask and ask-batch subject on a current publicatio
       publicationId: rigPubId,
       subjects: [{kind: 'review-verdict', stage: 'rig-review'}, {kind: 'parts-verdict', draftId: 'draft-1'}],
     });
-    expect(batchRes).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+    expect(batchRes).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask-batch'}});
 
     // Also verify on current parts publication
     const parts = await preparePartsOnlyPackage(f);
@@ -441,7 +441,7 @@ test('Bar F (#1267 §4): every ask and ask-batch subject on a current publicatio
         publicationId: publishedParts.value.publicationId,
         subject,
       });
-      expect(res).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+      expect(res).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
     }
     expect(sessionV3.status().pending).toEqual([]);
   } finally {

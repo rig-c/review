@@ -248,12 +248,12 @@ test('browser-supplied authority and fresh checkpoint submissions are refused; h
   expect(parseCommentsAct(failed).value).toHaveProperty('outcome', 'fail');
 });
 
-test('#1229 fresh package checkpoint asks refuse JOB_ASK_INVALID, fresh submissions refuse JOB_ACT_KIND_DISABLED, and stored acts replay byte-for-byte', async () => {
+test('#1229 fresh package checkpoint asks refuse JOB_REQUEST_INVALID, fresh submissions refuse JOB_ACT_KIND_DISABLED, and stored acts replay byte-for-byte', async () => {
   const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
   const asked = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
     idempotencyKey: 'refused-checkpoint', publicationId: publication.publicationId,
     subject: { kind: 'checkpoint', checkpointId: 'step-one' } })).json();
-  expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+  expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' } });
 
   const legacyAsk = seedHistoricalCheckpointAsk(f.session, publication.publicationId, { kind: 'checkpoint', checkpointId: 'step-one' });
   const freshSubmit = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: legacyAsk.askId,
@@ -276,13 +276,13 @@ test('#1229 fresh package checkpoint asks refuse JOB_ASK_INVALID, fresh submissi
   expect(conflict).toMatchObject({ ok: false, error: { code: 'JOB_IDEMPOTENCY_CONFLICT' } });
 });
 
-test('#1227 fresh package sign-off asks refuse JOB_ASK_INVALID and page submissions refuse JOB_ACT_KIND_DISABLED while historical act@2 plan bounds stay', async () => {
+test('#1227 fresh package sign-off asks refuse JOB_REQUEST_INVALID and page submissions refuse JOB_ACT_KIND_DISABLED while historical act@2 plan bounds stay', async () => {
   const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
   const verdictAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'review-verdict', stage: 'rig-review' });
   for (const stage of ['plan-approved', 'rigging-interview', 'post-interview']) {
     const asked = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
       idempotencyKey: 'refused-' + stage, publicationId: publication.publicationId, subject: { kind: 'signoff', stage } })).json();
-    expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+    expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' } });
     const submitted = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: verdictAsk.askId,
       expectedGeneration: f.session.status().generation, submissionId: stage, kind: 'signoff',
       value: { stage, decision: 'approved', words: '' } }));
@@ -299,7 +299,7 @@ test('#1227 fresh package sign-off asks refuse JOB_ASK_INVALID and page submissi
   for (const stage of ['plan-approved', 'rigging-interview', 'post-interview']) {
     const response = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
       idempotencyKey: 'missing-' + stage, publicationId: newer.publicationId, subject: { kind: 'signoff', stage } })).json();
-    expect(response.error.code).toBe('JOB_ASK_INVALID');
+    expect(response.error).toEqual({code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'});
   }
 });
 
@@ -322,9 +322,8 @@ test('P1 unrelated agent ask does not stale a captured pending UI act and future
   expect(saved.value).not.toHaveProperty('askId');
   expect(f.session.status().pending.map(item => item.askId)).toContain(unrelated.askId);
   expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
-  const staleAgent = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: agentGeneration,
-    idempotencyKey: 'stale-agent-cas', publicationId: publication.publicationId,
-    subject: { kind: 'review-verdict', stage: 'rig-review' } })).json();
+  const staleAgent = await (await f.call({ ...f.base(), verb: 'close', expectedGeneration: agentGeneration,
+    idempotencyKey: 'stale-agent-cas', reason: 'stale CAS control' })).json();
   expect(staleAgent.error.code).toBe('JOB_GENERATION_STALE');
 });
 
@@ -352,12 +351,12 @@ test('pending UI act still refuses a rotated nonce, changed source and supersede
   if (!oldPublication.ok) expect(oldPublication.error.code).toBe('JOB_ACT_SOURCE_STALE');
 });
 
-test('#1230 fresh package interview-picks asks refuse JOB_ASK_INVALID and submissions refuse JOB_ACT_KIND_DISABLED while historical picks acts decode byte-identically', async () => {
+test('#1230 fresh package interview-picks asks refuse JOB_REQUEST_INVALID and submissions refuse JOB_ACT_KIND_DISABLED while historical picks acts decode byte-identically', async () => {
   const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
   const asked = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
     idempotencyKey: 'refused-picks', publicationId: publication.publicationId,
     subject: { kind: 'interview-picks', questionId: 'question-one', setId: 'set-one' } })).json();
-  expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+  expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' } });
   const verdictAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'review-verdict', stage: 'rig-review' });
   const value = { questionId: 'question-one', selections: [{ itemId: 'item-one', optionId: 'value-one', otherText: null }], note: '원문' };
   const submitted = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: verdictAsk.askId,
@@ -748,7 +747,7 @@ test('#794 / #1227 package direction signoff still parses on publish and histori
   expect(publication.source.plan).toBeNull();
   const asked = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
     idempotencyKey: 'direction-signoff-ask', publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'direction-review'}})).json();
-  expect(asked).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  expect(asked).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: '00000000-0000-4000-8000-000000000001',
     expectedGeneration: f.session.status().generation, submissionId: 'direction-signoff', kind: 'signoff',
     value: {stage: 'direction-review', decision: 'approved', words: '  Original direction approval\n'}}));
@@ -769,7 +768,7 @@ test('#800 / #1227 package interview signoff still parses on publish and histori
   expect(publication.source.plan).toBeNull();
   const asked = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
     idempotencyKey: 'interview-signoff-ask', publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'interview'}})).json();
-  expect(asked).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  expect(asked).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: '00000000-0000-4000-8000-000000000002',
     expectedGeneration: f.session.status().generation, submissionId: 'interview-signoff', kind: 'signoff',
     value: {stage: 'interview', decision: 'approved', words: '  Original interview approval\n'}}));

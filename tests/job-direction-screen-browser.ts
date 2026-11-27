@@ -177,10 +177,11 @@ try{
    await page.evaluate(`document.body.dataset.ready='switching-signoff'`);
    const signoffPublication=await api('publish',{result:workspace.result,freeze:{kind:'producer-held',holdId:'signoff-held',record:workspace.record}});
    const signoffAskRes=await fetch(host.origin+'/jobs/'+host.session.jobId+'/api',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+host.session.hostCredentials().agent},body:JSON.stringify({schema:JOB_API_V3_SCHEMA,jobId:host.session.jobId,requestId:randomUUID(),verb:'ask',expectedGeneration:generation,idempotencyKey:randomUUID(),publicationId:signoffPublication.publicationId,subject:{kind:'signoff',stage:'direction-review'}})});
-   assert.equal(signoffAskRes.status,409);
+   assert.equal(signoffAskRes.status,400);
    const signoffAskBody=await signoffAskRes.json();
    assert.equal(signoffAskBody.ok,false);
-   assert.equal(signoffAskBody.error.code,'JOB_ASK_INVALID');
+   assert.equal(signoffAskBody.error.code,'JOB_REQUEST_INVALID');
+   assert.equal(signoffAskBody.error.message, 'Unknown job verb: ask');
    observations.push({kind:'record-signoff-refused-after-comments',language,code:signoffAskBody.error.code,commentActId:act.actId});
    await wait(`document.body.dataset.ready==='true'`);
    type NoSignoffFormReadback={forms:number;recordPanels:number;errorText:string;openerVisible:boolean};

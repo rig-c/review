@@ -29,7 +29,6 @@ export interface JobCLIOptions {
 const commonFlags = ['generation', 'key', 'request-id'];
 const verbFlags: Record<string, readonly string[]> = {
   publish: [...commonFlags, 'result', 'selector', 'freeze-hold', 'record', 'record-hash'],
-  ask: [...commonFlags, 'publication', 'subject'],
   next: ['after', 'wait-ms', 'request-id', 'until'],
   close: [...commonFlags, 'reason'],
 };
@@ -62,7 +61,9 @@ function semanticJSON(value: string): unknown {
  */
 export function parseJobCLI(args: readonly string[]): { readonly endpoint: string; readonly request: JobAgentRequest; readonly waitUntilActMs?: number } {
   const [verb, locator, ...rest] = args;
-  if (!verbFlags[verb]) throw new JobError('JOB_REQUEST_INVALID');
+  if (!Object.hasOwn(verbFlags, verb)) {
+    throw new JobError('JOB_REQUEST_INVALID', `Unknown session subcommand: ${verb ?? '(missing)'}`);
+  }
   const {url, job} = jobLocator(locator);
   const values = flags(rest, verbFlags[verb]);
   const base = { schema: JOB_API_SCHEMA, verb, jobId: job, requestId: values.get('request-id') ?? randomUUID() };
@@ -89,9 +90,6 @@ export function parseJobCLI(args: readonly string[]): { readonly endpoint: strin
             record: recordPath === undefined ? null : { path: recordPath, sha256: recordHash } } };
         break;
       }
-      case 'ask':
-        payload = { ...mutation, publicationId: required(values, 'publication'), subject: semanticJSON(required(values, 'subject')) };
-        break;
       case 'close':
         payload = { ...mutation, reason: required(values, 'reason') };
         break;
