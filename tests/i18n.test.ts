@@ -1212,16 +1212,12 @@ test('#1230 interview diagnostic and disabled-form refusal codes render in EN/KO
  }
 });
 
-test('parts save provenance and notification refusals translate in EN/KO while preserving dynamic filesystem operation/code details and reviewer words', () => {
+test('parts provenance refusals translate in EN/KO while preserving dynamic range details and reviewer words', () => {
  const preference = getLanguagePreference();
  try {
   const staticMessages = [
    'PARTS_VERDICT_INVALID: reviewer name must be nonblank',
    'PARTS_VERDICT_INVALID: saved reviewer name must be nonblank',
-   'PARTS_VERDICT_WRITE_FAILED: server is closing',
-   'PARTS_VERDICT_WRITE_FAILED: save count exhausted',
-   'PARTS_VERDICT_NOTIFY_FAILED: durable save notification failed',
-   'PARTS_VERDICT_NOTIFY_FAILED: stdout failed',
    '--by: expected a nonblank reviewer name',
    '--by: launch only; incompatible with export or correction options',
   ] as const;
@@ -1238,15 +1234,15 @@ test('parts save provenance and notification refusals translate in EN/KO while p
    expect(tr(koMessage!, 'en')).toBe(enMessage);
   }
 
-  const operations = ['mkdir', 'write/fsync', 'rename', 'directory fsync', 'temporary cleanup'] as const;
-  const codes = ['ENOSPC', 'EACCES', 'EPERM', 'IO'] as const;
-  for (const operation of operations) {
-   for (const code of codes) {
-    const enDynamic = `PARTS_VERDICT_WRITE_FAILED: ${operation} (${code})`;
+  const mins = ['0.25', '0.5'] as const;
+  const maxes = ['4', '8', '16'] as const;
+  for (const min of mins) {
+   for (const max of maxes) {
+    const enDynamic = `PARTS_CAMERA_RANGE: native zoom outside ${min}..${max}`;
     const koDynamic = tr(enDynamic, 'ko');
-    expect(koDynamic).toStartWith('PARTS_VERDICT_WRITE_FAILED: ');
+    expect(koDynamic).toStartWith('PARTS_CAMERA_RANGE: ');
     expect(koDynamic).toMatch(/[가-힣]/);
-    expect(koDynamic).toContain(`${operation} (${code})`);
+    expect(koDynamic).toContain(`${min}..${max}`);
     expect(tr(koDynamic, 'en')).toBe(enDynamic);
    }
   }
@@ -1254,7 +1250,7 @@ test('parts save provenance and notification refusals translate in EN/KO while p
   const {doc, root} = makeTestDoc();
   const statusEl = doc.createElement('span');
   statusEl.id = 'pv-save-status';
-  statusEl.textContent = 'PARTS_VERDICT_WRITE_FAILED: directory fsync (ENOSPC)';
+  statusEl.textContent = 'PARTS_CAMERA_RANGE: native zoom outside 0.25..8';
   const reviewerNoteInput = doc.createElement('textarea');
   reviewerNoteInput.id = 'pv-note';
   reviewerNoteInput.value = 'Alice Kim: keep 2 px bleed around hair_front';
@@ -1263,20 +1259,55 @@ test('parts save provenance and notification refusals translate in EN/KO while p
   setLanguagePreference('ko');
   const plantedCheck = checkKoreanDomI18n(doc as unknown as Document);
   expect(plantedCheck.ok).toBe(false);
-  expect(plantedCheck.violations.some((v: {text: string}) => v.text.includes('PARTS_VERDICT_WRITE_FAILED: directory fsync (ENOSPC)'))).toBe(true);
+  expect(plantedCheck.violations.some((v: {text: string}) => v.text.includes('PARTS_CAMERA_RANGE: native zoom outside 0.25..8'))).toBe(true);
 
   applyDomI18n(doc as unknown as Document);
-  expect(statusEl.textContent).toBe(tr('PARTS_VERDICT_WRITE_FAILED: directory fsync (ENOSPC)', 'ko'));
-  expect(statusEl.textContent).toContain('directory fsync (ENOSPC)');
+  expect(statusEl.textContent).toBe(tr('PARTS_CAMERA_RANGE: native zoom outside 0.25..8', 'ko'));
+  expect(statusEl.textContent).toContain('0.25..8');
   expect(reviewerNoteInput.value).toBe('Alice Kim: keep 2 px bleed around hair_front');
   expect(checkKoreanDomI18n(doc as unknown as Document)).toEqual({ok: true, violations: []});
 
   setLanguagePreference('en');
   applyDomI18n(doc as unknown as Document);
-  expect(statusEl.textContent).toBe('PARTS_VERDICT_WRITE_FAILED: directory fsync (ENOSPC)');
+  expect(statusEl.textContent).toBe('PARTS_CAMERA_RANGE: native zoom outside 0.25..8');
   expect(reviewerNoteInput.value).toBe('Alice Kim: keep 2 px bleed around hair_front');
  } finally {
   setLanguagePreference(preference);
+ }
+});
+
+test('#1225 orphan status and legacy verdict catalog entries are absent from EN and KO catalogs', () => {
+ const removedKeys = [
+  'Approve',
+  'Request changes',
+  'Approve all',
+  'Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.',
+  'A saved sign-off was made on other files; this review starts fresh.',
+  'Saved sign-off loaded.',
+  'Part outcome',
+  'VERDICT',
+  'Save sign-off',
+  'Mesh outcome',
+  'PARTS_VERDICT_WRITE_FAILED: {0} ({1})',
+  'PARTS_VERDICT_WRITE_FAILED: server is closing',
+  'PARTS_VERDICT_WRITE_FAILED: save count exhausted',
+  'PARTS_VERDICT_NOTIFY_FAILED: durable save notification failed',
+  'PARTS_VERDICT_NOTIFY_FAILED: stdout failed',
+  'job.checkpointEvidence',
+  'job.checkpointTable',
+  'job.checkpointRoutes',
+  'job.checkpointRecommendation',
+  'job.checkpointRouteMapping',
+  'JOB_PARTS_SIGNOFF_MISSING',
+  'JOB_PARTS_LEGACY_DRAFT',
+  'job.partsApprove',
+  'job.partsRetrySignoff',
+  'PARTS_JOINED_ISSUE_UNSUPPORTED',
+ ] as const;
+ expect(removedKeys).toHaveLength(25);
+ for (const key of removedKeys) {
+  expect(key in enCatalog).toBe(false);
+  expect(key in koCatalog).toBe(false);
  }
 });
 
