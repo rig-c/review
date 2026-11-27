@@ -100,7 +100,7 @@ test('P2 request-time SYNTHETIC changed or deleted retained set cannot serve cle
   expect(before.questions[0]!.answer).toEqual(answer);
   evidence.prepared = seal(root);
   // Actual standalone handler, opened before either evidence mutation.
-  const route = interviewRoutes(root, output, 'synthetic-ai-p2-capability');
+  const route = interviewRoutes(root, 'synthetic-ai-p2-capability');
   const initial = await get(route);
   const initialBody = await initial.json();
   expect(initial.status).toBe(200);
@@ -166,7 +166,7 @@ test('P2 repeated-set SYNTHETIC stale current occurrence preserves valid histori
   expect(before.diagnostics).toEqual([{code: 'INTERVIEW_OPTIONS_STALE', question: 'post_composition',
     record: record + '.guide', ref: answer.choice.set, at: selected.guide.at}]);
   evidence.prepared = seal(root);
-  const route = interviewRoutes(root, output, 'synthetic-ai-p2-capability');
+  const route = interviewRoutes(root, 'synthetic-ai-p2-capability');
   const response = await get(route);
   const body = await response.json();
   evidence.interview = {status: response.status, body};

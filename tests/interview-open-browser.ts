@@ -14,8 +14,7 @@ import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {digest, readProject} from '../src/interview-project.ts';
-import {readPicks, savePicks} from '../src/interview-picks.ts';
-import {interviewPicksRecord} from '../web/interview-panel.ts';
+import {readPicks, type Picks} from '../src/interview-picks.ts';
 
 const index=Bun.argv.indexOf('--out'),out=resolve(index<0?'artifacts/interview-open-725':Bun.argv[index+1]!);
 await mkdir(out,{recursive:true});
@@ -35,9 +34,11 @@ project.interview.framing[0]!.pending_options.sha256=digest(optionBytes);
 await writeFile(join(f.root,'project.json'),JSON.stringify(project));
 const retainedNote='  Retained note\r\n원문 👁 e\u0301\n  ';
 const question=readProject(f.root).questions[0]!;
-const plantedPicks=interviewPicksRecord(question.ref,question.set.asks.map(ask=>({ask:ask.id,option_id:ask.options.find(option=>option.kind==='value')!.id})),retainedNote,'2026-11-11T00:00:00.000Z');
-savePicks(join(f.root,'picks'),question,plantedPicks);
-const inputs=parseOpenInputs([f.root,'--project',f.root,'--picks-dir','picks']);
+const plantedPicks:Picks={schema:'rig-review/interview-picks@1',set:question.ref,
+ picks:question.set.asks.map(ask=>({ask:ask.id,option_id:ask.options.find(option=>option.kind==='value')!.id})),
+ note:retainedNote,by:'user',at:'2026-11-11T00:00:00.000Z'};
+await writeFile(join(f.root,'picks',question.ref.sha256+'.json'),JSON.stringify(plantedPicks)+'\n');
+const inputs=parseOpenInputs([f.root,'--project',f.root]);
 const prepared=await prepareOpenTarget(inputs,{stateDir:f.stateDir});
 const host=await startOpenWorkspace({stateDir:f.stateDir,fingerprint:prepared.fingerprint,port:0});
 let page:InputCdpSession|undefined,command:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
@@ -57,10 +58,10 @@ type RefusalScreen={
 let currentCase:{language:'en'|'ko';width:number;height:number;state?:RefusalScreen}|undefined;
 
 try{
- // Historical picks reader proof (#1230): CLI/file reader and workspace route still read historical rig-review/interview-picks@1 verbatim.
- const cliPicks=readPicks(join(f.root,'picks'),question);
- assert.deepEqual(cliPicks,plantedPicks);
- assert.equal(cliPicks?.note,retainedNote);
+ // Historical picks reader proof (#1230): file parser still reads historical rig-review/interview-picks@1 verbatim.
+ const filePicks=readPicks(join(f.root,'picks'),question);
+ assert.deepEqual(filePicks,plantedPicks);
+ assert.equal(filePicks?.note,retainedNote);
 
  const before={files:await jobInputHashes(f.root),entries:(await readdir(f.root,{recursive:true})).sort()};
  const registration=await fetch(host.record.origin+'/workspace/api/register',{method:'POST',headers:{Authorization:'Bearer '+host.record.registrationCapability,'Content-Type':'application/json'},body:JSON.stringify({schema:WORKSPACE_SCHEMA,incarnation:host.record.incarnation,targets:[{key:prepared.key,contentHash:prepared.package.contentHash,cwd:prepared.cwd,viewOnly:false,inputs:prepared.package.inputs}]})});
@@ -69,10 +70,10 @@ try{
  assert.equal(list.targets.length,1);
 
  const cap=targetCapability(host.record.ownerCapability,host.record.incarnation,prepared.key);
- const apiInterview=await (await fetch(host.record.origin+'/instances/'+prepared.key+'/api/interview',{headers:{'X-Review-Capability':cap}})).json() as {questions:{saved:typeof plantedPicks}[]};
- assert.deepEqual(apiInterview.questions[0]?.saved,plantedPicks);
- assert.equal(apiInterview.questions[0]?.saved.note,retainedNote);
- cases.push({kind:'historical-picks-reader',cliNote:cliPicks?.note,routeNote:apiInterview.questions[0]?.saved.note});
+ const apiInterview=await (await fetch(host.record.origin+'/instances/'+prepared.key+'/api/interview',{headers:{'X-Review-Capability':cap}})).json() as {questions:unknown[]};
+ assert.equal(apiInterview.questions.length,1);
+ assert.equal(Object.hasOwn(apiInterview.questions[0] as object,'saved'),false);
+ cases.push({kind:'historical-picks-reader',fileNote:filePicks?.note,routeHasSaved:false});
 
  page=await launchCdpSession(profile,{onEvent:(event,send)=>{command=send;if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request)requests.push(new URL(request.url).pathname);if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Network.enable');

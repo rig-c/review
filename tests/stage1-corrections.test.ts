@@ -270,7 +270,7 @@ test('#562B joined stage 1 routes original vs scratch builds, enforces eligibili
    lockedProject.signoffs=[{stage:'parts-review',by:'reviewer',at:'2026-04-01T00:00:00.000Z'}];
    lockedProject.reopens=[{stage:'rig-review',by:'reviewer',at:'2026-04-02T00:00:00.000Z'}];
    await writeFile(projectPath,JSON.stringify(lockedProject));
-   const lockedOpen=await loadOpenPackage({input:f.input,project:{root,draftId:f.project.draftId,picksDir:f.project.picksDir}});
+   const lockedOpen=await loadOpenPackage({input:f.input,project:{root,draftId:f.project.draftId}});
    if(lockedOpen.mode!=='single'||!lockedOpen.joined?.draft)throw new Error('Expected locked joined draft');
    expect(lockedOpen.joined.draft.editable).toBe(false);
    const lockedRoute=stagePartsRoutes({single:lockedOpen.p},undefined,draftReader,{joined:lockedOpen.joined,viewOnly:false});

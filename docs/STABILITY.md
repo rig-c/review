@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | [`@rig-c/review/job-host`](#managed-owner-host) | Installed Bun entry | Supported import contract. Changes to its public names and signatures require explicit public-contract review. See the [runtime inventory](#named-export-inventory) and [source exports](../src/job-host.ts). | Review #489 |
 | CLI and `@rig-c/review/package.json` | Installed CLI and package metadata subpath | Supported. | Before Review #489 |
-| [Interview-stage project opening](#interview-stage-project-opening) | `rig-review open` with `--project` and `--picks-dir` | CLI flag and `rig-review/interview-picks@1` file readers remain supported for compatibility; the workspace renders the named `INTERVIEW_PICKS_DISABLED` refusal instead of an answer form (#1230). | Review #731 |
+| [Interview-stage project opening](WORKFLOWS.md#open-an-interview-before-a-draft-or-review-package-exists) | `rig-review open <project-root> --project <project-root>` | In 5.0.0 (#1225), `--picks-dir` and the per-question `saved` field in `GET /api/interview` were removed. The workspace renders `INTERVIEW_PICKS_DISABLED`. Stored legacy `picksDir` is accepted and ignored, and new workspace state omits it. Historical `rig-review/interview-picks@1` files remain readable. | Review #731, updated by #1225 |
 | [Package-only job API](REVIEW_PACKAGE.md#live-job-contract) | `rig-review/job-api@2` | Default package-only host contract. | C4 (Review #501) |
 | [Record-and-package job API](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam) | `rig-review/job-api@3` | Additive record mode with its own capability and reuse checks. | Review #588 |
 | [Finalized job acts](#act-and-ask-schemas-currently-accepted) | `rig-review/act@2` through `rig-review/act@10` | Consumers narrow by `schema`. Historical acts retain their original bytes and readers. | C4 (Review #501) and subsequent revisions |
@@ -87,10 +87,11 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | Fresh `checkpoint` asks and acts | #1229 | Declared checkpoint subjects, historical records and acts, and standalone `rig-review-session/1` checkpoint outcomes keep their readers and compatibility types; records show declared pairs without an ask. |
 | Fresh `interview-picks` asks and acts | #1230 | Declared picks subjects, historical acts and `rig-review/interview-picks@1` files keep their readers and compatibility types. |
 | Interview answer form | #1230 | Live job comments (`rig-review/act@10`); option-set pictures stay in the shared main view. |
-| `--picks-dir`'s UI | #1230 | Now the `INTERVIEW_PICKS_DISABLED` refusal on the workspace; CLI and file readers still read `rig-review/interview-picks@1`. |
+| `--picks-dir`, `POST /api/interview/picks`, the `interviewPicksRecord` export and the per-question `saved` field in `GET /api/interview` | #1225 | Project opening uses `--project` without a picks directory. Historical `rig-review/interview-picks@1` files keep their parser. |
 | Historical interview answer display | #1230 | A person can no longer see an old interview answer or its note on a Review screen; agents and the CLI read them byte for byte. |
 | Fresh `review-verdict` and `parts-verdict` asks | #1232 | Fresh asks refuse with `JOB_ASK_INVALID`. Send comments on the displayed publication produces an act@10. |
 | Fresh verdict submissions | #1233 | Stored verdict acts retain their readers and replay behavior. |
+| Public decision submission exports | 5.0.0 (#1225, breaking) | `@rig-c/review/job-host` removes `prepareJobRecordAct`, `JobUIActValues`, `JobRigCapture`, `JobUISubmission`, `JobRecordUIActValues`, `JobRecordUISubmission`, `RecordUIActValues` and `RecordUISubmission`. `JobUISubmissionV3` and `UISubmissionV3` describe comment-only submissions. Stored act readers and replay remain supported. |
 | Standalone parts verdict and package session writers | #1233 | `POST /api/parts/verdict`, `PUT /api/session` and the parts CLI's `RIG_REVIEW_PARTS_SAVED` stdout records are retired. Send comments writes local feedback. Historical verdict and session exports remain supported. |
 | Joined Stage 1 parts verdict writer | #1318 | `POST /api/stage-parts/verdict` is retired. Stage 1 inspection and source-bound historical verdict reads remain supported. |
 | `enabledActKinds` on `JobStatus` and `JobStatusV3` | 5.0.0 (#1319) | Submit through the existing page port `commitUIAct` (`POST /jobs/<jobId>/ui/acts`) and inspect the reply for the submitted act or the [named refusal code](REVIEW_PACKAGE.md#owner-submit-refusals). |
@@ -101,7 +102,7 @@ Each entry below was true when it was written. The sections above state what hol
 
 ### Interview-stage project opening
 
-The additional CLI form is:
+The original #731 CLI form was:
 
 ```sh
 rig-review open /path/to/project --project /path/to/project --picks-dir scratch/review-picks
@@ -140,8 +141,9 @@ window and the semantic A/B host ports, introduced by Review #489. The CLI and
 `@rig-c/review/package.json` remain supported.
 
 The named exports and signatures below are the supported import contract.
-Changes to them require an explicit public-contract review. The facade reexports
-the existing implementation and semantic types directly. The semantic schemas
+Changes to them require an explicit public-contract review. Deep imports of files
+under `@rig-c/review/src/` are outside the supported import contract. The
+facade reexports the existing implementation and semantic types. The semantic schemas
 and behavior are defined in [Live job contract](REVIEW_PACKAGE.md#live-job-contract).
 The C4 parts binding and schema compatibility are defined by that reference.
 
@@ -687,15 +689,16 @@ bytes keep their readers.
 and record `interview-picks` acts at act@6. `parseCommentsAct` accepts the existing
 option-set binding and ordered `comments` with general, Feedback, PartsIssue
 and `JobCommentImageAnchor` entries. Checkpoint anchors and picks at @7 and
-later versions refuse. `prepareJobRecordAct` returns act@6 for picks and act@4
-for the other record subjects. The @2 and @4 readers retain their encoding,
-including historical `words`. Create 1.21.0 pins Review 4.14.0 and refuses
+later versions refuse. The former public `prepareJobRecordAct` writer returned
+act@6 for picks and act@4 for the other record subjects. The @2 and @4 readers
+retain their encoding, including historical `words`. Create 1.21.0 pins Review 4.14.0 and refuses
 Feedback and PartsIssue anchors on picks. Consumers of those anchors need the
 widened reader.
 
-[Review #746](https://github.com/rig-c/review/issues/746) adds optional
-`feedback: readonly Feedback[]` to `JobUIActValues['review-verdict']` only when
-`stage` is `rig-review`; `stage`, `verdict` and required `words` remain.
+[Review #746](https://github.com/rig-c/review/issues/746) added optional
+`feedback: readonly Feedback[]` to the former public
+`JobUIActValues['review-verdict']` when `stage` was `rig-review`. The shape kept
+`stage`, `verdict` and required `words`.
 A present list, including `[]`, supplies the pinned comments through the
 existing `feedbackItemComments` mapper and act@6 decoder. It preserves entry
 order, text, IDs, frames, target, category and `anchor.context` (including point,
@@ -800,12 +803,11 @@ runtime exports total, plus the type-only `CheckpointEvidencePacketResult`.
 `parseCommentOnlyAct` and `JOB_COMMENT_ONLY_ACT_SCHEMA` (`rig-review/act@10`),
 for thirty-seven runtime exports total, plus the type-only `JobCommentOnlyAct`.
 
-The exact runtime exports are listed below. Constants preserve their literal
-values from the frozen semantic contract.
+Review #1225 removes the retired decision writer for thirty-six runtime exports total.
+Constants preserve their literal values from the frozen semantic contract.
 
 - `startJobHost`
 - `parseRecordAct`
-- `prepareJobRecordAct`
 - `prepareJobRecordSource`
 - `parseCommentsAct`
 - `parseContextCommentsAct`
@@ -844,7 +846,8 @@ values from the frozen semantic contract.
 The exact type-only exports follow. Their existing definitions in
 `src/job-contract.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-session.ts`,
 `src/job-worker.ts` and `src/job-front.ts` are reexported
-without aliases or copied wire shapes.
+directly. The public V3 submission names both refer to the existing comment-only
+submission type.
 
 - `JobHostOptions`
 - `JobOwnerHost`
@@ -898,9 +901,7 @@ without aliases or copied wire shapes.
 - `JobPanelComposition`
 - `PanelComponent`
 - `JobRigStill`
-- `JobRigCapture`
 - `JobActValues`
-- `JobUIActValues`
 - `JobActSources`
 - `JobAct`
 - `JobRecordAct`
@@ -947,8 +948,8 @@ without aliases or copied wire shapes.
 - `JobResponseValuesV3`
 - `JobApiResponse`
 - `JobApiResponseV3`
-- `JobUISubmission`
-- `JobUISubmissionV3`
+- `JobUISubmissionV3` (comment-only submission)
+- `UISubmissionV3` (same comment-only submission)
 - `JobDisplayAcknowledgment`
 - `JobDisplayReceipt`
 - `JobDisplayPublication`
@@ -985,8 +986,6 @@ without aliases or copied wire shapes.
 - `JobSourceV3`
 - `JobRecordSignoffValue` (read-only compatibility: exported for historical record and act decoders, #1227)
 - `JobRecordReopenValue` (read-only compatibility: exported for historical record and act decoders, #989)
-- `JobRecordUIActValues`
-- `JobRecordUISubmission`
 - `JobRetainedRecordSource`
 - `JobRetainedSource`
 - `JobRetainedSourceV3`
@@ -1024,7 +1023,7 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ### Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer checks the thirty-seven runtime exports and the existing managed-host types, including
+A consumer checks the thirty-six runtime exports and the existing managed-host types, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and

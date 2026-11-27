@@ -61,7 +61,7 @@ test('retired joined verdict POST refuses a valid same-origin submission without
 });
 
 test('verdict directory is explicit and only single joined open supports it',()=>{
-  const project=['--project','project','--project-draft','chain','--picks-dir','picks','--parts-verdict-dir','verdicts'];
+  const project=['--project','project','--project-draft','chain','--parts-verdict-dir','verdicts'];
   expect(parseOpenInputs(['out',...project]).project?.partsVerdictDir).toBe('verdicts');
   expect(()=>parseOpenInputs(['out',...project,'--view-only'])).toThrow('--parts-verdict-dir');
   expect(()=>parseOpenInputs(['out','--parts-verdict-dir','verdicts'])).toThrow('--project');
@@ -73,7 +73,7 @@ test('historical joined verdict reads and exports stay bound to the inspected so
   try {
     const f=await joinedVerdictFixture(root);
     await expect(loadOpenPackage({input:f.input,project:{...f.project,draftId:'wrong'}})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
-    for(const partsVerdictDir of ['derived/drafts/chain/out',f.project.picksDir,'../outside','evidence']){
+    for(const partsVerdictDir of ['derived/drafts/chain/out','../outside','evidence']){
       await expect(loadOpenPackage({input:f.input,project:{...f.project,partsVerdictDir}})).rejects.toThrow('PARTS_VERDICT_OUTPUT');
     }
     const stateDir=join(root,'state'),capability='a'.repeat(64);
@@ -167,8 +167,10 @@ test('checkpoint 2 exposes only the registered pending bones set, while its part
       picks:question.set.asks.map((ask:{id:string})=>({ask:ask.id,option_id:'keep'})),note:'Keep the chain · 본 체인 유지'};
     const headers={Origin:origin,'X-Review-Capability':capability,'Content-Type':'application/json'};
     const saved=await fetch(origin+'/api/interview/picks',{method:'POST',headers,body:JSON.stringify(submission)});
-    expect(saved.status,await saved.clone().text()).toBe(200);
-    expect(await saved.json()).toEqual(submission);
+    expect(saved.status).toBe(405);
+    expect(await saved.json()).toEqual({error:'Method not allowed'});
+    expect(question).not.toHaveProperty('saved');
+    expect(await Bun.file(join(root,'reviewer-picks',question.ref.sha256+'.json')).exists()).toBe(false);
     const parts=await (await fetch(origin+'/api/stage-parts')).json();
     expect(parts.readOnly).toBe(true);
     expect(parts.verdictReadOnlyReason).toStartWith('PARTS_VERDICT_READ_ONLY');
@@ -260,7 +262,7 @@ test('#562A reopened history binds its selected original draft without producer 
     await fixture.joined.assertCurrent();
     await fixture.assertFixture();
     expect(await readdir(fixture.output)).toEqual([]);
-    expect(await readdir(join(root,'reviewer-picks'))).toEqual([]);
+    await expect(readdir(join(root,'reviewer-picks'))).rejects.toMatchObject({code:'ENOENT'});
     expect(asynchronous).not.toHaveBeenCalled();
     expect(synchronous.mock.calls).toHaveLength(1);
     expect(synchronous.mock.calls[0]![0]).toEqual(['tar','-xzf','-','-C',root]);
@@ -521,11 +523,11 @@ test('#708 a draft recorded with the default --parts (the draft directory itself
     project.drafts[0].parts.path='derived/drafts/chain';
     for(const file of project.drafts[0].parts.files)file.path=file.path.replace('derived/drafts/chain/input/','derived/drafts/chain/');
     await writeFile(path,JSON.stringify(project,null,2)+'\n');
-    const opened=await loadOpenPackage({input:f.input,project:{root,draftId:'chain',picksDir:f.project.picksDir}});
+    const opened=await loadOpenPackage({input:f.input,project:{root,draftId:'chain'}});
     if(opened.mode!=='single')throw new Error('Expected a single joined package');
     expect(opened.joined?.draft).toBeDefined();
     project.drafts[0].parts.path='derived/drafts/chainx';
     await writeFile(path,JSON.stringify(project,null,2)+'\n');
-    await expect(loadOpenPackage({input:f.input,project:{root,draftId:'chain',picksDir:f.project.picksDir}})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
+    await expect(loadOpenPackage({input:f.input,project:{root,draftId:'chain'}})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
   }finally{await rm(root,{recursive:true,force:true});}
 });
