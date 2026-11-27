@@ -262,7 +262,7 @@ test('#562A reopened history binds its selected original draft without producer 
     await fixture.joined.assertCurrent();
     await fixture.assertFixture();
     expect(await readdir(fixture.output)).toEqual([]);
-    expect(await readdir(join(root,'reviewer-picks'))).toEqual([]);
+    await expect(readdir(join(root,'reviewer-picks'))).rejects.toMatchObject({code:'ENOENT'});
     expect(asynchronous).not.toHaveBeenCalled();
     expect(synchronous.mock.calls).toHaveLength(1);
     expect(synchronous.mock.calls[0]![0]).toEqual(['tar','-xzf','-','-C',root]);

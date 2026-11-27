@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {mkdir,readFile,readdir,rm,writeFile} from 'node:fs/promises';
+import {mkdir,readFile,readdir,realpath,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {parseOpenInputs,parseOpenTargets,main} from '../src/cli.ts';
 import {joinProject} from '../src/joined-project.ts';
@@ -130,7 +130,8 @@ test('#725 managed workspace registers and reuses interview-only targets through
  try{
   const before=await jobInputHashes(f.root),dirs=await readdir(f.root);
   const designation={key:prepared.key,contentHash:prepared.package.contentHash,cwd:prepared.cwd,viewOnly:false,inputs:{...prepared.package.inputs,viewOnly:false}};
-  expect(designation.inputs.project).toEqual({root:f.root});
+  const project={root:await realpath(f.root)};
+  expect(designation.inputs.project).toEqual(project);
   const legacy={...designation,inputs:{...designation.inputs,project:{...designation.inputs.project,picksDir:'missing-old-directory'}}};
   expect(parseDesignation(designation)).toEqual(designation);
   expect(parseDesignation(legacy)).toEqual(designation);
@@ -148,7 +149,7 @@ test('#725 managed workspace registers and reuses interview-only targets through
   await host.stop();
   const registryPath=join(f.stateDir,'owner-workspace','targets.json');
   const registry=JSON.parse(await readFile(registryPath,'utf8'));
-  expect(registry.targets[0].designation.inputs.project).toEqual({root:f.root});
+  expect(registry.targets[0].designation.inputs.project).toEqual(project);
   registry.targets[0].designation=legacy;
   await writeFile(registryPath,JSON.stringify(registry));
   host=await startOpenWorkspace({stateDir:f.stateDir,fingerprint,port});
@@ -158,7 +159,7 @@ test('#725 managed workspace registers and reuses interview-only targets through
   expect((await fetch(host.record.origin+'/workspace/api/targets',{headers:{'X-Review-Capability':first.ownerCapability}})).status).toBe(403);
   expect((await fetch(host.record.origin+'/instances/'+prepared.key+'/api/interview')).status).toBe(200);
   expect((await register()).status).toBe(200);expect(await jobInputHashes(f.root)).toEqual(before);
-  expect(JSON.parse(await readFile(registryPath,'utf8')).targets[0].designation.inputs.project).toEqual({root:f.root});
+  expect(JSON.parse(await readFile(registryPath,'utf8')).targets[0].designation.inputs.project).toEqual(project);
  }finally{await host.stop();await f.close();}
 },10000);
 

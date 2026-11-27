@@ -13,11 +13,11 @@ import { startServer } from '../src/server.ts';
 import { sessionFile, type Feedback } from '../src/session.ts';
 import { postLocalPackageFeedback } from './helpers/local-package-feedback.ts';
 
-test('joined open requires an explicit project, version and picks directory together', () => {
+test('joined open pairs version selectors with an explicit project', () => {
   const flags = ['--project','create','--project-version','2'];
   expect(parseOpenInputs(['out', ...flags]).project).toEqual({root:'create', version:2});
   expect(parseOpenInputs(['out'])).toEqual({input:'out'});
-  expect(() => parseOpenInputs(['out', ...flags.slice(0,-2)])).toThrow('OPEN_OPTION_INVALID --project');
+  expect(() => parseOpenInputs(['out', ...flags.slice(2)])).toThrow('OPEN_OPTION_INVALID --project');
   expect(() => parseOpenInputs(['out', ...flags, '--compare','other'])).toThrow('OPEN_OPTION_INVALID --project');
 });
 
@@ -116,9 +116,9 @@ test('real Create v2 joins existing Stage 1 and 2 without changing the feedback 
         expect(stale.status).toBe(409);
         expect(await stale.json()).toEqual({error:'INTERVIEW_OPTIONS_STALE'});
       }
-      const stalePost = await post({Origin:origin,'X-Review-Capability':capability});
-      expect(stalePost.status).toBe(409);
-      expect(await stalePost.json()).toEqual({error:'INTERVIEW_OPTIONS_STALE'});
+      const removed = await post({Origin:origin,'X-Review-Capability':capability});
+      expect(removed.status).toBe(405);
+      expect(await removed.json()).toEqual({error:'Method not allowed'});
     } finally {await writeFile(image,rawImage);}
     try {
       await writeFile(projectPath,Buffer.concat([rawProject,Buffer.from('\n')]));
