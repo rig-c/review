@@ -91,6 +91,7 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | Fresh `review-verdict` and `parts-verdict` asks | #1232 | Fresh asks refuse with `JOB_ASK_INVALID`. Send comments on the displayed publication produces an act@10. |
 | Fresh verdict submissions | #1233 | Stored verdict acts retain their readers and replay behavior. |
 | Standalone parts verdict and package session writers | #1233 | `POST /api/parts/verdict`, `PUT /api/session` and the parts CLI's `RIG_REVIEW_PARTS_SAVED` stdout records are retired. Send comments writes local feedback. Historical verdict and session exports remain supported. |
+| Joined Stage 1 parts verdict writer | #1318 | `POST /api/stage-parts/verdict` is retired. Stage 1 inspection and source-bound historical verdict reads remain supported. |
 
 ## History
 

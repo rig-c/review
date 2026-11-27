@@ -11,17 +11,17 @@
  * - `check.json`: read-only row metadata drives display counts; the historical FAIL/WARN extraction below
  *   stays separate for verdict/2 compatibility. No display classification rewrites saved flag IDs.
  *
- * The sign-off is `rig-review-parts-verdict/2` (docs/PARTS_VIEW.md), written beside `parts.json` by default. Its
- * `source.sha256` is the sha256 over the UTF-8 lines `<path>\t<sha256>\n`, sorted by path bytewise, where every path
+ * Historical sign-offs such as `rig-review-parts-verdict/2` (docs/PARTS_VIEW.md) can be read beside `parts.json`.
+ * Their `source.sha256` is the sha256 over the UTF-8 lines `<path>\t<sha256>\n`, sorted by path bytewise, where every path
  * is relative to the verdict file's directory. rig-c/create recomputes it, so the definition is fixed here.
  */
 import {differencePixels,assertOriginalPaintingSize} from './parts-comparison.ts';
 import {parsePartsIssue,assertPartsIssueBinding,type PartsComment,type PartsIssue} from './parts-comment.ts';
-import {preparePartsComment,validateStoredPartsComment} from './parts-comment-crops.ts';
+import {validateStoredPartsComment} from './parts-comment-crops.ts';
 import {resolvedCropPath} from './comment-crops.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, open, readFile, realpath, rename, rm, stat, lstat } from 'node:fs/promises';
+import { readFile, realpath, stat, lstat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { PNG } from 'pngjs';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
@@ -851,64 +851,6 @@ export async function assertPartsUnchanged(pkg: Pick<PartsViewPackage, 'files' |
     const now = await hashFile(f.abs).catch(() => null);
     if (!now || now.sha256 !== f.sha256) refuse('PARTS_VIEW_SOURCE_CHANGED', `${basename(f.abs)} changed after the view opened; reopen it to review what is on disk`);
   }
-}
-
-async function packageVersion(): Promise<string> {
-  return (JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
-}
-
-async function verdictWrite<T>(operation: string, action: () => Promise<T>): Promise<T> {
-  try { return await action(); }
-  catch (error) {
-    const code = (error as NodeJS.ErrnoException).code ?? 'IO';
-    throw new Error(`PARTS_VERDICT_WRITE_FAILED: ${operation} (${code})`, {cause: error});
-  }
-}
-
-export interface PartsSaveReceipt { verdictPath: string; sha256: string; status: VerdictStatus }
-
-/** One durable buffer, shared by standalone and joined saves. Attribution is launch configuration only. */
-export async function saveVerdictWithReceipt(pkg: PartsViewPackage, input: unknown,
-  assertCurrent?: () => Promise<void>, by?: string): Promise<{verdict: PartsVerdict; receipt: PartsSaveReceipt}> {
-  if (by !== undefined && (typeof by !== 'string' || !by.trim())) refuse('PARTS_VERDICT_INVALID', 'reviewer name must be nonblank');
-  await assertCurrent?.();
-  await assertVerdictDestination(pkg);
-  await assertPartsUnchanged(pkg);
-  await readVerdict(pkg); // Existing read-side evidence errors must never become an implicit reset.
-  const verdict = buildVerdict(pkg, input, await packageVersion(), new Date(), by);
-  for(const issue of verdict.issues)await preparePartsComment(pkg,issue,true);
-  await assertPartsUnchanged(pkg);
-  const bytes = Buffer.from(JSON.stringify(verdict, null, 2) + '\n');
-  const parent = dirname(pkg.verdictPath);
-  const firstCreated = await verdictWrite('mkdir', () => mkdir(parent, { recursive: true }));
-  const tmp = `${pkg.verdictPath}.${crypto.randomUUID()}.tmp`;
-  try {
-    await verdictWrite('write/fsync', async () => {
-      const file = await open(tmp, 'wx');
-      try { await file.writeFile(bytes); await file.sync(); }
-      finally { await file.close(); }
-    });
-    await assertVerdictDestination(pkg);
-    await assertCurrent?.();
-    await assertPartsUnchanged(pkg);
-    await verdictWrite('rename', () => rename(tmp, pkg.verdictPath));
-    // Flush the file's entry and every newly created directory's entry in its parent.
-    const last = firstCreated ? dirname(firstCreated) : parent;
-    for (let directory = parent; ; directory = dirname(directory)) {
-      await verdictWrite('directory fsync', async () => {
-        const handle = await open(directory, 'r');
-        try { await handle.sync(); } finally { await handle.close(); }
-      });
-      if (directory === last) break;
-    }
-  } finally { await verdictWrite('temporary cleanup', () => rm(tmp, { force: true })); }
-  return {verdict, receipt: {verdictPath: pkg.verdictPath, sha256: createHash('sha256').update(bytes).digest('hex'), status: verdict.status}};
-}
-
-/** Shared callers retain the ordinary normalized verdict and produce no save notification. */
-export async function saveVerdict(pkg: PartsViewPackage, input: unknown, assertCurrent?: () => Promise<void>): Promise<PartsVerdict> {
-  const {verdict} = await saveVerdictWithReceipt(pkg, input, assertCurrent);
-  return verdict;
 }
 
 /** Why a saved verdict is not offered: made on other part files, or on the same files with other producer flags. */

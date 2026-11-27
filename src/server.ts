@@ -1,7 +1,7 @@
 import { interviewRequest, interviewRoutes } from './interview-routes.ts';
 import { directionStale, interviewUnavailable, interviewStale, type JoinedProject } from './joined-project.ts';
 import {appliedValue} from './correction-handoff.ts';
-import {stagePartsRoutes,stageVerdictLimit} from './stage-parts.ts';
+import {stagePartsRoutes} from './stage-parts.ts';
 import {createControlServer,type ControlIdentity} from './control-server.ts';
 import { readFile } from 'node:fs/promises';
 import { JobError } from './job-validation.ts';
@@ -74,10 +74,7 @@ export async function createReviewRequestContext(p: ReviewPackage | null, option
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=reviewProducerStarts(p,options.cwd);
   const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones,...(options.stripConcurrency?{stripConcurrency:options.stripConcurrency}:{}),...(options.viewOnly??p.viewOnly?{viewOnly:true}:{}),...(joined?.draft?{draft:draftRebuildOption(joined,starts)}:{})});
   const stageParts=stagePartsRoutes({single:p},undefined,rebuilds.stageDraft,joined?.draft?{
-    joined,viewOnly:options.viewOnly??p.viewOnly??false,readInput:async req=>{
-      try{return await bodyJson(req,stageVerdictLimit,'PARTS_VERDICT_BODY_LIMIT');}
-      catch(error){if(error instanceof Error&&error.message==='PARTS_VERDICT_BODY_LIMIT')throw error;throw new Error('PARTS_VERDICT_INVALID');}
-    },
+    joined,viewOnly:options.viewOnly??p.viewOnly??false,
   }:undefined);
   // Readings (#108): rigc render's readings on the inspected build and on the latest scratch build, into scratch.
   const readings=createReadings(p,{stateDir,starts,unchanged,latest:rebuilds.latest});

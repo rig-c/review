@@ -1,25 +1,23 @@
-/** Embedded parts inspector. Only the designated joined source can save a verdict. */
+/** Embedded parts inspector. Historical verdicts use the designated joined source. */
 import {join} from 'node:path';
 import {lstat,readFile} from 'node:fs/promises';
 import type {ReviewPackage} from './manifest.ts';
-import {loadPartsAtlas,loadPartsView,assertPartsUnchanged,partsViewJson,servedImage,verdictSource,readVerdict,saveVerdict,exportPartsVerdict,type PartsViewPackage} from './parts-view.ts';
+import {loadPartsAtlas,loadPartsView,assertPartsUnchanged,partsViewJson,servedImage,verdictSource,readVerdict,exportPartsVerdict,type PartsViewPackage} from './parts-view.ts';
 import {serveReference,assertReviewUnchanged} from './reference.ts';
-import {digest,object} from './interview-project.ts';
+import {digest} from './interview-project.ts';
 import {interviewStale,type JoinedProject} from './joined-project.ts';
 
-export const stageVerdictLimit=4*1024*1024;
 export const stageVerdictRefusals=[
  'PARTS_VERDICT_READ_ONLY','PARTS_VERDICT_SOURCE_MISMATCH','PARTS_VERDICT_OUTPUT','PARTS_VERDICT_UNAVAILABLE',
- 'PARTS_VERDICT_BODY_LIMIT','PARTS_VERDICT_READ','PARTS_VERDICT_INVALID','PARTS_VERDICT_UNKNOWN_PART',
+ 'PARTS_VERDICT_READ','PARTS_VERDICT_INVALID','PARTS_VERDICT_UNKNOWN_PART',
  'PARTS_VERDICT_MISSING_PART','PARTS_VERDICT_NOTE_REQUIRED','PARTS_MESH_OUTCOME_UNAVAILABLE','PARTS_MESH_OUTCOME',
  'PARTS_VERDICT_NOT_CLEAN','PARTS_VERDICT_NOTHING_FLAGGED','PARTS_VIEW_SOURCE_CHANGED','PARTS_VERDICT_INPUT_COLLISION',
- 'PARTS_JOINED_ISSUE_UNSUPPORTED','PARTS_COMMENT_LIMIT','PARTS_COMMENT_INVALID','PARTS_COMMENT_DUPLICATE','PARTS_COMMENT_UNAVAILABLE',
+ 'PARTS_COMMENT_LIMIT','PARTS_COMMENT_INVALID','PARTS_COMMENT_DUPLICATE','PARTS_COMMENT_UNAVAILABLE',
  'PARTS_COMMENT_PART_MISMATCH','PARTS_COMMENT_STALE_SOURCE','PARTS_COMMENT_OUT_OF_BOUNDS','PARTS_COMMENT_RIG_REGION',
  'PARTS_COMMENT_CROP_INVALID','PARTS_COMMENT_EMPTY','PARTS_COMMENT_FRACTIONAL','PARTS_CAMERA_RANGE','COMMENT_CROP_INVALID',
 ] as const;
 interface JoinedVerdictOptions {
  joined:JoinedProject;
- readInput:(req:Request)=>Promise<unknown>;
  viewOnly:boolean;
 }
 
@@ -28,16 +26,13 @@ export function stagePartsRoutes(packages:{single:ReviewPackage}|{a:ReviewPackag
  const loaded=new Map<string,ReturnType<typeof loadPartsAtlas>>();
  const headers={'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"};
  return async(req:Request):Promise<Response|null>=>{
-  const url=new URL(req.url),path=url.pathname,read=req.method==='GET'||req.method==='HEAD';
-  const save=path==='/api/stage-parts/verdict'&&req.method==='POST';
-  const format=read&&path==='/api/stage-parts/export/json'?'json':read&&path==='/api/stage-parts/export/issue'?'issue':null;
-  const verdictRequest=save||format!==null;
-  if(!read&&!save)return null;
-  if(save&&req.headers.get('origin')!==url.origin)return Response.json({error:'Same-origin Origin required'},{status:403,headers});
-  if(verdictRequest&&(!verdictOptions?.joined.verdictDirectory||verdictOptions.viewOnly||(req.headers.get('X-Review-Stage-Build')??'inspected')!=='inspected')){
+  if(req.method!=='GET'&&req.method!=='HEAD')return null;
+  const path=new URL(req.url).pathname;
+  const format=path==='/api/stage-parts/export/json'?'json':path==='/api/stage-parts/export/issue'?'issue':null;
+  if(format&&(!verdictOptions?.joined.verdictDirectory||verdictOptions.viewOnly||(req.headers.get('X-Review-Stage-Build')??'inspected')!=='inspected')){
    return Response.json({error:'PARTS_VERDICT_READ_ONLY'},{status:409,headers});
   }
-  const match=('single' in packages?/^\/api\/stage-parts(?:\/(image|page)\/(\d+))?$/:/^\/api\/compare\/(a|b)\/stage-parts(?:\/(image|page)\/(\d+))?$/).exec(verdictRequest?'/api/stage-parts':path);
+  const match=('single' in packages?/^\/api\/stage-parts(?:\/(image|page)\/(\d+))?$/:/^\/api\/compare\/(a|b)\/stage-parts(?:\/(image|page)\/(\d+))?$/).exec(format?'/api/stage-parts':path);
   if(!match)return null;
   const key='single' in packages?'single':match[1] as 'a'|'b',p='single' in packages?packages.single:packages[key as 'a'|'b'];
   const kind=match['single' in packages?1:2] as 'image'|'page'|undefined,index=match['single' in packages?2:3];
@@ -100,11 +95,11 @@ export function stagePartsRoutes(packages:{single:ReviewPackage}|{a:ReviewPackag
      throw error;
     }
     if(imageResponse)return imageResponse;
-    const writable=build==='inspected'&&verdictOptions?.joined.verdictDirectory&&!verdictOptions.viewOnly;
-    const saved=writable?await joinedVerdict(req,p,pkg,verdictOptions,save,format,headers):null;
+    const readsVerdict=build==='inspected'&&verdictOptions?.joined.verdictDirectory&&!verdictOptions.viewOnly;
+    const saved=readsVerdict?await joinedVerdict(req,p,pkg,verdictOptions,format,headers):null;
     if(saved instanceof Response)return saved;
     const activeMetadata=metadata&&latestApplied?{...metadata,evidence:latestApplied.evidence}:metadata;
-    return Response.json({...partsViewJson(pkg,saved??{verdict:null,stale:null}),differenceAvailable:false,readOnly:!writable,...(recorded&&!writable?{verdictReadOnlyReason:'PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.'}:{}),inspectionSourceHash:p.sourceHash,...(saved?{joinedVerdictBinding:saved.binding,verdictFile:saved.filename}:{}),...(activeMetadata?{draft:activeMetadata}:{draftUnavailable:stageDraftRefusals.STAGE_DRAFT_NO_MESH})},{headers});
+    return Response.json({...partsViewJson(pkg,saved??{verdict:null,stale:null}),differenceAvailable:false,readOnly:!readsVerdict,...(recorded&&!readsVerdict?{verdictReadOnlyReason:'PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.'}:{}),inspectionSourceHash:p.sourceHash,...(saved?{joinedVerdictBinding:saved.binding,verdictFile:saved.filename}:{}),...(activeMetadata?{draft:activeMetadata}:{draftUnavailable:stageDraftRefusals.STAGE_DRAFT_NO_MESH})},{headers});
    }
    let promise=loaded.get(key);
    const initializing=!promise;
@@ -120,9 +115,8 @@ export function stagePartsRoutes(packages:{single:ReviewPackage}|{a:ReviewPackag
    if(kind){const file=servedImage(pkg,kind,Number(index));if(!file)return Response.json({error:'PARTS_IMAGE_UNAVAILABLE'},{status:404,headers});const pinned=pkg.files.find(f=>f.abs===file);if(!pinned)throw new Error('Unbound atlas page');return await serveReference(req,file,pinned.sha256,headers);}
    return Response.json({...partsViewJson(pkg,{verdict:null,stale:null}),differenceAvailable:false,readOnly:true,inspectionSourceHash:p.sourceHash,draftUnavailable:stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE},{headers});
   }catch(error){const code=error instanceof Error?error.message.split(':')[0]??'':'';
-   if((verdictRequest||verdictOptions)&& (code===interviewStale||stageVerdictRefusals.some(refusal=>refusal===code))){
-    const invalid=save&&!['PARTS_VERDICT_SOURCE_MISMATCH','PARTS_VERDICT_OUTPUT','PARTS_VERDICT_READ_ONLY','PARTS_VIEW_SOURCE_CHANGED',interviewStale].includes(code);
-    return Response.json({error:code},{status:invalid?400:409,headers});
+   if((format||verdictOptions)&& (code===interviewStale||stageVerdictRefusals.some(refusal=>refusal===code))){
+    return Response.json({error:code},{status:409,headers});
    }
    const named=stageDraftRefusals[code??'']??(code==='PARTS_MESH_IMAGE_MISMATCH'?stageDraftRefusals.STAGE_DRAFT_MISMATCH:undefined);return Response.json({error:named??'PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.'},{status:409,headers});}
  };
@@ -132,30 +126,21 @@ export function stagePartsRoutes(packages:{single:ReviewPackage}|{a:ReviewPackag
  * Only the standard verdict is exported, with source paths relative to the file on disk.
  */
 async function joinedVerdict(req:Request,p:ReviewPackage,pkg:PartsViewPackage,options:JoinedVerdictOptions,
- save:boolean,format:'json'|'issue'|null,headers:Record<string,string>){
+ format:'json'|'issue'|null,headers:Record<string,string>){
  const {joined}=options,{hash}=joined.opened,{version}=joined.designation;
  const binding=digest(JSON.stringify({projectHash:hash,version,sourceHash:p.sourceHash,parts:verdictSource(pkg)}));
  const filename=`parts-review-${binding}.json`;
  const directory=joined.verdictDirectory!();
  const destination={...pkg,verdictPath:join(directory,filename)};
- const assertCurrent=async()=>{
-  await joined.assertCurrent();
-  await assertPartsUnchanged(pkg);
-  try{
-   joined.verdictDirectory!();
-   const entry=await lstat(destination.verdictPath).catch((e:NodeJS.ErrnoException)=>{if(e.code!=='ENOENT')throw e;return null;});
-   if(entry&&(!entry.isFile()||entry.nlink!==1))throw new Error('Aliased output');
-  }catch{throw new Error('PARTS_VERDICT_OUTPUT');}
- };
- const input=save?object(await options.readInput(req)):null;
- if(input&&input.binding!==binding)throw new Error('PARTS_VERDICT_SOURCE_MISMATCH');
- // Joined issue editing is deferred. The standing job route owns issue submission.
- if(input&&input.comments!==undefined)throw new Error('PARTS_VERDICT_INVALID');
- await assertCurrent();
+ await joined.assertCurrent();
+ await assertPartsUnchanged(pkg);
+ try{
+  joined.verdictDirectory!();
+  const entry=await lstat(destination.verdictPath).catch((e:NodeJS.ErrnoException)=>{if(e.code!=='ENOENT')throw e;return null;});
+  if(entry&&(!entry.isFile()||entry.nlink!==1))throw new Error('Aliased output');
+ }catch{throw new Error('PARTS_VERDICT_OUTPUT');}
  const saved=await readVerdict(destination);
  if(saved.stale)throw new Error('PARTS_VERDICT_SOURCE_MISMATCH');
- if(input&&(input.status==='approved'||input.status==='changes-requested')&&Array.isArray(input.issues)&&input.issues.length>0)throw new Error('PARTS_JOINED_ISSUE_UNSUPPORTED');
- if(input)return Response.json({verdict:await saveVerdict(destination,input,assertCurrent)},{headers});
  if(format){
   if(!saved.verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE');
   return new Response(req.method==='HEAD'?null:exportPartsVerdict(saved.verdict,format),{headers:{...headers,

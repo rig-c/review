@@ -1,6 +1,5 @@
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
-import {partsIssueSubmission} from './helpers/parts-comments-package.ts';
 import ts from 'typescript';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
@@ -17,21 +16,58 @@ import {loadOpenPackage} from '../src/open.ts';
 import {loadPartsView,readVerdict,verdictSource,exportPartsVerdict} from '../src/parts-view.ts';
 import {draftProducerInputs,draftRebuildOption} from '../src/rebuild.ts';
 import {startServer} from '../src/server.ts';
-import {stageVerdictLimit,stageVerdictRefusals} from '../src/stage-parts.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
+
+test('retired joined verdict POST refuses a valid same-origin submission without writing',async()=>{
+  const root=await mkdtemp(join(await realpath(tmpdir()),'review-retired-joined-post-'));
+  let server:Awaited<ReturnType<typeof startServer>>|undefined;
+  try{
+    const fixture=await joinedVerdictFixture(root);
+    const capability='a'.repeat(64);
+    server=await startServer(fixture.p,{port:0,capability,joined:fixture.joined,stateDir:join(root,'state')});
+    const origin='http://127.0.0.1:'+server.port;
+    const route='/api/stage-parts';
+    const inspection=await fetch(origin+route);
+    expect(inspection.status).toBe(200);
+    const {joinedVerdictBinding:binding,verdictFile,verdict}=await inspection.json();
+    expect(binding).toMatch(/^[a-f0-9]{64}$/);
+    expect(verdictFile).toBe(`parts-review-${binding}.json`);
+    expect(verdict).toBeNull();
+    expect(await readdir(fixture.output)).toEqual([]);
+
+    const payload=JSON.stringify({binding,status:'approved',issues:[]});
+    for(const method of ['POST','GET','HEAD','PUT','PATCH','DELETE','OPTIONS']){
+      for(const requestOrigin of [origin,'https://foreign.invalid']){
+        const response=await fetch(origin+route+'/verdict',{
+          method,headers:{Origin:requestOrigin,'X-Review-Capability':capability,'Content-Type':'application/json'},
+          ...['GET','HEAD'].includes(method)?{}:{body:payload},
+        });
+        const output=await readdir(fixture.output);
+        const body=method==='HEAD'?await response.text():await response.json();
+        console.log('JOINED_VERDICT_AFTER',JSON.stringify({method,sameOrigin:requestOrigin===origin,status:response.status,body,output}));
+        const read=method==='GET'||method==='HEAD';
+        expect({status:response.status,body,output}).toEqual({
+          status:read?404:405,body:method==='HEAD'?'':{error:read?'Not found':'Method not allowed'},output:[],
+        });
+        expect(frontRoute('single',method,route+'/verdict')).toBeNull();
+        expect(frontRoute('compare',method,route+'/verdict')).toBeNull();
+      }
+    }
+    await fixture.assertFixture();
+  }finally{
+    server?.stop(true);
+    await rm(root,{recursive:true,force:true});
+  }
+});
 
 test('verdict directory is explicit and only single joined open supports it',()=>{
   const project=['--project','project','--project-draft','chain','--picks-dir','picks','--parts-verdict-dir','verdicts'];
   expect(parseOpenInputs(['out',...project]).project?.partsVerdictDir).toBe('verdicts');
   expect(()=>parseOpenInputs(['out',...project,'--view-only'])).toThrow('--parts-verdict-dir');
   expect(()=>parseOpenInputs(['out','--parts-verdict-dir','verdicts'])).toThrow('--project');
-  expect(frontRoute('single','POST','/api/stage-parts/verdict')?.limit).toBe(stageVerdictLimit);
-  expect(frontRoute('compare','POST','/api/stage-parts/verdict')).toBeNull();
-  expect(frontRoute('single','GET','/api/stage-parts/verdict')).toBeNull();
-  expect(stageVerdictRefusals).toContain('PARTS_JOINED_ISSUE_UNSUPPORTED');
 });
 
-test('joined verdict is bound to the inspected source and saves through the standalone writer',async()=>{
+test('historical joined verdict reads and exports stay bound to the inspected source',async()=>{
   const root=await mkdtemp(join(await realpath(tmpdir()),'review-verdict-'));
   const servers:Awaited<ReturnType<typeof startServer>>[]=[];
   try {
@@ -40,18 +76,14 @@ test('joined verdict is bound to the inspected source and saves through the stan
     for(const partsVerdictDir of ['derived/drafts/chain/out',f.project.picksDir,'../outside','evidence']){
       await expect(loadOpenPackage({input:f.input,project:{...f.project,partsVerdictDir}})).rejects.toThrow('PARTS_VERDICT_OUTPUT');
     }
-    const stateDir=join(root,'state'),capability='a'.repeat(64),nonce='b'.repeat(64);
-    const options={port:0,capability,stateDir,open:{nonce,key:'c'.repeat(64),contentHash:f.p.sourceHash,fingerprint:'d'.repeat(64)}};
+    const stateDir=join(root,'state'),capability='a'.repeat(64);
+    const options={port:0,capability,stateDir};
     const serve=async(joined:typeof f.joined,viewOnly=false)=>{
       const server=await startServer(f.p,{...options,joined,viewOnly});servers.push(server);
       return 'http://127.0.0.1:'+server.port;
     };
     const origin=await serve(f.joined),api='/api/stage-parts',path=origin+api;
     const get=async(suffix='')=>(await fetch(path+suffix)).json();
-    const post=(body:unknown,overrides:Record<string,string>={},base=path)=>fetch(base+'/verdict',{
-      method:'POST',headers:{Origin:new URL(base).origin,'X-Review-Capability':capability,'Content-Type':'application/json',...overrides},
-      body:JSON.stringify(body),
-    });
     const refusal=async(response:Promise<Response>,code:string,status:number)=>{
       const res=await response;expect(await res.json()).toEqual({error:code});expect(res.status).toBe(status);
     };
@@ -59,70 +91,57 @@ test('joined verdict is bound to the inspected source and saves through the stan
     expect(data.draft?.mappings).toEqual([{part:'torso',skin:'default',slot:'torso',attachment:'torso',vertices:30,triangles:40}]);
     expect(data.readOnly).toBe(false);expect(data.verdict).toBeNull();
     expect(await readdir(f.output)).toEqual([]);
-    const note='파츠 확인 · keep these words.\nsecond line';
-    const inspected=await loadPartsView(f.draft.parts,{rig:f.draft.rig,meshReport:f.draft.meshReport});
-    const submission=await partsIssueSubmission(inspected,note);
-    expect(submission.issues[0]!.sourceHash).toBe(data.sourceHash);
-    const issuePayload={binding:data.joinedVerdictBinding,...submission};
-    const payload={binding:data.joinedVerdictBinding,status:'approved',issues:[]};
     await refusal(fetch(path+'/export/json'),'PARTS_VERDICT_UNAVAILABLE',409);
-    await refusal(post(payload,{'X-Review-Capability':'0'.repeat(64)}),'REVIEW_CAPABILITY_REQUIRED: reopen with rig-review open to edit',403);
-    await refusal(post(issuePayload,{'X-Review-Capability':'0'.repeat(64)}),'REVIEW_CAPABILITY_REQUIRED: reopen with rig-review open to edit',403);
-    await refusal(post(payload,{Origin:'https://foreign.invalid'}),'Same-origin Origin required',403);
-    await refusal(post(issuePayload,{Origin:'https://foreign.invalid'}),'Same-origin Origin required',403);
-    await refusal(post(payload,{'X-Review-Open-Nonce':'0'.repeat(64)}),'OPEN_INSTANCE_REPLACED',409);
-    await refusal(post(issuePayload,{'X-Review-Open-Nonce':'0'.repeat(64)}),'OPEN_INSTANCE_REPLACED',409);
-    await refusal(post({...payload,binding:'0'.repeat(64)}),'PARTS_VERDICT_SOURCE_MISMATCH',409);
-    await refusal(post(payload,{'X-Review-Stage-Build':'1'.repeat(64)}),'PARTS_VERDICT_READ_ONLY',409);
-    await refusal(post(issuePayload,{'X-Review-Stage-Build':'1'.repeat(64)}),'PARTS_VERDICT_READ_ONLY',409);
-    await refusal(post({...issuePayload,binding:'0'.repeat(64)}),'PARTS_VERDICT_SOURCE_MISMATCH',409);
-    await refusal(post({...payload,padding:'x'.repeat(stageVerdictLimit)}),'PARTS_VERDICT_BODY_LIMIT',400);
-    await refusal(post({...payload,parts:{}}),'PARTS_VERDICT_INVALID',400);
-    const {issues:_issues,...missingIssues}=payload;
-    await refusal(post(missingIssues),'PARTS_COMMENT_LIMIT',400);
     const {partsVerdictDir:_,...readOnlyProject}=f.project;
     const readOnly=await loadOpenPackage({input:f.input,project:readOnlyProject});
     if(readOnly.mode!=='single'||!readOnly.joined)throw new Error('Expected read-only join');
     for(const base of [await serve(readOnly.joined),await serve(f.joined,true)]){
       expect((await (await fetch(base+api)).json()).readOnly).toBe(true);
-      await refusal(post(payload,{},base+api),'PARTS_VERDICT_READ_ONLY',409);
-      await refusal(post(issuePayload,{},base+api),'PARTS_VERDICT_READ_ONLY',409);
+      await refusal(fetch(base+api+'/export/json'),'PARTS_VERDICT_READ_ONLY',409);
     }
     expect(await readdir(f.output)).toEqual([]);
     const target=join(f.output,data.verdictFile);
     await link(join(root,'project.json'),target);
-    try{await refusal(post(payload),'PARTS_VERDICT_OUTPUT',409);await refusal(post(issuePayload),'PARTS_VERDICT_OUTPUT',409);}
+    try{await refusal(fetch(path+'/export/json'),'PARTS_VERDICT_OUTPUT',409);}
     finally{await rm(target);}
     const review=await (await fetch(origin+'/api/review')).json();
     expect(review.manifest.model).toBeUndefined();
     expect(review.capabilities).toMatchObject({preRig:true,playback:false});
-    const response=await post(payload),saved=await response.json();
-    expect(response.status,JSON.stringify(saved)).toBe(200);
-    expect(saved.verdict).toMatchObject({schema:'rig-review-parts-verdict/4',status:'approved',issues:[]});
-    const bytes=await readFile(target);
-    await refusal(post(issuePayload),'PARTS_JOINED_ISSUE_UNSUPPORTED',400);
-    await refusal(post({...issuePayload,status:'approved'}),'PARTS_JOINED_ISSUE_UNSUPPORTED',400);
-    await refusal(post({...issuePayload,issues:[null]}),'PARTS_JOINED_ISSUE_UNSUPPORTED',400);
-    await refusal(post({...issuePayload,status:'pending'}),'PARTS_VERDICT_INVALID',400);
-    await refusal(post({...payload,status:'changes-requested'}),'PARTS_VERDICT_NOTHING_FLAGGED',400);
-    expect(await readFile(target)).toEqual(bytes);
-    expect(await get('/export/json')).toEqual(JSON.parse(exportPartsVerdict(saved.verdict,'json')));
+    // Exact bytes written on the pre-deletion head by Nova run 20261127T182914Z-8bad1b0ce9344526947f0af0b322ee50.
+    const bytes=await readFile(new URL('./fixtures/joined-verdict-1318.json',import.meta.url));
+    const sha256=digest(bytes);
+    expect(sha256).toBe('6001d05709b06040ecc7200b5bd504097d707b4dfa838b3a1143a57d7fdeba76');
+    const verdict=JSON.parse(bytes.toString());
+    expect(verdict).toMatchObject({schema:'rig-review-parts-verdict/4',status:'approved',issues:[]});
+    await writeFile(target,bytes,{flag:'wx'});
+    for(const format of ['json','issue'] as const){
+      expect(frontRoute('single','GET',api+'/export/'+format)?.mutation).toBe(false);
+      expect(frontRoute('single','HEAD',api+'/export/'+format)?.mutation).toBe(false);
+      const response=await fetch(path+'/export/'+format);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(exportPartsVerdict(verdict,format));
+      const head=await fetch(path+'/export/'+format,{method:'HEAD'});
+      expect(head.status).toBe(response.status);
+      expect(head.headers.get('content-type')).toBe(response.headers.get('content-type'));
+      expect(head.headers.get('content-disposition')).toBe(response.headers.get('content-disposition'));
+      expect(await head.text()).toBe('');
+    }
+    expect(await get('/export/json')).toEqual(JSON.parse(exportPartsVerdict(verdict,'json')));
     expect(await (await fetch(path+'/export/issue')).text()).toContain('Status: approved');
-    expect((await get()).verdict).toEqual(saved.verdict);
+    expect((await get()).verdict).toEqual(verdict);
     const standalone=await loadPartsView(f.draft.parts,{rig:f.draft.rig,meshReport:f.draft.meshReport,verdict:target});
-    expect((await readVerdict(standalone)).verdict).toEqual(saved.verdict);
-    for(const file of saved.verdict.source.files)expect(digest(await readFile(resolve(dirname(target),file.path)))).toBe(file.sha256);
+    expect((await readVerdict(standalone)).verdict).toEqual(verdict);
+    for(const file of verdict.source.files)expect(digest(await readFile(resolve(dirname(target),file.path)))).toBe(file.sha256);
     for(const source of ['project.json','derived/drafts/chain/config.json','derived/drafts/chain/interview-requirements.json','derived/drafts/chain/input/parts/torso.png']){
       const file=join(root,source),before=await readFile(file);
       try{
         await writeFile(file,Buffer.concat([before,Buffer.from(' ')]));
-        await refusal(post(payload),'INTERVIEW_OPTIONS_STALE',409);
-        await refusal(post(issuePayload),'INTERVIEW_OPTIONS_STALE',409);
         await refusal(fetch(path+'/export/json'),'INTERVIEW_OPTIONS_STALE',409);
       }finally{await writeFile(file,before);}
     }
     await f.joined.assertCurrent();
     expect(await readFile(target)).toEqual(bytes);
+    console.log('JOINED_VERDICT_RETAINED',JSON.stringify({sha256:digest(await readFile(target)),getExports:2,headExports:2}));
     await f.assertFixture();
     expect(await Bun.file(join(root,'evidence/parts-review.json')).exists()).toBe(false);
   } finally {
@@ -154,8 +173,8 @@ test('checkpoint 2 exposes only the registered pending bones set, while its part
     expect(parts.readOnly).toBe(true);
     expect(parts.verdictReadOnlyReason).toStartWith('PARTS_VERDICT_READ_ONLY');
     const verdict=await fetch(origin+'/api/stage-parts/verdict',{method:'POST',headers,body:JSON.stringify({status:'changes-requested',issues:[null]})});
-    expect(verdict.status).toBe(409);
-    expect(await verdict.json()).toEqual({error:'PARTS_VERDICT_READ_ONLY'});
+    expect(verdict.status).toBe(405);
+    expect(await verdict.json()).toEqual({error:'Method not allowed'});
     await fixture.assertFixture();
     expect(await readdir(fixture.output)).toEqual([]);
   }finally{server?.stop(true);await rm(root,{recursive:true,force:true});}

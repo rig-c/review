@@ -6,9 +6,10 @@ import {createHash} from 'node:crypto';
 import {cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {loadPartsView, readVerdict, saveVerdict, verdictSource, type PartsViewPackage} from '../src/parts-view.ts';
+import {loadPartsView, readVerdict, verdictSource, type PartsViewPackage} from '../src/parts-view.ts';
 import {writePartsPackage} from './helpers/parts-package.ts';
 import {writeComparisonPackage} from './helpers/parts-comparison-package.ts';
+import {seedPartsVerdictFixture} from './helpers/parts-verdict-fixture.ts';
 
 const roots: string[] = [];
 // A bun per-test timeout fails the test but does not stop its body (#969). Each test here
@@ -44,7 +45,7 @@ async function fixture() {
   await mkdir(out);
   return {arena, physical, alias, painting, build, out};
 }
-const submission = async (pkg: PartsViewPackage, summary?: string) => summary ? partsIssueSubmission(pkg, summary) : {status: 'approved', issues: []};
+const approval = {status: 'approved', issues: []};
 const hashes = (pkg: PartsViewPackage) => Promise.all([...pkg.files, ...pkg.flagFiles].map(async f => ({abs: f.abs, sha256: createHash('sha256').update(await readFile(f.abs)).digest('hex')})));
 const expectedPaths = {
   files: ['../build/rig/parts.json', '../build/rig/parts/back_defect.png', '../build/rig/parts/back_control.png', '../build/rig/parts/front.png'],
@@ -57,6 +58,10 @@ aliasTest('#472: painting aliases, including a lexical outside path to an inside
   const canonical = await loadPartsView(f.painting, {painting: join(f.painting, 'painting.png')});
   const before = await hashes(canonical), source = verdictSource(canonical);
   expect(source.files.map(file => file.path)).toEqual(['parts.json', 'parts/body.png', 'parts/front.png', 'painting.png']);
+  const saved = await seedPartsVerdictFixture(canonical, approval);
+  expect(saved.source).toEqual(source);
+  expect(saved.source.files.at(-1)!.path).toBe('painting.png');
+  expect((await readVerdict(canonical)).verdict).toEqual(saved);
   for (const [root, painting] of [
     [join(f.alias, 'painting'), join(f.alias, 'painting/painting.png')],
     [f.painting, entry],
@@ -68,20 +73,18 @@ aliasTest('#472: painting aliases, including a lexical outside path to an inside
     expect(pkg.painting!.abs).toBe(join(f.painting, 'painting.png'));
     expect(pkg.verdictPath).toBe(join(f.painting, 'parts-review.json'));
     expect(verdictSource(pkg)).toEqual(source); // Includes paths, sizes, hashes and aggregate hash.
-    const saved = await saveVerdict(pkg, await submission(pkg));
-    expect(saved.source).toEqual(source);
-    expect(saved.source.files.at(-1)!.path).toBe('painting.png');
-    expect((await readVerdict(canonical)).verdict).toEqual(saved);
-    expect((await readVerdict(await loadPartsView(root!, {painting}))).verdict).toEqual(saved);
+    expect((await readVerdict(pkg)).verdict).toEqual(saved);
     expect(await hashes(pkg)).toEqual(before);
   }
 });
 
-aliasTest('#472: canonical and alias destinations/explicit flags serialize exactly the same files, flag paths and source hash', async () => {
+aliasTest('#472: canonical and alias destinations/explicit flags read the same verdict bound to the same files, flags and source hash', async () => {
   const f = await fixture(), destination = join(f.out, 'v.json');
   const canonical = await loadPartsView(f.build, {verdict: destination}), source = verdictSource(canonical), before = await hashes(canonical);
   expect(source.files.map(file => file.path)).toEqual(expectedPaths.files);
   expect(source.flags.map(file => file.path)).toEqual(expectedPaths.flags);
+  const saved = await seedPartsVerdictFixture(canonical, approval);
+  expect((await readVerdict(canonical)).verdict).toEqual(saved);
   for (const root of [f.build, join(f.alias, 'build')]) {
     for (const verdict of [destination, join(f.alias, 'out/v.json')]) {
       for (const flagsRoot of [f.build, join(f.alias, 'build')]) {
@@ -90,23 +93,22 @@ aliasTest('#472: canonical and alias destinations/explicit flags serialize exact
         expect(pkg.verdictPath).toBe(destination);
         expect(pkg.flagFiles).toEqual(canonical.flagFiles);
         expect(verdictSource(pkg)).toEqual(source);
-        const saved = await saveVerdict(pkg, await submission(pkg));
-        expect((await readVerdict(await loadPartsView(f.build, {verdict: destination}))).verdict).toEqual(saved);
+        expect((await readVerdict(pkg)).verdict).toEqual(saved);
         expect(await hashes(pkg)).toEqual(before);
       }
     }
   }
 });
 
-aliasTest('#472: missing nested destination parents retain their suffix behind an alias and save/reload unchanged inputs', async () => {
+aliasTest('#472: missing nested destination parents retain their suffix behind an alias for historical reads', async () => {
   const f = await fixture(), destination = join(f.out, 'not-yet/deep/v.json');
   const canonical = await loadPartsView(f.build, {verdict: destination}), before = await hashes(canonical);
   const pkg = await loadPartsView(join(f.alias, 'build'), {verdict: join(f.alias, 'out/not-yet/deep/v.json')});
   expect(pkg.verdictPath).toBe(destination);
   expect(verdictSource(pkg)).toEqual(verdictSource(canonical));
   expect(verdictSource(pkg).files.map(file => file.path)).toEqual(expectedPaths.files.map(path => '../../' + path));
-  const saved = await saveVerdict(pkg, await submission(pkg));
-  expect(JSON.parse(await readFile(destination, 'utf8'))).toEqual(saved);
+  await mkdir(join(f.out, 'not-yet/deep'), {recursive: true});
+  const saved = await seedPartsVerdictFixture(canonical, approval);
   expect((await readVerdict(await loadPartsView(f.build, {verdict: destination}))).verdict).toEqual(saved);
   expect((await readVerdict(await loadPartsView(join(f.alias, 'build'), {verdict: join(f.alias, 'out/not-yet/deep/v.json')}))).verdict).toEqual(saved);
   expect(await hashes(pkg)).toEqual(before);
@@ -137,21 +139,20 @@ aliasTest('#472: alias input destinations and output leaf links to inputs preser
   expect(await hashes(pkg)).toEqual(before);
 });
 
-aliasTest('#472: a verdict leaf link to ordinary output keeps its basename and never overwrites the link target', async () => {
+aliasTest('#472: reading through a verdict leaf link preserves the basename, link and target bytes', async () => {
   const f = await fixture(), target = join(f.out, 'target.json'), leaf = join(f.out, 'leaf.json');
   const targetPkg = await loadPartsView(f.build, {verdict: target});
-  await saveVerdict(targetPkg, await submission(targetPkg, 'original target'));
+  const saved = await seedPartsVerdictFixture(targetPkg, await partsIssueSubmission(targetPkg, 'original target'));
   const original = await readFile(target), before = await hashes(targetPkg);
   await symlink(target, leaf);
   const pkg = await loadPartsView(join(f.alias, 'build'), {verdict: join(f.alias, 'out/leaf.json')});
-  expect(pkg.verdictPath).toBe(leaf); // Must NOT become target.json.
+  expect(pkg.verdictPath).toBe(leaf);
   expect((await lstat(leaf)).isSymbolicLink()).toBe(true);
   expect(verdictSource(pkg)).toEqual(verdictSource(targetPkg));
-  const saved = await saveVerdict(pkg, await submission(pkg, 'new leaf verdict'));
-  expect((await lstat(leaf)).isSymbolicLink()).toBe(false);
-  expect(await readFile(target)).toEqual(original);
-  expect(JSON.parse(await readFile(leaf, 'utf8'))).toEqual(saved);
+  expect((await readVerdict(pkg)).verdict).toEqual(saved);
   expect((await readVerdict(await loadPartsView(f.build, {verdict: leaf}))).verdict).toEqual(saved);
+  expect((await lstat(leaf)).isSymbolicLink()).toBe(true);
+  expect(await readFile(target)).toEqual(original);
   expect(await hashes(pkg)).toEqual(before);
 });
 
@@ -163,7 +164,8 @@ aliasTest('#472: atlas verdict destinations and explicit flags also use physical
   expect(pkg.mode).toBe('atlas');
   expect(pkg.verdictPath).toBe(canonical.verdictPath);
   expect(verdictSource(pkg)).toEqual(verdictSource(canonical));
-  const before = await hashes(pkg), saved = await saveVerdict(pkg, await submission(pkg));
+  const before = await hashes(pkg), saved = await seedPartsVerdictFixture(canonical, approval);
+  expect((await readVerdict(pkg)).verdict).toEqual(saved);
   expect((await readVerdict(canonical)).verdict).toEqual(saved);
   expect(await hashes(pkg)).toEqual(before);
 });
@@ -177,7 +179,8 @@ aliasTest('#472: an explicitly designated rig alias remains a physical verdict i
   expect(pkg.files).toEqual(canonical.files);
   expect(verdictSource(pkg)).toEqual(verdictSource(canonical));
   expect(verdictSource(pkg).files.some(file => file.path === 'rig.json')).toBe(true);
-  const before = await hashes(pkg), saved = await saveVerdict(pkg, await submission(pkg));
+  const before = await hashes(pkg), saved = await seedPartsVerdictFixture(canonical, approval);
+  expect((await readVerdict(pkg)).verdict).toEqual(saved);
   expect((await readVerdict(canonical)).verdict).toEqual(saved);
   expect(await hashes(pkg)).toEqual(before);
 });
