@@ -34,6 +34,10 @@ import {ComparePresentation,type PresentationState} from '../src/compare-present
 import {nextReferenceInterval,ReferenceSelectionUnavailable,inspectionReferenceFrame,lastSupportedReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,type ReferenceFrameIndex,type VideoInfo,type VideoFrame} from '../src/reference-frames.ts';
 import {mountComparePickedTools,type ComparePickedTools} from './compare-picked-tools.ts';
 import {appliedCheckRefusal} from '../src/applied-context.ts';
+// Take the capability into memory/session storage and strip it before composing the frame.
+const access=pageInstanceAccess();
+const ownerStage=access.base!=='/'&&new URLSearchParams(location.search).has('workspace')&&
+ window.frameElement?.getAttribute('data-stage-embed')==='owner';
 /** Compose trusted content through the existing C1/C5b owners before domain lookups. */
 function mountComparisonChrome(){
  const domain={} as Record<keyof typeof legacyCompareHeaderContent,HTMLElement>;
@@ -41,8 +45,8 @@ function mountComparisonChrome(){
   const template=panelMake('template');template.innerHTML=legacyCompareHeaderContent[key];
   domain[key]=template.content.firstElementChild as HTMLElement;
  }
- const shell=mountWorkspaceShell({compatibility:'legacyCompareStep3',compare:domain});
- document.querySelector('[data-workspace-header]')!.replaceWith(shell.header);
+ const shell=mountWorkspaceShell({compatibility:'legacyCompareStep3',compare:domain,embedded:ownerStage});
+ document.querySelector('[data-workspace-header]')!.replaceWith(shell.header,...shell.actRow?[shell.actRow]:[]);
  for(const [seam,markup] of [['comment',sharedCommentMarkup],['view-tools',sharedViewToolsMarkup],['layers',legacyCompareLayerControlsMarkup]] as const){
   const template=panelMake('template');template.innerHTML=markup;
   document.querySelector(`[data-workspace-${seam}]`)!.replaceWith(template.content);
@@ -87,8 +91,7 @@ function inspectionPlayer(side:Side,mode:'present'|'settle'|'seek'='seek'):Inspe
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let stripBusy = false;
 let persistence:PersistenceConnection|null=null,submittedBaseline:CompareSession|null=null,draftConflict=false;
-// First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
-const access=pageInstanceAccess();connectLiveWindow(access);let readOnly:string|null=null;
+connectLiveWindow(access);let readOnly:string|null=null;
 /** Whether this instance serves agent control (`/api/access`); a plain open is never probed for it (#164). */
 let controlServed=true;
 let referenceFrames:VideoInfo|null=null;
@@ -467,13 +470,19 @@ async function start(): Promise<void> {
     pairInputs = { reference: outcome(settled[0]), a: outcome(settled[1]), b: outcome(settled[2]), domain: null };
     if (settled[0].status === 'fulfilled' && settled[1].status === 'fulfilled' && settled[2].status === 'fulfilled') { try { domain = commonDomain(settled[0].value, settled[1].value, settled[2].value); pairInputs.domain = { end: domain.end }; } catch (error) { pairInputs.domain = { refused: describe(error) }; } }
     renderPairLayout();
-    if (!domain) { showSurvivors(); return; }
+    const visibility={key:access.key,sourceHash:data.sourceHash,pause:()=>{idleHeld=true;stop();},
+      ...ownerStage?{modeSwitch:shell.modeSwitch!}:{}};
+    if (!domain) {
+      showSurvivors();
+      if (ownerStage) bindWorkspaceVisibility(visibility);
+      return;
+    }
     void loadFrameIndex();
     input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${formatSeconds(domain.end)} s · Neither side is independently clamped or looped`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
     await seekTo(0);configureTurnPad();workspace?.refresh();activeCamera='a';if(cameraSync)setCameraSync(true);fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();setupComments();await pickedTools?.loadInitialSideStatuses();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
     if(!readOnly&&controlServed)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
-    bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause:()=>{idleHeld=true;stop();}});
+    bindWorkspaceVisibility(visibility);
   } catch (error) { failPair(error); for (const side of ['a', 'b'] as const) if (!players[side]) text(`${side}-empty`, `${side.toUpperCase()} Could not open comparison rig.`); text('reference-empty', 'Check the reference video and comparison inputs.'); }
 }
 /** Configure the shared camera and compiled renderer without changing the legacy compare layout. */

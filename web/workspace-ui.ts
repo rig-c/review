@@ -36,7 +36,7 @@ export function mountStatusBar(options:WorkspaceStatusBarOptions|{placement:'inl
 export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'owner';
 export interface WorkspaceHeaderOptions {
  compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;
- /** Only the stopped compare host supplies its existing domain controls and actions. */
+ /** Compare supplies its existing domain controls and actions. */
  compare?:{modeSwitch:HTMLElement;buildPicker:HTMLElement;actions:HTMLElement};
 }
 export interface WorkspaceHeader {
@@ -95,8 +95,10 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
  if(rig||owner){language.setAttribute('aria-label','Language');header.append(language);}
  else if(compare)languageLabel=labelledControl('Language ',language);
  else header.append(language);
- if(options.embedded&&rig)header.hidden=true;
- const actRow=rig?panelMake('div',{id:'workspace-act-row',className:'workspace-act-row',hidden:true}):null;
+ const embeddedCompare=compare&&options.embedded;
+ if(options.embedded&&(rig||compare))header.hidden=true;
+ const actRow=rig||embeddedCompare?panelMake('div',{id:'workspace-act-row',className:'workspace-act-row',hidden:!embeddedCompare}):null;
+ if(embeddedCompare)actRow!.append(options.compare!.buildPicker,options.compare!.actions);
  return {header,actRow,title,subtitle,modeSwitch,dirty,stages,status,language,languageLabel,dispose(){header.remove();actRow?.remove();languageLabel?.remove();}};
 }
 
