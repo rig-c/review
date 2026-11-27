@@ -369,7 +369,7 @@ try {
           await click(page, '#play');
           await wait(page, `!!${key}.wrap()`);
           await click(page, '#play');
-          const wrap = await page.evaluate<Wrap>(`${key}.wrap()`);
+          const wrap: Wrap = await page.evaluate<Wrap>(`${key}.wrap()`);
           observations.push({operation, wrap});
           assert.ok(wrap.before.phase && wrap.after.phase && wrap.before.trackTime !== null && wrap.after.trackTime !== null);
           assert.ok(wrap.before.phase.authored > 3.8 && wrap.after.phase.authored < .2);
