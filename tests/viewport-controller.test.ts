@@ -34,6 +34,29 @@ test('#671 unit scale centers the active target in pane units and retains relati
  expect(c.numericView().cameras.reference!.center).toEqual({x:640,y:480});
 });
 
+test('#1282 1:1 sets each synced Compare pane to its own native scale',()=>{
+ const h=host(),targets=['a','b','reference'] as const;
+ const panes=targets.map((target,index)=>({
+  target,viewport:{...h.nodes.get('rig-viewport'),clientWidth:640-index*80},pane:h.nodes.get('rig-pane'),
+ }));
+ h.state.activeCamera='a';
+ h.state.cameras={a:{zoom:1,center:null},b:{zoom:1,center:null},reference:{zoom:1,center:null}};
+ h.provider.geometry=target=>({space:target==='reference'?'image':'world',box:{x:0,y:0,width:target==='reference'?1280:720,height:target==='reference'?960:240},marginX:0,marginY:0});
+ const c=createViewportController({...h.provider,panes,unitScaleSync:'per-pane'},h.state);
+ const dispose=c.bindControls();
+ h.nodes.get('native-one').click();
+ for(const target of targets){
+  expect(c.paneFrame(target)!.baseScale*c.paneCamera(target).zoom).toBeCloseTo(1,12);
+ }
+ c.setCameraSync(false);
+ c.zoomCamera(1.25,'reference');c.zoomCamera(1.25,'b');
+ const held=structuredClone(c.paneCamera('reference'));
+ h.nodes.get('native-one').click();
+ expect(c.paneFrame('b')!.baseScale*c.paneCamera('b').zoom).toBeCloseTo(1,12);
+ expect(c.paneCamera('reference')).toEqual(held);
+ dispose();
+});
+
 test('#671 exact reciprocal accepts public endpoints and refuses outside them without camera mutation',()=>{
  for(const baseScale of [.125,4,.124,4.01]){
   const h=host(),c=h.controller;
