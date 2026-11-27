@@ -8,7 +8,7 @@ import { launchChrome } from './helpers/software-capture.ts';
  * - Killing the browser process with SIGKILL (-9, no pagehide or sendBeacon) tears down the loopback
  *   socket so the server exits 0 within the grace period + margin and frees its port.
  * - Opening 8 browser windows across 2 managed-front instances (sharing one front origin) does not exhaust
- *   the browser's 6-connection HTTP/1.1 pool: all 8 windows load promptly, feedback save in the 8th window
+ *   the browser's 6-connection HTTP/1.1 pool: all 8 windows load promptly, comment send in the 8th window
  *   completes, and a 9th page loads cleanly.
  * - Dropping the live socket while the only browser window remains open reconnects within the grace period
  *   so the server survives.
@@ -19,6 +19,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openReview } from '../src/open.ts';
+import { LOCAL_COMMENTS_ROUTE } from '../src/local-comments.ts';
 
 export interface CloseBarResult {
   pageKind: 'single' | 'compare';
@@ -62,8 +63,8 @@ export interface EightManagedFrontWindowsResult {
   windowsOpened: number;
   windowLoadTimesMs: number[];
   allEightLoadedWithin3s: boolean;
-  eighthWindowSaveStatus: number;
-  eighthWindowSavedReviewStatus: string | null;
+  eighthWindowSendStatus: number;
+  eighthWindowCommentAcknowledged: boolean;
   ninthPageLoaded: boolean;
   ninthPageLoadMs: number;
   workersExitedAfterAllClosed: boolean;
@@ -687,7 +688,7 @@ export async function runServerLifecycleBrowserVerification(options?: {
     }
 
     // 4. Eight windows across 2 managed-front instances (same front origin):
-    //    feedback save in the 8th window completes and a 9th page loads
+    //    comment send in the 8th window completes and a 9th page loads
     const frontPkg1 = join(root, 'front-pkg-1');
     const frontPkg2 = join(root, 'front-pkg-2');
     await mkdir(frontPkg1, { recursive: true });
@@ -724,27 +725,31 @@ export async function runServerLifecycleBrowserVerification(options?: {
       const windowLoadTimesMs = openedTabs.map(t => t.elapsedMs);
       const allEightLoadedWithin3s = windowLoadTimesMs.length === 8 && windowLoadTimesMs.every(ms => ms < 3_000);
 
-      // In the 8th window (openedTabs[7]), save feedback session through the shared front origin
+      // Send a comment from the 8th window while all sockets are active.
       const tab8 = openedTabs[7]!;
-      const saveResult = await browser.evaluate<{ status: number; reviewStatus: string | null }>(
+      const sendResult = await browser.evaluate<{ status: number; acknowledged: boolean; sessionStatus: string }>(
         tab8.sessionId,
         `(async () => {
-          const curRes = await fetch(${JSON.stringify(base2Path + 'api/session')});
-          const cur = await curRes.json();
-          const putRes = await fetch(${JSON.stringify(base2Path + 'api/session')}, {
-            method: 'PUT',
+          const sessionUrl = ${JSON.stringify(base2Path + 'api/session')};
+          const cur = await (await fetch(sessionUrl)).json();
+          const sendId = crypto.randomUUID();
+          const response = await fetch(${JSON.stringify(base2Path + LOCAL_COMMENTS_ROUTE.slice(1))}, {
+            method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'X-Review-Capability': ${JSON.stringify(cap2)},
             },
             body: JSON.stringify({
-              ...cur,
-              status: 'approved',
-              notes: 'Saved in 8th managed-front browser window',
+              sendId,
+              sourceHash: cur.sourceHash,
+              value: {comments: [{text: 'Sent in the eighth browser window'}]},
             }),
           });
-          const body = await putRes.json().catch(() => null);
-          return { status: putRes.status, reviewStatus: body?.status ?? null };
+          const receipt = await response.json().catch(() => null);
+          const after = await (await fetch(sessionUrl)).json();
+          return {status: response.status,
+            acknowledged: receipt?.sendId === sendId && typeof receipt?.at === 'string',
+            sessionStatus: after.status};
         })()`,
       );
 
@@ -770,8 +775,9 @@ export async function runServerLifecycleBrowserVerification(options?: {
 
       const passed =
         allEightLoadedWithin3s &&
-        saveResult.status === 200 &&
-        saveResult.reviewStatus === 'approved' &&
+        sendResult.status === 200 &&
+        sendResult.acknowledged &&
+        sendResult.sessionStatus === 'pending' &&
         ninthPageLoaded &&
         ninthPageLoadMs < 3_000 &&
         workersExitedAfterAllClosed;
@@ -780,7 +786,7 @@ export async function runServerLifecycleBrowserVerification(options?: {
           `Eight managed-front windows bar failed: ${JSON.stringify({
             windowLoadTimesMs,
             allEightLoadedWithin3s,
-            saveResult,
+            sendResult,
             ninthPageLoaded,
             ninthPageLoadMs,
             workersExitedAfterAllClosed,
@@ -793,8 +799,8 @@ export async function runServerLifecycleBrowserVerification(options?: {
         windowsOpened: 8,
         windowLoadTimesMs,
         allEightLoadedWithin3s,
-        eighthWindowSaveStatus: saveResult.status,
-        eighthWindowSavedReviewStatus: saveResult.reviewStatus,
+        eighthWindowSendStatus: sendResult.status,
+        eighthWindowCommentAcknowledged: sendResult.acknowledged,
         ninthPageLoaded,
         ninthPageLoadMs,
         workersExitedAfterAllClosed,

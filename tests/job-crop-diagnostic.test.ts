@@ -1,4 +1,4 @@
-import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
+import {partsIssueComments} from '../src/parts-comment.ts';
 import {expect, test} from 'bun:test';
 import {readFile, lstat, writeFile} from 'node:fs/promises';
 import {PNG} from 'pngjs';
@@ -79,7 +79,6 @@ test('crop409 leads: EN act leaves package immutable and independent KO-height r
         try {
             const publication = await fixture.publish('parts', 'parts-issue');
             expect(publication.source.sourceHash).toBe(capturedENInput.sourceHash);
-            const ask = seedHistoricalVerdictAsk(fixture.host.session, publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
             const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
             assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);
             const pkg = await loadPartsView(fixture.packageRoot);
@@ -118,14 +117,14 @@ test('crop409 leads: EN act leaves package immutable and independent KO-height r
             const displayResult = await displayed.json();
             expect(displayed.status).toBe(200);
             const submitted = await fixture.ui('acts', {
-                kind: 'parts-verdict', publicationId: publication.publicationId, askId: ask.askId, pageId,
+                kind: 'comments', publicationId: publication.publicationId, pageId,
                 displayedNonce: displayResult.value.displayedNonce,
                 expectedGeneration: fixture.host.session.status().generation,
                 submissionId: 'crop-diagnostic-' + language,
-                value: {verdict: 'changes-requested', words: '', issues: [comment]},
+                value: {comments: partsIssueComments([comment])},
             });
             expect(submitted.status).toBe(200);
-            expect((await submitted.json()).value.schema).toBe('rig-review/act@6');
+            expect((await submitted.json()).value.schema).toBe('rig-review/act@10');
             expect(await jobInputHashes(fixture.input.root)).toEqual(before);
             await assertPartsUnchanged(pkg);
             assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);

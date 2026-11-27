@@ -15,7 +15,6 @@ import type {
     JobPanelComposition,
     PanelComponent,
     PanelSlot,
-    PartsVerdictValue,
     PublicationV3,
     RecordSource,
     SourceV3,
@@ -27,10 +26,8 @@ import {t,onLanguageChange} from './i18n.ts';
 import {hashCapabilityAccess, type InstanceAccess} from './instance-access.ts';
 import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {createJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
-import type {JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl} from './view-controls.ts';
-import {JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
-import type {PartsIssue} from '../src/parts-comment.ts';
+import {JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PANEL_COMPOSITION_SCHEMA, JOB_RECORD_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 
 /** Imported runtimes may throw arbitrary prose. Only registered refusal copy reaches the window. */
 export function jobWindowRefusal(error: unknown, fallback = 'JOB_WINDOW_FAILED'): string {
@@ -212,7 +209,6 @@ export function createJobWindow<Prepared>(options: {
     const { transport, adapter, pageId } = options;
     const pending = new Map<string, JobWindowAsk>();
     const recordAttempts = new Map<string, UISubmissionV3>();
-    const rigAttempts = new WeakSet<UISubmissionV3>();
     const retainedDrafts: JobRetainedDraft[] = [];
     let initialDrafts: readonly JobRetainedDraft[] | null = options.initialRetainedDrafts
         ? [...options.initialRetainedDrafts] : null;
@@ -402,16 +398,14 @@ export function createJobWindow<Prepared>(options: {
             return { ok: false, error: { code: 'JOB_CLOSED', message: 'JOB_CLOSED' } };
         // #1226: a comment-only submission answers no ask; the page receipt is its whole binding.
         const ask = input.kind === 'comments' ? undefined : pending.get(input.askId);
-        const retry = input.capture !== undefined && rigAttempts.has(input);
         if (preparing || !displayed || !receipt ||
             input.publicationId !== displayed.publication.publicationId ||
             input.pageId !== pageId || input.displayedNonce !== receipt.displayedNonce ||
             input.expectedGeneration > generation ||
-            ask && (ask.status !== 'pending' && !retry || ask.publicationId !== input.publicationId || ask.subject.kind !== input.kind)) {
+            ask && (ask.status !== 'pending' || ask.publicationId !== input.publicationId || ask.subject.kind !== input.kind)) {
             return { ok: false, error: { code: 'JOB_ACT_SOURCE_STALE', message: 'JOB_ACT_SOURCE_STALE' } };
         }
         // The backend authenticates the actual Request and validates the semantic value.
-        if (input.capture !== undefined) rigAttempts.add(input);
         const record = isRecordAnswer(input.kind);
         if (record && ask) recordAttempts.set(ask.askId, input);
         const result = await transport.submit(input);
@@ -808,18 +802,6 @@ export function resolveJobPanels(metadata: JobInspectionMetadataV3, source: Sour
     catch { return {composition: fallback, invalid: true}; }
 }
 
-/** Derived only from finalized asks, including cursor replay after reload. */
-export function jobPartsReviewState(asks: readonly JobWindowAsk[], publicationId: string) {
-    const bound = asks.filter(ask => ask.publicationId === publicationId);
-    const verdict = bound.filter(ask => ask.subject.kind === 'parts-verdict').at(-1);
-    const act = verdict?.act;
-    if (act?.kind !== 'parts-verdict' || (act.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA && act.schema !== JOB_COMMENTS_ACT_SCHEMA)) return 'reviewing';
-    if (act.value.verdict === 'changes-requested') return 'sent';
-    const approved = bound.some(ask => ask.subject.kind === 'signoff' && ask.subject.stage === 'parts-review' &&
-        ask.act?.kind === 'signoff' && ask.act.value.decision === 'approved');
-    return approved ? 'approved' : 'retry-signoff';
-}
-
 /** A declared painting identity takes precedence over manifest reference order. */
 export function jobPartsPainting(prepared: Pick<JobPreparedInspection, 'metadata' | 'display' | 'references'>) {
     const declared = prepared.metadata.sourcePainting;
@@ -890,7 +872,6 @@ export interface JobPreparedInspection {
     assets: ModelAssets | null;
     player: RigPlayer | null;
     rigRoot: HTMLElement;
-    rigPresentation?: JobRigPresentation;
     inspection: PartInspection | null;
     setupPose(setup?: boolean): void;
     dispose(): void;
@@ -998,18 +979,11 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
     let player: RigPlayer | null = null;
     let inspection: PartInspection | null = null;
     let resetToSetup: (setup?: boolean) => void = () => {};
-    let rigPresentation: JobRigPresentation | undefined;
-    function clearRigPresentation(): void {
-        rigPresentation?.canvas.parentElement?.removeAttribute('data-job-rig-canonical');
-        rigPresentation?.canvas.remove();
-        rigPresentation = undefined;
-    }
     let disposed = false;
     const dispose = () => {
         if (disposed)
             return;
         disposed = true;
-        clearRigPresentation();
         for (const video of media) {
             video.pause();
             video.removeAttribute('src');
@@ -1299,7 +1273,6 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
             const parts = await import('./part-selection.ts');
             const catalog = await parts.loadPartModel(modelUrl, modelHash, metadata.feedbackCatalog.slots ?? [], checkedFetch);
             resetToSetup = (setup = true) => {
-                clearRigPresentation();
                 player?.dispose();
                 player = new runtime.RigPlayer(rigRoot, loadedAssets);
                 inspection = new parts.PartInspection();
@@ -1322,11 +1295,6 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         return {
             display, metadata, interview, parts, partImages, partPages, checkpointEvidence, references, assets, rigRoot,
             ...(planPicture ? {planPicture} : {}),
-            get rigPresentation() { return rigPresentation; },
-            set rigPresentation(value) {
-                clearRigPresentation();
-                rigPresentation = value;
-            },
             get player() { return player; },
             get inspection() { return inspection; },
             setupPose: (setup = true) => resetToSetup(setup),
@@ -1573,7 +1541,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     let stopped=false;
     const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource},draftStorage:()=>localStorage,...drafts,access,pageId,
         window:{state:()=>window.state(),submit:input=>window.submit(input)}};
-    const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),confirm:text=>globalThis.confirm(i18n.tr(text)),refusal:jobWindowRefusal,formDependencies:dependencies,
+    const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),refusal:jobWindowRefusal,formDependencies:dependencies,
         window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),
         routes:display=>jobPublicationRoutes(display,location.origin),load:async()=>(await import('./main.ts')).mountRigScreen()});
     let bootstrapNotice:HTMLElement|null=null,bootstrapStream=false,bootstrapPrior:{text:string;title:string}|null=null;

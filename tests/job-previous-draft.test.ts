@@ -4,10 +4,11 @@ import {Database} from 'bun:sqlite';
 import {mkdirSync, readFileSync, symlinkSync, truncateSync, unlinkSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {PNG} from 'pngjs';
-import {finalizeJobAct} from '../src/job-act.ts';
-import {commentsActForEmission, createJobHostPorts, jobHash} from '../src/job-api.ts';
+import {partsIssueComments} from '../src/feedback-export.ts';
+import type {PartsIssue} from '../src/parts-comment.ts';
+import {commentsActForEmission, createJobHostPorts, jobHash, parseCommentOnlyAct} from '../src/job-api.ts';
 import {readCheckpointEvidenceBytes} from '../src/job-checkpoint-evidence.ts';
-import type {JobUISubmission} from '../src/job-contract.ts';
+import historicalParts from './fixtures/job-decision-1233/parts.json';
 import {JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_PREVIOUS_DRAFT_SCHEMA, parseCommentsAct, parseContextCommentsAct,
   type JobPreviousDraft, type JobPublishedContext} from '../src/job-host.ts';
 import {assertStoredCheckpointEvidence, readPreviousDraftBytes} from '../src/job-source.ts';
@@ -321,34 +322,27 @@ test('previous draft identity is declared, digested and retained with the same f
   expect(() => readPreviousDraftBytes(retained.snapshotRoot, file, 'previous')).toThrow('PREVIOUS_DRAFT_HASH_MISMATCH operand=previous');
 });
 
-async function partsAct(f: Fixture) {
+async function partsDecoderCase(f: Fixture) {
   const publication = await f.publish();
-  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
-  const retained = f.session.retainedSource(publication.publicationId);
   const crop = makeSyntheticPngBytes(), sha256 = jobHash(crop);
-  const issue = {schema: 'rig-review-parts-comment/2', id: 'diff-pin', summary: '  한글\nexact  ',
+  const issue: PartsIssue = {schema: 'rig-review-parts-comment/2', id: 'diff-pin', summary: '  한글\nexact  ',
     parts: [{name: 'body', imageHash: publication.source.parts!.images.find(image => image.path === 'parts/body.png')!.sha256}],
     sourceHash: publication.source.sourceHash, imageRegion: null, rigRegion: {x: 0, y: 0, width: 2, height: 2},
     view: {mode: 'assembled', camera: {zoom: 1, center: {x: 1, y: 1}, viewport: {width: 2, height: 2}},
       cameraSync: false, referenceCamera: null, background: 'checker', alpha: false, footprints: false, mesh: false},
     crop: {path: `comment-crops/${sha256}.png`, sha256, width: 2, height: 2}, nativeCrop: null};
-  function write(comparison: unknown, source = retained) {
-    const submission = {publicationId: publication.publicationId, askId: ask.askId, pageId: 'page', displayedNonce: 'nonce',
-      expectedGeneration: publication.generation, submissionId: 'submit', kind: 'parts-verdict',
-      value: {verdict: 'changes-requested', issues: [{...issue, view: {...issue.view, comparison}}], words: ''}} as JobUISubmission;
-    const act = finalizeJobAct({jobId: f.session.jobId, submission, ask, retained: source, reviewer: {id: 'owner', role: 'owner'}});
-    if (act.schema !== JOB_COMMENTS_ACT_SCHEMA || act.kind !== 'parts-verdict') throw new Error('Expected Parts comments act');
-    return act;
-  }
-  return {write, retained};
+  return (comparison: NonNullable<PartsIssue['view']['comparison']>) => ({...historicalParts.receipt.value,
+    schema: JOB_COMMENTS_ACT_SCHEMA, kind: 'parts-verdict' as const,
+    publicationId: publication.publicationId, source: publication.source,
+    value: {verdict: 'changes-requested' as const, comments: partsIssueComments([{...issue, view: {...issue.view, comparison}}])}});
 }
 
-test('legacy and previous-draft comments round-trip through writers and both public act decoders', async () => {
+test('legacy and previous-draft comments round-trip through both historical act decoders', async () => {
   const {f, context, previousDraft} = await fixture();
-  const painting = {mode: 'difference', opacity: 0.5, threshold: 2};
-  const comparison = {...painting, operand: 'previous-draft'};
-  const current = await partsAct(f);
-  const act = parseCommentsAct(current.write(comparison));
+  const painting = {mode: 'difference', opacity: 0.5, threshold: 2} as const;
+  const comparison = {...painting, operand: 'previous-draft'} as const;
+  const current = await partsDecoderCase(f);
+  const act = parseCommentsAct(current(comparison));
   if (act.kind !== 'parts-verdict' || 'record' in act.source) throw new Error('Expected Parts comments act');
   expect(act.source.previousDraft).toEqual(previousDraft);
   expect(act.value.comments[0]).toMatchObject({text: '  한글\nexact  ', anchor: {view: {comparison}}});
@@ -357,16 +351,13 @@ test('legacy and previous-draft comments round-trip through writers and both pub
   const {previousDraft: _removed, ...legacySource} = act.source;
   expect(() => parseCommentsAct({...act, source: legacySource})).toThrow('JOB_ACT_INVALID');
   expect(() => parseContextCommentsAct({...contextAct, source: legacySource})).toThrow('JOB_ACT_INVALID');
-  const forged = {...current.retained, source: {...current.retained.source,
-    previousDraft: {...previousDraft, draft: {...previousDraft.draft, revision: 'a'.repeat(64)}}}};
-  expect(() => current.write(comparison, forged)).toThrow('JOB_ACT_SOURCE_STALE');
   const {previousDraft: _unused, ...legacyContext} = context;
   f.setContext(legacyContext);
-  const legacy = await partsAct(f), old = legacy.write(painting);
-  expect(parseCommentsAct(old)).toEqual(old);
+  const legacy = await partsDecoderCase(f), old = legacy(painting);
+  expect(JSON.stringify(parseCommentsAct(old))).toBe(JSON.stringify(old));
   expect(old.source).not.toHaveProperty('previousDraft');
   expect(old.value).toMatchObject({comments: [{anchor: {view: {comparison: painting}}}]});
-  expect(() => legacy.write(comparison)).toThrow('JOB_ACT_INVALID');
+  expect(() => parseCommentsAct(legacy(comparison))).toThrow('JOB_ACT_INVALID');
 });
 
 test('standing owner prepares and commits a previous-draft pin without painting in rig and preserves durable copies', async () => {
@@ -395,12 +386,13 @@ test('standing owner prepares and commits a previous-draft pin without painting 
     })});
     expect(prepare.status).toBe(200);
     const prepared = await prepare.json();
-    const submission = {...page, askId: ask.askId, expectedGeneration: session.status().generation, submissionId: 'pinned-act',
-      kind: 'parts-verdict', value: {verdict: 'changes-requested', issues: [prepared.comment], words: ''}};
+    const submission = {...page, expectedGeneration: session.status().generation, submissionId: 'pinned-act',
+      kind: 'comments', value: {comments: partsIssueComments([prepared.comment])}};
     const committed = await f.ui('acts', submission);
     expect(committed.status).toBe(200);
-    const act = parseCommentsAct((await committed.json()).value);
+    const act = parseCommentOnlyAct((await committed.json()).value);
     expect(act.source).toMatchObject({previousDraft: f.previousDraft});
+    expect(session.status().pending.map(item => item.askId)).toContain(ask.askId);
     expect(act.value.comments[0]).toMatchObject({text: '  changed edge\n', anchor: {view: {comparison}}});
     const reopened = JobSession.openReadOnly(f.hostOptions, session.jobId);
     try {

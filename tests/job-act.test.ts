@@ -2,20 +2,22 @@ import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
 import { afterEach, expect, test } from 'bun:test';
-import { finalizeJobAct, parseUISubmission } from '../src/job-act.ts';
-import { JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS, type JobPendingAsk, type JobUISubmission } from '../src/job-contract.ts';
+import { parseUISubmission } from '../src/job-act.ts';
+import { JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS, type JobUISubmission } from '../src/job-contract.ts';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { jobFixture, syntheticJobParts } from './helpers/job-api-fixture.ts';
 import { seedHistoricalCheckpointAct, seedHistoricalCheckpointAsk } from './helpers/historical-checkpoint-act.ts';
-import {rigStillInput, rigStillCapture} from './helpers/job-rig-still.ts';
+import {rigStillInput} from './helpers/job-rig-still.ts';
 import {JobSession} from '../src/job-session.ts';
+import type {JobStore} from '../src/job-store.ts';
+import historicalRig from './fixtures/job-decision-1233/rig.json';
 import {Database} from 'bun:sqlite';
 import {jobSnapshotHash} from '../src/job-source.ts';
 import {loadPartsView} from '../src/parts-view.ts';
 import {preparePartsComment,validateStoredPartsComment} from '../src/parts-comment-crops.ts';
 import {commentPartsIssues, parsePartsIssue} from '../src/parts-comment.ts';
-import {jobHash} from '../src/job-api.ts';
+import {jobHash, parseCommentOnlyAct} from '../src/job-api.ts';
 import {PNG} from 'pngjs';
 import {parseCommentsAct, parseContextCommentsAct, projectComments, parseRecordAct, type JobComment} from '../src/job-host.ts';
 import {legacyFeedbackComments, partsIssueComments} from '../src/feedback-export.ts';
@@ -232,22 +234,6 @@ test('#1227 fresh package sign-off asks refuse JOB_ASK_INVALID and page submissi
   }
 });
 
-test('review verdict remains separate from sign-off and is bound to the displayed model/version', async () => {
-  const f = await fixture(), publication = await f.publish();
-  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'review-verdict', stage: 'rig-review' }), page = await f.display(publication);
-  const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: ask.askId,
-    expectedGeneration: f.session.status().generation, submissionId: 'review', kind: 'review-verdict',
-    value: { stage: 'rig-review', verdict: 'approved', words: 'exact verdict' },
-    capture: rigStillCapture(publication, ask, page).capture }));
-  expect(result.ok).toBe(true);
-  if (result.ok) {
-    expect(result.value.source.model).toEqual(publication.source.model);
-    expect(result.value.source.selector).toEqual({ kind: 'rig', version: 1 });
-    expect(result.value.kind).toBe('review-verdict');
-  }
-  expect(f.session.status().pending).toHaveLength(0);
-});
-
 test('P1 unrelated agent ask does not stale a captured pending UI act and future generations still refuse', async () => {
   const f = await fixture(), publication = await f.publish();
   // #1235: the captured sample is the comment-only act@10; it answers no ask.
@@ -308,15 +294,6 @@ test('#1230 fresh package interview-picks asks refuse JOB_ASK_INVALID and submis
   const submitted = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: verdictAsk.askId,
     expectedGeneration: f.session.status().generation, submissionId: 'refused-picks', kind: 'interview-picks', value }));
   expect(submitted).toMatchObject({ ok: false, error: { code: 'JOB_ACT_KIND_DISABLED' } });
-  // A pending picks ask stored by an earlier Review no longer finalizes through the writer.
-  const retained = f.session.retainedSource(publication.publicationId);
-  const ask: JobPendingAsk = { askId: 'ask-one', publicationId: publication.publicationId,
-    subject: { kind: 'interview-picks', questionId: 'question-one', setId: 'set-one' },
-    source: { ...retained.source, optionSet: { id: 'set-one', sha256: '2'.repeat(64) } }, status: 'pending' };
-  const submission: JobUISubmission = { publicationId: publication.publicationId, askId: ask.askId, pageId: 'page',
-    displayedNonce: 'nonce', expectedGeneration: 1, submissionId: 'submission', kind: 'interview-picks', value };
-  expect(() => finalizeJobAct({ jobId: f.session.jobId, submission, ask, retained, reviewer: { id: 'owner', role: 'owner' } }))
-    .toThrow('JOB_ACT_KIND_DISABLED');
   // Stored bytes in the removed writer's key order (questionId, selections, note, comments).
   const bytes = JSON.stringify(parseCommentsAct(packagePicksCommentsAct()));
   expect(JSON.parse(bytes).value).toMatchObject({ questionId: 'question-one', note: '  Survey note\r\n' });
@@ -365,7 +342,7 @@ test('#646 picks requires an option-set identity and keeps act@7 closed', () => 
   expect(() => parseContextCommentsAct({...act, schema: 'rig-review/act@7'})).toThrow('JOB_ACT_INVALID');
 });
 
-test('parts-verdict UI save finalizes rig-review/act@6 with pointed Parts comments plus the note, rejects invalid issue bindings and binds all referenced bytes', async () => {
+test('comment-only acts preserve pointed Parts comments and general text, validate issue bindings and bind all referenced bytes', async () => {
   const f = await fixture(), parts = await syntheticJobParts(f, { project: true, painting: true });
   await writeFile(join(f.root,'out/parts.json'),JSON.stringify({rig_size:[30,20],parts:[
     {name:'body',x:0,y:0,w:20,h:20},{name:'head',x:10,y:0,w:20,h:20},
@@ -414,85 +391,70 @@ test('parts-verdict UI save finalizes rig-review/act@6 with pointed Parts commen
     imageRegion: null,
     view: { ...itemIssue.view, mode: 'assembled' as const },
   };
-  const input = { ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: 'parts-submit', kind: 'parts-verdict',
-    value: { verdict: 'changes-requested' as const, issues: [itemIssue, assembledIssue], words: ' \n원문 ' } };
-  const invalidValues = [
-    { verdict: 'approved', issues: [itemIssue], words: '' },
-    { verdict: 'changes-requested', issues: [], words: '' },
-    { verdict: 'changes-requested', issues: [{ ...itemIssue, parts: [] }], words: '' },
-    { verdict: 'changes-requested', issues: [{ ...itemIssue, parts: [{ name: 'body', imageHash: bodyHash }, { name: 'body', imageHash: bodyHash }], imageRegion: null, view: { ...itemIssue.view, mode: 'assembled' } }], words: '' },
-    { verdict: 'changes-requested', issues: [{ ...itemIssue, parts: [{ name: 'unknown', imageHash: bodyHash }] }], words: '' },
-    { verdict: 'changes-requested', issues: [{ ...itemIssue, parts: [{ name: 'body', imageHash: '0'.repeat(64) }] }], words: '' },
-    { verdict: 'changes-requested', issues: [{ ...itemIssue, sourceHash: '0'.repeat(64) }], words: '' },
-    { verdict: 'changes-requested', issues: [{ ...itemIssue, imageRegion: null }], words: '' },
-    { verdict: 'changes-requested', issues: [{ ...assembledIssue, imageRegion: { x: 1, y: 2, width: 3, height: 4 } }], words: '' },
-    { verdict: 'changes-requested', issues: [{ ...assembledIssue, rigRegion: { x: 1.5, y: 2, width: 3, height: 4 } }], words: '' },
-    { verdict: 'approved', parts: [], words: '' },
-    { verdict: 'changes-requested', issues: [{...itemIssue, nativeCrop: null}], words: '' },
-    { verdict: 'changes-requested', issues: [{
-      ...itemIssue,
-      crop: {...storedCrop, path: `comment-crops/${'b'.repeat(64)}.png`, sha256: 'b'.repeat(64)},
-    }], words: '' },
-    { verdict: 'changes-requested', issues: [{
-      ...itemIssue,
-      nativeCrop: {...itemIssue.nativeCrop!, path: `comment-crops/${'c'.repeat(64)}.png`, sha256: 'c'.repeat(64)},
-    }], words: '' },
-    { verdict: 'changes-requested', issues: [{
-      ...itemIssue, rigRegion: {...itemIssue.rigRegion, x: itemIssue.rigRegion.x + 1},
-    }], words: '' },
-    { verdict: 'changes-requested', issues: [{...itemIssue, nativeCrop: {...itemIssue.nativeCrop!, width: 4}}], words: '' },
+  const issues = [itemIssue, assembledIssue];
+  const pinned = partsIssueComments(issues);
+  const general = [' \n원문 ', '  Parts general 한글  ', 'Another observation'];
+  const comments = [...pinned, ...general.map(text => ({text}))];
+  const input = {...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'parts-submit', kind: 'comments', value: {comments}};
+  const invalidIssues = [
+    {...itemIssue, parts: []},
+    {...itemIssue, parts: [{name: 'body', imageHash: bodyHash}, {name: 'body', imageHash: bodyHash}],
+      imageRegion: null, view: {...itemIssue.view, mode: 'assembled'}},
+    {...itemIssue, parts: [{name: 'unknown', imageHash: bodyHash}]},
+    {...itemIssue, parts: [{name: 'body', imageHash: '0'.repeat(64)}]},
+    {...itemIssue, sourceHash: '0'.repeat(64)},
+    {...itemIssue, imageRegion: null},
+    {...assembledIssue, imageRegion: {x: 1, y: 2, width: 3, height: 4}},
+    {...assembledIssue, rigRegion: {x: 1.5, y: 2, width: 3, height: 4}},
+    {...itemIssue, nativeCrop: null},
+    {...itemIssue, crop: {...storedCrop, path: 'comment-crops/' + 'b'.repeat(64) + '.png', sha256: 'b'.repeat(64)}},
+    {...itemIssue, nativeCrop: {...itemIssue.nativeCrop!, path: 'comment-crops/' + 'c'.repeat(64) + '.png', sha256: 'c'.repeat(64)}},
+    {...itemIssue, rigRegion: {...itemIssue.rigRegion, x: itemIssue.rigRegion.x + 1}},
+    {...itemIssue, nativeCrop: {...itemIssue.nativeCrop!, width: 4}},
   ];
-  const db = new Database(join(f.state, 'jobs.sqlite'));
-  const storedDocument = () => db.query<{document: string}, [string]>(
-    'SELECT document FROM jobs WHERE job_id=?',
-  ).get(f.session.jobId)!.document;
-  const before = storedDocument();
+  const db = new Database(join(f.state, 'jobs.sqlite'), {readonly: true});
+  const document = () => db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?')
+    .get(f.session.jobId)!.document;
+  const before = document();
   try {
-    for (const badValue of invalidValues) {
-      const rejected = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, value: badValue}));
-      expect(rejected.ok, JSON.stringify(badValue)).toBe(false);
-      if (!rejected.ok) expect(rejected.error.code).toBe('parts' in badValue ? 'JOB_REQUEST_INVALID' : 'JOB_ACT_INVALID');
-      expect(storedDocument()).toBe(before);
-      expect(f.session.status().pending.map(pending => pending.askId)).toContain(ask.askId);
+    for (const {summary: text, ...anchor} of invalidIssues) {
+      const rejected = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, value: {comments: [{text, anchor}]}}));
+      expect(rejected, JSON.stringify(anchor)).toMatchObject({ok: false, error: {code: 'JOB_ACT_INVALID'}});
+      expect(document()).toBe(before);
     }
   } finally { db.close(); }
-  const unpreparedSubmission = parseUISubmission({...input,
-    value: {verdict: 'changes-requested', issues: [{...itemIssue, nativeCrop: null}], words: ''},
-  });
-  expect(() => finalizeJobAct({jobId: f.session.jobId, submission: unpreparedSubmission, ask, retained,
-    reviewer: {id: 'declared-owner', role: 'owner'},
-  })).toThrow('JOB_ACT_INVALID');
   const [saved, replayed] = await Promise.all([
     f.ports.commitUIAct(f.session.jobId, f.uiRequest(input)),
     f.ports.commitUIAct(f.session.jobId, f.uiRequest(input)),
   ]);
   expect(replayed).toEqual(saved);
-  expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
-  // Issues become Parts-anchored comments in order; the note is one general comment after them.
-  const expectedValue: unknown = {verdict: 'changes-requested', comments: [...partsIssueComments(input.value.issues), {text: ' \n원문 '}]};
-  expect(saved.value.schema).toBe('rig-review/act@6');
-  expect(saved.value.kind).toBe('parts-verdict');
-  expect(saved.value.value).toEqual(expectedValue as never);
-  expect(parseCommentsAct(JSON.parse(f.session.readActExport(saved.value.actId, false).toString()))).toEqual(saved.value as never);
-  expect(saved.value.source.parts).toEqual(parts);
-  expect(saved.value.source.projectHash).toMatch(/^[a-f0-9]{64}$/);
-  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
-  const fetched = await (await f.call({ ...f.base(), verb: 'fetch-act', actId: saved.value.actId }, f.session.writerGrant().fetchCapability)).json();
-  expect(fetched.value).toEqual(saved.value);
+  const act = parseCommentOnlyAct(saved.value);
+  expect(act.value).toEqual({comments});
+  if ('record' in act.source || !act.source.projectHash) throw new Error('Expected a project-bound Parts act');
+  expect(act.source.parts).toEqual(parts);
+  expect(act.source.projectHash).toMatch(/^[a-f0-9]{64}$/);
+  expect(f.session.status().pending.map(pending => pending.askId)).toContain(ask.askId);
+  const raw = f.session.readActExport(act.actId, false).toString();
+  expect(raw).toBe(JSON.stringify(saved.value));
+  expect(JSON.stringify(act)).toBe(raw);
+  expect(projectComments(act.value.comments)).toBe(projectComments(pinned) + '\n\n[general]\n' + general.join('\n\n[general]\n'));
+  const fetched = await (await f.call({...f.base(), verb: 'fetch-act', actId: act.actId}, f.session.writerGrant().fetchCapability)).json();
+  expect(fetched.value).toEqual(act);
   const reopened = new JobSession({root: f.root, stateDir: f.state, fingerprint: 'f'.repeat(64),
     reviewer: {id: 'declared-owner', role: 'owner'}});
   try {
-    const restored = await reopened.execute({...f.base(), verb: 'fetch-act', actId: saved.value.actId}, new AbortController().signal);
-    expect(restored).toEqual(saved.value);
-    if (saved.value.kind !== 'parts-verdict' || saved.value.schema !== 'rig-review/act@6') throw new Error('Expected parts act');
-    expect(commentPartsIssues(saved.value.value.comments)).toEqual(input.value.issues);
-    for (const issue of commentPartsIssues(saved.value.value.comments)) {
+    expect(await reopened.execute({...f.base(), verb: 'fetch-act', actId: act.actId}, new AbortController().signal)).toEqual(act);
+    expect(commentPartsIssues(act.value.comments)).toEqual(issues);
+    for (const issue of commentPartsIssues(act.value.comments)) {
       expect(parsePartsIssue(issue, true, false, false)).toEqual(issue);
       expect(await validateStoredPartsComment(pkg, issue, false, {sourceHash: publication.source.sourceHash})).toEqual(issue);
     }
   } finally { reopened.dispose(); }
+  const picks = packagePicksCommentsAct();
+  expect(JSON.stringify(parseCommentsAct({...picks, value: {...picks.value, comments: pinned}}).value.comments))
+    .toBe(JSON.stringify(pinned));
   const { parseManifest, parsePanelComposition } = await import('../src/manifest.ts');
   const panels = {
     schema: 'rig-review/panels@1' as const,
@@ -533,32 +495,8 @@ test('parts-verdict UI save finalizes rig-review/act@6 with pointed Parts commen
     panels: { ...panels, stage: ['unknown-component'] },
   });
   expect(withUnknownComponent.panels?.stage as readonly string[]).toEqual(['unknown-component']);
-  const mutableAsk=seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
-  const mutableInput={...input,askId:mutableAsk.askId,submissionId:'parts-mutable',
-    expectedGeneration:f.session.status().generation,value:structuredClone(input.value)};
-  const pending=f.session.commitUIAct(mutableInput);
-  mutableInput.value.issues[0]!.rigRegion.x++;
-  const isolated=await pending;
-  expect(isolated.value).toEqual(expectedValue as never);
-  const mixedAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
-  const general = ['  Parts general 한글  ', 'Another observation'] as const;
-  const mixed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, askId: mixedAsk.askId,
-    expectedGeneration: f.session.status().generation, submissionId: 'mixed-parts-831',
-    value: {...input.value, words: '', general}}));
-  if (!mixed.ok) throw new Error(mixed.error.code);
-  const mixedBytes = f.session.readActExport(mixed.value.actId, false).toString();
-  const mixedAct = parseCommentsAct(JSON.parse(mixedBytes));
-  const pinned = partsIssueComments(input.value.issues);
-  const picks = packagePicksCommentsAct();
-  expect(JSON.stringify(parseCommentsAct({...picks, value: {...picks.value, comments: pinned}}).value.comments))
-    .toBe(JSON.stringify(pinned));
-  expect(mixedAct.kind).toBe('parts-verdict');
-  expect(mixedAct.value).toEqual({verdict: 'changes-requested', comments: [...pinned, {text: general[0]}, {text: general[1]}]});
-  expect(projectComments(mixedAct.value.comments)).toBe(projectComments(pinned) + '\n\n[general]\n' + general.join('\n\n[general]\n'));
-  expect(JSON.stringify(mixedAct)).toBe(mixedBytes);
-  const secondAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   await writeFile(join(f.root, 'out/parts/depth.png'), 'changed depth only');
-  const stale = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, askId: secondAsk.askId,
+  const stale = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input,
     submissionId: 'stale-parts', expectedGeneration: f.session.status().generation }));
   expect(stale.ok).toBe(false);
   if (!stale.ok) expect(stale.error.code).toBe('JOB_SOURCE_MISMATCH');
@@ -594,157 +532,117 @@ test('parseUISubmission accepts all 5 enabled act kinds, preserves String(kind) 
   }
 });
 
-test('#557 R01 setup UI submission finalizes act@6 with a daemon-hashed top-level PNG still', async () => {
-  const f = await fixture();
-  const {input, bytes, sha256} = await rigStillInput(f);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error(saved.error.code);
-  const {words: note, ...verdict} = input.value as {words: string; stage: string; verdict: string};
-  expect(saved.value).toMatchObject({schema: 'rig-review/act@6', value: {...verdict, comments: note.trim() ? [{text: note}] : []},
-    still: {path: sha256 + '.png', sha256, camera: 'fixed', frame: 'setup'}});
-  expect(saved.value).not.toHaveProperty('sha256');
-  expect(saved.value).not.toHaveProperty('manifest');
-  const response = await f.ports.handleJobApi(new Request(f.origin + `/jobs/${f.session.jobId}/api`, {
-    method: 'POST', headers: {'Content-Type': 'application/json', Accept: 'image/png',
-      Authorization: 'Bearer ' + f.session.writerGrant().fetchCapability},
-    body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: saved.value.actId}),
-  }));
-  expect(response.status).toBe(200);
-  expect(response.headers.get('content-type')).toBe('image/png');
-  expect(Buffer.from(await response.arrayBuffer()).equals(bytes)).toBe(true);
-});
+type StillRows = {acts: Record<string, unknown>; replays: Record<string, {digest: string; value: unknown}>};
 
-for (const [frame, animation] of [[0, 'still'], [0.375, 'inspect']] as const) {
-  test(`#557 R02 playing ${animation} at ${frame} seconds retains exact named motion time`, async () => {
-    const f = await fixture();
-    const {input, sha256} = await rigStillInput(f, frame, animation);
-    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-    expect(saved.ok).toBe(true);
-    if (!saved.ok) throw new Error(saved.error.code);
-    expect(saved.value).toMatchObject({schema: 'rig-review/act@6',
-      still: {path: sha256 + '.png', sha256, camera: 'fixed', frame, animation}});
+function seedHistoricalRigStill(f: Awaited<ReturnType<typeof jobFixture>>, publication?: Awaited<ReturnType<typeof f.publish>>) {
+  const {store} = f.session as unknown as {store: JobStore<StillRows>};
+  const fixture = historicalRig;
+  const act = publication ? {...fixture.receipt.value, jobId: f.session.jobId, publicationId: publication.publicationId, source: publication.source}
+    : fixture.receipt.value;
+  const actBytes = Buffer.from(publication ? JSON.stringify(act) : fixture.still.actBytes);
+  const png = Buffer.from(fixture.still.png, 'base64');
+  store.update(f.session.jobId, null, ({data}) => {
+    data.acts[act.actId] = act;
+    if (!publication) data.replays[fixture.key] = fixture.receipt;
+    return {data, still: {actId: act.actId, pageId: fixture.request.pageId, submissionId: fixture.request.submissionId,
+      sha256: fixture.still.sha256, binding: fixture.still.binding, png, actBytes}};
   });
+  return {act, actBytes, png};
 }
 
-test('#557 R02 numeric motion capture without an animation refuses by name', async () => {
+test('#557 historical rig still exports with original act and PNG bytes through the consumer port', async () => {
   const f = await fixture();
-  const {input} = await rigStillInput(f, 0.375);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  expect(saved.ok).toBe(false);
-  if (!saved.ok) expect(saved.error.code).toBe('JOB_STILL_CAPTURE_FAILED');
-  expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
-});
-
-test('#557 R03 missing capture refuses by name before answering the rig ask', async () => {
-  const f = await fixture();
-  const {input} = await rigStillInput(f);
-  const {capture: _capture, ...withoutCapture} = input;
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(withoutCapture));
-  expect(saved.ok).toBe(false);
-  if (!saved.ok) expect(saved.error.code).toBe('JOB_STILL_CAPTURE_FAILED');
-  expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
-});
-
-for (const camera of ['panned', 'zoomed']) {
-  test(`#557 R04 ${camera} capture refuses the nondefault camera by name`, async () => {
-    const f = await fixture();
-    const {input} = await rigStillInput(f);
-    const saved = await f.ports.commitUIAct(f.session.jobId,
-      f.uiRequest({...input, capture: {...input.capture, camera}}));
-    expect(saved.ok).toBe(false);
-    if (!saved.ok) expect(saved.error.code).toBe('JOB_STILL_CAMERA_NOT_FIXED');
-    expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
-  });
-}
-
-for (const view of ['solo', 'highlight', 'comparison']) {
-  test(`#557 R05 ${view} capture refuses the partial or comparison view by name`, async () => {
-    const f = await fixture();
-    const {input} = await rigStillInput(f);
-    const saved = await f.ports.commitUIAct(f.session.jobId,
-      f.uiRequest({...input, capture: {...input.capture, view}}));
-    expect(saved.ok).toBe(false);
-    if (!saved.ok) expect(saved.error.code).toBe('JOB_STILL_VIEW_UNSUPPORTED');
-    expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
-  });
-}
-
-test('#557 R06 mismatched capture page refuses before a durable act is created', async () => {
-  const f = await fixture();
-  const {input} = await rigStillInput(f);
-  const capture = {...input.capture, binding: {...input.capture.binding, pageId: 'other-page'}};
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, capture}));
-  expect(saved.ok).toBe(false);
-  if (!saved.ok) expect(saved.error.code).toBe('JOB_STILL_BINDING_MISMATCH');
-  expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
-});
-
-test('#557 R07 concurrent retry returns the first capture and restart preserves the act bytes', async () => {
-  const f = await fixture();
-  const {input} = await rigStillInput(f);
-  const [first, replay] = await Promise.all([
-    f.ports.commitUIAct(f.session.jobId, f.uiRequest(input)),
-    f.ports.commitUIAct(f.session.jobId, f.uiRequest(input)),
-  ]);
-  expect(first.ok).toBe(true);
-  if (!first.ok) throw new Error(first.error.code);
-  expect(replay).toEqual(first);
-  const changed = {...input, capture: {...input.capture, frame: 0.5, animation: 'inspect'}};
-  const conflict = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(changed));
-  expect(conflict.ok).toBe(false);
-  if (!conflict.ok) expect(conflict.error.code).toBe('JOB_IDEMPOTENCY_CONFLICT');
-  const reopened = new JobSession({root: f.root, stateDir: f.state, fingerprint: 'f'.repeat(64),
-    reviewer: {id: 'declared-owner', role: 'owner'}});
-  try {
-    const request = {...f.base(), verb: 'fetch-act' as const, actId: first.value.actId};
-    expect(await reopened.execute(request, new AbortController().signal)).toEqual(first.value);
-  } finally {
-    reopened.dispose();
+  const {act, actBytes, png} = seedHistoricalRigStill(f);
+  expect(actBytes.toString()).toBe(historicalRig.bytes);
+  expect(jobHash(actBytes)).toBe(historicalRig.sha256);
+  expect(JSON.stringify(parseCommentsAct(JSON.parse(actBytes.toString())))).toBe(historicalRig.bytes);
+  for (const [accept, bytes, contentType] of [
+    ['image/png', png, 'image/png'],
+    ['application/vnd.rig-review.act+json', actBytes, 'application/vnd.rig-review.act+json'],
+  ] as const) {
+    const response = await f.ports.handleJobApi(new Request(f.origin + '/jobs/' + f.session.jobId + '/api', {
+      method: 'POST', headers: {'Content-Type': 'application/json', Accept: accept,
+        Authorization: 'Bearer ' + f.session.writerGrant().fetchCapability},
+      body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: act.actId}),
+    }));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')?.split(';')[0]).toBe(contentType);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
   }
 });
 
+test('#557 historical rig motion stills preserve exact seconds and animation in the decoder', () => {
+  for (const [frame, animation] of [[0, 'still'], [0.375, 'inspect']] as const) {
+    const still = {...historicalRig.receipt.value.still, frame, animation};
+    const act = {...historicalRig.receipt.value, still};
+    expect(JSON.stringify(parseCommentsAct(act))).toBe(JSON.stringify(act));
+    const {animation: _animation, ...withoutAnimation} = still;
+    expect(() => parseCommentsAct({...act, still: withoutAnimation})).toThrow('JOB_ACT_INVALID');
+  }
+});
+
+test('#1233 rig capture and parts payloads refuse on replay miss without writing an act or still', async () => {
+  const f = await fixture();
+  const {input} = await rigStillInput(f);
+  const {capture, ...withoutCapture} = input;
+  const before = f.session.status();
+  for (const submission of [input, withoutCapture,
+    {...input, capture: {...capture, png: 'data:image/png;base64,YmFk'}},
+    {...withoutCapture, kind: 'parts-verdict', value: {verdict: 'approved', issues: [], words: ''}},
+  ]) {
+    expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submission)))
+      .toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+    expect(f.session.status()).toEqual(before);
+  }
+  expect(before.pending.map(ask => ask.askId)).toContain(input.askId);
+  const db = new Database(join(f.state, 'jobs.sqlite'), {readonly: true});
+  try { expect(db.query('SELECT * FROM job_act_stills').all()).toHaveLength(0); }
+  finally { db.close(); }
+});
+
 for (const boundary of ['attachment-insert', 'job-update']) {
-  test(`#557 backend ${boundary} failure rolls back PNG, act, replay and event together`, async () => {
+  test('#557 retained still transaction rolls back the BLOB and document on ' + boundary + ' failure', async () => {
     const f = await fixture();
-    const {input} = await rigStillInput(f);
     const db = new Database(join(f.state, 'jobs.sqlite'));
     try {
-      const before = db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!.document;
-      const target = boundary === 'attachment-insert' ? 'INSERT ON job_act_stills' : 'UPDATE ON jobs';
-      db.exec(`CREATE TRIGGER fail_still_commit BEFORE ${target} BEGIN SELECT RAISE(ABORT,'557 planted storage fault'); END`);
-      const rejected = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-      expect(rejected.ok).toBe(false);
-      if (!rejected.ok) expect(rejected.error.code).toBe('JOB_STORAGE_FAILED');
+      const storedJob = () => db.query<{revision: number; document: string}, [string]>(
+        'SELECT revision, document FROM jobs WHERE job_id=?',
+      ).get(f.session.jobId)!;
+      const before = storedJob();
+      const fixtureActId = historicalRig.receipt.value.actId;
+      const target = boundary === 'attachment-insert'
+        ? `INSERT ON job_act_stills WHEN NEW.act_id = '${fixtureActId}'`
+        : `UPDATE ON jobs WHEN EXISTS (
+            SELECT 1 FROM job_act_stills WHERE job_id = NEW.job_id AND act_id = '${fixtureActId}'
+          )`;
+      db.exec(`CREATE TRIGGER fail_still_commit BEFORE ${target}
+        BEGIN SELECT RAISE(ABORT, '557 planted storage fault'); END`);
+      expect(() => seedHistoricalRigStill(f)).toThrow(expect.objectContaining({
+        code: 'JOB_STORAGE_FAILED', message: 'Job transaction could not be committed',
+      }));
       expect(db.query('SELECT * FROM job_act_stills').all()).toHaveLength(0);
-      expect(db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!.document).toBe(before);
+      expect(storedJob()).toEqual(before);
       db.exec('DROP TRIGGER fail_still_commit');
-      const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-      expect(saved.ok).toBe(true);
-      if (!saved.ok) throw new Error(saved.error.code);
-      const rows = db.query<{png: Uint8Array; act_bytes: Uint8Array}, []>('SELECT png,act_bytes FROM job_act_stills').all();
-      expect(rows).toHaveLength(1);
-      expect(Buffer.from(rows[0].act_bytes)).toEqual(Buffer.from(JSON.stringify(saved.value)));
-      expect(f.session.readActExport(saved.value.actId, false)).toEqual(Buffer.from(rows[0].act_bytes));
+      const {act, actBytes, png} = seedHistoricalRigStill(f);
+      expect(storedJob().revision).toBe(before.revision + 1);
+      expect(f.session.readActExport(act.actId, false)).toEqual(actBytes);
+      expect(f.session.readActExport(act.actId, true)).toEqual(png);
     } finally { db.close(); }
   });
 }
 
-test('#557 backend finalized PNG survives close and reclaim while both consumer representations revoke', async () => {
-  const f = await fixture();
-  const {input, publication, bytes} = await rigStillInput(f);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error(saved.error.code);
+test('#557 historical still survives close and blocks publication snapshot reclaim', async () => {
+  const f = await fixture(), publication = await f.publish();
+  const {act, actBytes, png} = seedHistoricalRigStill(f, publication);
   const retained = f.session.retainedSource(publication.publicationId);
   const grant = f.session.writerGrant().fetchCapability;
   const snapshotHash = jobSnapshotHash(retained.seals);
   await f.session.execute({...f.base(), verb: 'close', expectedGeneration: f.session.status().generation,
     idempotencyKey: '557-close', reason: 'synthetic close'}, new AbortController().signal);
   for (const accept of ['image/png', 'application/vnd.rig-review.act+json']) {
-    const response = await f.ports.handleJobApi(new Request(f.origin + `/jobs/${f.session.jobId}/api`, {
+    const response = await f.ports.handleJobApi(new Request(f.origin + '/jobs/' + f.session.jobId + '/api', {
       method: 'POST', headers: {'Content-Type': 'application/json', Accept: accept, Authorization: 'Bearer ' + grant},
-      body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: saved.value.actId}),
+      body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: act.actId}),
     }));
     expect(response.status).toBe(409);
     expect((await response.json()).error.code).toBe('JOB_CLOSED');
@@ -753,64 +651,26 @@ test('#557 backend finalized PNG survives close and reclaim while both consumer 
   const db = new Database(join(f.state, 'jobs.sqlite'), {readonly: true});
   try {
     const row = db.query<{png: Uint8Array; act_bytes: Uint8Array}, []>('SELECT png,act_bytes FROM job_act_stills').get()!;
-    expect(Buffer.from(row.png).equals(bytes)).toBe(true);
-    expect(Buffer.from(row.act_bytes).toString('utf8')).toBe(JSON.stringify(saved.value));
+    expect(Buffer.from(row.png)).toEqual(png);
+    expect(Buffer.from(row.act_bytes)).toEqual(actBytes);
   } finally { db.close(); }
 });
 
 test('#557 backend exact @2 historical rig act remains readable without a PNG backfill', async () => {
   const f = await fixture();
-  const {input} = await rigStillInput(f);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error(saved.error.code);
-  const db = new Database(join(f.state, 'jobs.sqlite'));
-  try {
-    const original = db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!;
-    const data = JSON.parse(original.document);
-    const legacy = {...data.acts[saved.value.actId], schema: 'rig-review/act@2'};
-    delete legacy.still;
-    data.acts[saved.value.actId] = legacy;
-    const legacyDocument = JSON.stringify(data);
-    db.query('UPDATE jobs SET document=? WHERE job_id=?').run(legacyDocument, f.session.jobId);
-    const fetched = await (await f.call({...f.base(), verb: 'fetch-act', actId: saved.value.actId}, f.session.writerGrant().fetchCapability)).json();
-    expect(JSON.stringify(fetched.value)).toBe(JSON.stringify(legacy));
-    expect(f.session.readActExport(saved.value.actId, false).toString('utf8')).toBe(JSON.stringify(legacy));
-    expect(() => f.session.readActExport(saved.value.actId, true)).toThrow('JOB_STILL_UNAVAILABLE');
-    expect(db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!.document).toBe(legacyDocument);
-  } finally { db.close(); }
-});
-
-test('#557 backend malformed PNG and forged hash fields cannot create an attachment or answer the ask', async () => {
-  const f = await fixture();
-  const {input} = await rigStillInput(f);
-  for (const capture of [
-    {...input.capture, png: 'data:image/png;base64,YmFk'},
-    {...input.capture, width: 16385},
-    {...input.capture, sha256: '0'.repeat(64)},
-  ]) {
-    const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, capture}));
-    expect(result.ok).toBe(false);
-    expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
-  }
-  const db = new Database(join(f.state, 'jobs.sqlite'), {readonly: true});
-  try { expect(db.query('SELECT * FROM job_act_stills').all()).toHaveLength(0); }
-  finally { db.close(); }
-});
-
-for (const [field, value] of [['sourceHash', 'wrong-source'], ['askId', 'other-ask'], ['instanceKey', 'other-instance'],
-  ['drawGeneration', 0], ['playerGeneration', -1]] as const) {
-  test(`#557 backend capture ${field} mismatch refuses before commit`, async () => {
-    const f = await fixture();
-    const {input} = await rigStillInput(f);
-    const capture = {...input.capture, binding: {...input.capture.binding, [field]: value}};
-    const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, capture}));
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('JOB_STILL_BINDING_MISMATCH');
-    expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
+  // The @3 fixture has the same legacy verdict value and adds only the still.
+  const {still: _still, ...envelope} = JSON.parse(legacyComments.records['@3'].raw);
+  const legacy = {...envelope, schema: 'rig-review/act@2'};
+  const {store} = f.session as unknown as {store: JobStore<StillRows>};
+  store.update(f.session.jobId, null, ({data}) => {
+    data.acts[legacy.actId] = legacy;
+    return {data};
   });
-}
-
+  const fetched = await (await f.call({...f.base(), verb: 'fetch-act', actId: legacy.actId}, f.session.writerGrant().fetchCapability)).json();
+  expect(JSON.stringify(fetched.value)).toBe(JSON.stringify(legacy));
+  expect(f.session.readActExport(legacy.actId, false).toString()).toBe(JSON.stringify(legacy));
+  expect(() => f.session.readActExport(legacy.actId, true)).toThrow('JOB_STILL_UNAVAILABLE');
+});
 
 test('#794 / #1227 package direction signoff still parses on publish and historical acts while fresh asks and submissions refuse', async () => {
   const f = await fixture(), context = f.getContext();

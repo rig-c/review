@@ -22,7 +22,7 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  if(path==='/api/control/config')return method==='GET'?{...get,control:true}:null;
  if(['/api/control/register','/api/control/poll','/api/control/ack','/api/control/close'].includes(path))return method==='POST'?{mutation:true,limit:16384,timeoutMs:10000,control:true}:null;
  const session=mode==='single'?'/api/session':'/api/compare/session',strip=mode==='single'?'/api/strip':'/api/compare/strip';
- if(path===session)return read?get:method==='PUT'?{mutation:true,limit:1024*1024,timeoutMs:30000,control:false}:null;
+ if(path===session)return read?get:mode==='compare'&&method==='PUT'?{mutation:true,limit:1024*1024,timeoutMs:30000,control:false}:null;
  if(path===strip)return method==='POST'?{mutation:true,limit:1024*1024,timeoutMs:120000,control:false}:null;
  const reads=mode==='single'?['/api/review','/review-reference','/review-painting']:['/api/compare','/api/compare/reference-frames','/compare-reference'];
  if(reads.includes(path))return read?get:null;

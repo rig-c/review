@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadReview } from '../src/manifest.ts';
 import { startServer } from '../src/server.ts';
-import { freshSession, sessionFile } from '../src/session.ts';
+import { readPackageComments } from '../src/local-comments.ts';
+import type { Feedback } from '../src/session.ts';
+import { postLocalPackageFeedback } from './helpers/local-package-feedback.ts';
 import { timeOnlyBasis } from '../src/stage-comment.ts';
 
 test('authored direction correction exports the inspected bindings and exact marked region through the public CLI', async () => {
@@ -13,7 +15,6 @@ test('authored direction correction exports the inspected bindings and exact mar
   const pkg = await loadReview('tests/fixtures/direction-inspection');
   const server = await startServer(pkg, { port: 0, stateDir: state });
   try {
-    const baseline = freshSession(pkg);
     const model = pkg.reviewedSource.rig!;
     const direction = pkg.direction!.file;
     const camera = { space: 'world', center: { x: 0, y: 0 }, zoom: 1,
@@ -39,26 +40,30 @@ test('authored direction correction exports the inspected bindings and exact mar
           view: { schema: 'rig-review-view/1', cameras: { rig: camera, a: null, b: null, reference: null } },
           selection: { inspector: 'playback' } },
       }, correction: { path: 'described', selector: { stage: 'direction-review', kind: 'post', version: 2, modelFile: model.path } } },
-    };
-    const origin = `http://127.0.0.1:${server.port}`;
-    const submit = () => fetch(origin + '/api/session', {
-      method: 'PUT', headers: { origin, 'content-type': 'application/json' },
-      body: JSON.stringify({ ...baseline, feedback: [item] }),
-    });
-    item.context.correction.selector.modelFile = direction.path;
-    const refused = await submit();
-    expect(refused.ok).toBe(false);
-    expect(await refused.text()).toContain('CORRECTION_DIRECTION_SOURCE');
-    item.context.correction.selector.modelFile = model.path;
-    const saved = await submit();
-    expect(saved.ok, await saved.text()).toBe(true);
+    } satisfies Feedback;
+    const origin = 'http://127.0.0.1:' + server.port;
+    const run = (format: string, id = item.id) => Bun.spawnSync([process.execPath, 'src/cli.ts', 'feedback', pkg.root,
+      '--correction', id, '--format', format], { env: { ...process.env, RIG_REVIEW_STATE_DIR: state } });
 
-    const run = (format: string) => Bun.spawnSync([process.execPath, 'src/cli.ts', 'feedback', pkg.root,
-      '--correction', item.id, '--format', format], { env: { ...process.env, RIG_REVIEW_STATE_DIR: state } });
+    const badModel = structuredClone(item);
+    badModel.id = 'wrong-direction-model';
+    badModel.context.correction.selector.modelFile = direction.path;
+    const sentBadModel = await postLocalPackageFeedback(origin, pkg.sourceHash, [badModel]);
+    expect(sentBadModel.status, await sentBadModel.text()).toBe(200);
+    const refused = run('issue', badModel.id);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stdout.toString()).toBe('');
+    expect(refused.stderr.toString()).toContain('CORRECTION_DIRECTION_SOURCE');
+
+    const saved = await postLocalPackageFeedback(origin, pkg.sourceHash, [item]);
+    expect(saved.status, await saved.text()).toBe(200);
+    const stored = await readPackageComments(pkg, state);
+    expect(stored?.sends).toHaveLength(2);
+
     const json = run('json');
     expect(json.exitCode, json.stderr.toString()).toBe(0);
-    expect(json.stdout).toEqual(await readFile(sessionFile(pkg, state)));
-    expect(JSON.parse(json.stdout.toString()).status).toBe('pending');
+    expect(json.stdout).toEqual(await readFile(stored!.path));
+    expect(JSON.parse(json.stdout.toString()).schema).toBe('rig-review/local-comments@1');
 
     const issue = run('issue');
     expect(issue.exitCode, issue.stderr.toString()).toBe(0);

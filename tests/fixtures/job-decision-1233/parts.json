@@ -1,0 +1,190 @@
+{
+  "writer": "c34b5d6c83e3cc54dd40ce2ed6b7bcfc4fa44a46",
+  "key": "ui:page-one:review-1233-parts",
+  "request": {
+    "publicationId": "1d91f46f-e930-49d1-aafe-27eb3bd5ea4b",
+    "pageId": "page-one",
+    "displayedNonce": "3b4e90b74658e56dd172239a237ffce9d710cf69abe531dd0893cee90b94e894",
+    "askId": "1df8bd25-8403-4c19-ad99-684eec5ff610",
+    "expectedGeneration": 2,
+    "submissionId": "review-1233-parts",
+    "kind": "parts-verdict",
+    "value": {
+      "verdict": "approved",
+      "issues": [],
+      "words": "  Parts approved.  "
+    }
+  },
+  "receipt": {
+    "digest": "63e7f5ad4c4c2e4365adce12f6ea8a46b289a985caf0cb9fb06ae2f351711003",
+    "value": {
+      "schema": "rig-review/act@6",
+      "actId": "65b7ab25-ba4a-4068-a72a-9e25adb3b335",
+      "jobId": "f22a332c-e5f6-4e9b-9bcd-76014746c46a",
+      "askId": "1df8bd25-8403-4c19-ad99-684eec5ff610",
+      "publicationId": "1d91f46f-e930-49d1-aafe-27eb3bd5ea4b",
+      "authority": {
+        "actor": "human",
+        "channel": "review-ui",
+        "reviewer": {
+          "id": "declared-owner",
+          "role": "owner"
+        }
+      },
+      "at": "2026-11-27T11:49:33.091Z",
+      "kind": "parts-verdict",
+      "source": {
+        "sourceHash": "4b859e1a0ee63fc72f258bb115a13ddfcc165b0979b2b14794ef260294f7f187",
+        "projectHash": "e4a114a3d47f211279e08819aaf9dcb506fecc3c87462833b825011e2f2d6008",
+        "package": {
+          "id": "viewport-387-public",
+          "revision": "1"
+        },
+        "selector": {
+          "kind": "draft",
+          "id": "synthetic-draft"
+        },
+        "model": {
+          "path": "out/skeleton.model.json",
+          "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+        },
+        "direction": null,
+        "optionSet": null,
+        "appliedResult": null,
+        "plan": {
+          "steps": [
+            {
+              "id": "step-one",
+              "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+            }
+          ]
+        },
+        "parts": {
+          "enumeratorVersion": "2.25.1",
+          "manifest": {
+            "path": "out/parts.json",
+            "sha256": "0efe4b751280329b1940bb822331fddec1bc3c0448d4f3ff3580a893cc606d31"
+          },
+          "images": [
+            {
+              "path": "parts/alternate.png",
+              "role": "alternate",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            },
+            {
+              "path": "parts/base.png",
+              "role": "part",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            },
+            {
+              "path": "parts/body.png",
+              "role": "part",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            },
+            {
+              "path": "parts/depth.png",
+              "role": "depth",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            },
+            {
+              "path": "parts/head.png",
+              "role": "part",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            }
+          ]
+        }
+      },
+      "value": {
+        "verdict": "approved",
+        "comments": [
+          {
+            "text": "  Parts approved.  "
+          }
+        ]
+      }
+    }
+  },
+  "sha256": "3bf4edd6254fd0a6ab69cde7edb1517be1a94a55c26c27d078f24c5f1a2fc866",
+  "bytes": "{\"schema\":\"rig-review/act@6\",\"actId\":\"65b7ab25-ba4a-4068-a72a-9e25adb3b335\",\"jobId\":\"f22a332c-e5f6-4e9b-9bcd-76014746c46a\",\"askId\":\"1df8bd25-8403-4c19-ad99-684eec5ff610\",\"publicationId\":\"1d91f46f-e930-49d1-aafe-27eb3bd5ea4b\",\"authority\":{\"actor\":\"human\",\"channel\":\"review-ui\",\"reviewer\":{\"id\":\"declared-owner\",\"role\":\"owner\"}},\"at\":\"2026-11-27T11:49:33.091Z\",\"kind\":\"parts-verdict\",\"source\":{\"sourceHash\":\"4b859e1a0ee63fc72f258bb115a13ddfcc165b0979b2b14794ef260294f7f187\",\"projectHash\":\"e4a114a3d47f211279e08819aaf9dcb506fecc3c87462833b825011e2f2d6008\",\"package\":{\"id\":\"viewport-387-public\",\"revision\":\"1\"},\"selector\":{\"kind\":\"draft\",\"id\":\"synthetic-draft\"},\"model\":{\"path\":\"out/skeleton.model.json\",\"sha256\":\"ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335\"},\"direction\":null,\"optionSet\":null,\"appliedResult\":null,\"plan\":{\"steps\":[{\"id\":\"step-one\",\"hash\":\"1111111111111111111111111111111111111111111111111111111111111111\"}]},\"parts\":{\"enumeratorVersion\":\"2.25.1\",\"manifest\":{\"path\":\"out/parts.json\",\"sha256\":\"0efe4b751280329b1940bb822331fddec1bc3c0448d4f3ff3580a893cc606d31\"},\"images\":[{\"path\":\"parts/alternate.png\",\"role\":\"alternate\",\"sha256\":\"ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415\"},{\"path\":\"parts/base.png\",\"role\":\"part\",\"sha256\":\"ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415\"},{\"path\":\"parts/body.png\",\"role\":\"part\",\"sha256\":\"ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415\"},{\"path\":\"parts/depth.png\",\"role\":\"depth\",\"sha256\":\"ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415\"},{\"path\":\"parts/head.png\",\"role\":\"part\",\"sha256\":\"ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415\"}]}},\"value\":{\"verdict\":\"approved\",\"comments\":[{\"text\":\"  Parts approved.  \"}]}}",
+  "publication": {
+    "publicationId": "1d91f46f-e930-49d1-aafe-27eb3bd5ea4b",
+    "instanceKey": "38d5469fae796af6c9c6201152a5bf0ebcfb17aec87b6e640998a74631284087",
+    "generation": 1,
+    "source": {
+      "sourceHash": "4b859e1a0ee63fc72f258bb115a13ddfcc165b0979b2b14794ef260294f7f187",
+      "projectHash": "e4a114a3d47f211279e08819aaf9dcb506fecc3c87462833b825011e2f2d6008",
+      "package": {
+        "id": "viewport-387-public",
+        "revision": "1"
+      },
+      "selector": {
+        "kind": "draft",
+        "id": "synthetic-draft"
+      },
+      "model": {
+        "path": "out/skeleton.model.json",
+        "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+      },
+      "direction": null,
+      "optionSet": null,
+      "appliedResult": null,
+      "plan": {
+        "steps": [
+          {
+            "id": "step-one",
+            "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ]
+      },
+      "parts": {
+        "enumeratorVersion": "2.25.1",
+        "manifest": {
+          "path": "out/parts.json",
+          "sha256": "0efe4b751280329b1940bb822331fddec1bc3c0448d4f3ff3580a893cc606d31"
+        },
+        "images": [
+          {
+            "path": "parts/alternate.png",
+            "role": "alternate",
+            "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+          },
+          {
+            "path": "parts/base.png",
+            "role": "part",
+            "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+          },
+          {
+            "path": "parts/body.png",
+            "role": "part",
+            "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+          },
+          {
+            "path": "parts/depth.png",
+            "role": "depth",
+            "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+          },
+          {
+            "path": "parts/head.png",
+            "role": "part",
+            "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+          }
+        ]
+      }
+    },
+    "label": "Viewport extraction public control",
+    "previousPublicationId": null,
+    "visual": {
+      "status": "available"
+    },
+    "interview": {
+      "schema": "rig-review/job-interview@1",
+      "project": {
+        "path": "project.json",
+        "sha256": "e4a114a3d47f211279e08819aaf9dcb506fecc3c87462833b825011e2f2d6008"
+      },
+      "evaluatedAt": "2026-11-27T11:49:33.013Z",
+      "records": [],
+      "diagnostics": []
+    }
+  }
+}

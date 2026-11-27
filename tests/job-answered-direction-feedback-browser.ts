@@ -4,7 +4,9 @@ import {cp,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {JOB_API_SCHEMA,type JobDisplayReceipt,type JobPublication,type JobResponseValues,type JobResult} from '../src/job-contract.ts';
-import {parseCommentOnlyAct,parseCommentsAct} from '../src/job-host.ts';
+import {parseCommentOnlyAct} from '../src/job-host.ts';
+import {seedHistoricalDecisionAct} from './helpers/historical-decision-act.ts';
+import historicalDirection from './fixtures/job-decision-1233/direction.json';
 import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {clickPartsViewControl} from './helpers/parts-view-shots.ts';
@@ -132,25 +134,22 @@ async function exercise(page:InputCdpSession,language:'en'|'ko') {
     const sent=await sendComments(first,earlierText,true);
     const [pin,general]=sent.value.comments;
     assert.ok(pin?.anchor&&'frameStart' in pin.anchor&&general);
-    // The pre-retirement ask fixture binds to this publication. The original writer
-    // stores the verdict from the pin emitted by the browser's comment-only flow.
+    // Bind the base-writer direction verdict and receipt to the test publication
+    // with the actual pin emitted by the browser's comment-only flow.
     const ask=seedHistoricalVerdictAsk(scope,first.publicationId,subject);
     const displayed=await fixture.ui('displayed',{publicationId:first.publicationId,sourceHash:first.source.sourceHash,pageId:randomUUID()});
     const receipt=await displayed.json() as JobResult<JobDisplayReceipt>;
     assert.ok(displayed.ok&&receipt.ok,JSON.stringify(receipt));
     const historicalComments=[{text:general.text},{text:pin.text,anchor:pin.anchor}];
     const input={...receipt.value,askId:ask.askId,expectedGeneration:scope.status().generation,submissionId:randomUUID(),
-      kind:'review-verdict',value:{stage:'direction-review',verdict:'changes-requested',comments:historicalComments}};
-    const response=await fixture.ui('acts',input);
-    const committed=await response.json() as JobResult<unknown>;
-    assert.ok(response.ok&&committed.ok,JSON.stringify(committed));
-    const verdict=parseCommentsAct(committed.value);
+      kind:'review-verdict',value:{stage:'direction-review',verdict:'changes-requested',comments:historicalComments} as const};
+    const verdict=seedHistoricalDecisionAct(scope,ask,historicalDirection.receipt.value,input.value,input);
     assert.ok(verdict.kind==='review-verdict'&&verdict.value.stage==='direction-review');
     assert.equal(verdict.askId,ask.askId);
     assert.equal(verdict.value.verdict,'changes-requested');
     assert.deepEqual(verdict.value.comments,historicalComments);
     const stored=scope.readActExport(verdict.actId,false).toString();
-    assert.equal(stored,JSON.stringify(committed.value));
+    assert.equal(stored,JSON.stringify(verdict));
     const retry=await fixture.ui('acts',input);
     const replayed=await retry.json() as JobResult<unknown>;
     assert.ok(retry.ok&&replayed.ok,JSON.stringify(replayed));

@@ -1,3 +1,4 @@
+import {lastLocalPackageFeedback,postLocalPackageFeedback} from './helpers/local-package-feedback.ts';
 import {expect,test} from 'bun:test';
 import {createHash} from 'node:crypto';
 import {mkdir,mkdtemp,readdir,readFile,realpath,rm,writeFile} from 'node:fs/promises';
@@ -6,7 +7,7 @@ import {tmpdir} from 'node:os';
 import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
-import {freshSession} from '../src/session.ts';
+import {freshSession,type Feedback} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
 import {KIND_FIELDS,parseRequirementsContext,readRequirements,rowOf,REQUIREMENT_KINDS,REQUIREMENTS_CONTEXT_SCHEMA,requirementEntry,requirementsDocument,requirementsFileText,worstFrame,type Requirement} from '../src/requirements.ts';
 import type {RequirementsJob} from '../src/requirements-run.ts';
@@ -193,21 +194,21 @@ test('#113 bar 2: submitted feedback carries the requirements file\'s sha256 and
   const text=requirementsFileText(requirementsDocument(12,every.slice(4,5).map(requirementEntry)));
   const requirements={schema:REQUIREMENTS_CONTEXT_SCHEMA,sha256:sha(text),size:Buffer.byteLength(text),text,
    checked:{build:'inspected',producer:{package:'@rig-c/parts',version:'1.44.0'},summary:'requirements: 1 declared — 1 measured (1 PASS, 0 FAIL), 0 NOT MEASURABLE; not declared: contact, follow, aim, range, seam',refusals:[],rows:[{name:'NECK_BOW',status:'PASS',worst:{frame:4,time:0.333333,text:'frame 4 (t = 0.333333s)'}}]}};
-  const note={id:'n1',frameStart:0,frameEnd:0,target:{kind:'rig',name:p.feedbackCatalog.rig},category:'quality',summary:'neck stretch bar',context:{animation:null,requirements}};
-  const put=(feedback:unknown[])=>fetch(base+'/api/session',{method:'PUT',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({...freshSession(p),feedback})});
-  const saved=await put([note]);expect(saved.status).toBe(200);
-  const read=await (await fetch(base+'/api/session')).json();
-  const carried=read.feedback[0].context.requirements;
+  const note:Feedback={id:'n1',frameStart:0,frameEnd:0,target:{kind:'rig',name:p.feedbackCatalog.rig},category:'quality',summary:'neck stretch bar',context:{animation:null,requirements}};
+  const send=(feedback:Feedback[])=>postLocalPackageFeedback(base,p.sourceHash,feedback);
+  const saved=await send([note]);expect(saved.status).toBe(200);
+  const read={...freshSession(p),feedback:await lastLocalPackageFeedback(p,state)};
+  const carried=(read.feedback[0]!.context as {requirements:typeof requirements}).requirements;
   expect(carried.sha256).toBe(sha(text));expect(carried.text).toBe(text);expect(carried.size).toBe(Buffer.byteLength(text));
   expect(sha(carried.text)).toBe(carried.sha256);
   expect(formatFeedbackIssues(read)).toContain(`- Requirements: 1 declared · requirements file sha256 ${sha(text)}`);
   // Mutants: a hash of other bytes, a waiver smuggled into the text.
-  const wrong=await put([{...note,context:{animation:null,requirements:{...requirements,sha256:sha(text+' ')}}}]);
+  const wrong=await send([{...note,id:'invalid-hash',context:{animation:null,requirements:{...requirements,sha256:sha(text+' ')}}}]);
   expect(wrong.status).toBe(400);expect((await wrong.json()).error).toBe('feedback.context.requirements: sha256 is not the sha256 of text');
   const waived=text.replace('"requirements"','"may_fold": [],\n "requirements"');
   expect(()=>parseRequirementsContext({...requirements,text:waived,sha256:sha(waived),size:Buffer.byteLength(waived)},sha)).toThrow('spec, fps and requirements');
   // Absent or null stays valid.
-  expect((await put([{...note,context:{animation:null,requirements:null}}])).status).toBe(200);
+  expect((await send([{...note,id:'null-context',context:{animation:null,requirements:null}}])).status).toBe(200);
  }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
 });
 

@@ -6,7 +6,8 @@ import { createHash } from 'node:crypto';
 import { copyFile, link, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadPartsView, saveVerdict } from '../src/parts-view.ts';
+import { LOCAL_COMMENTS_ROUTE } from '../src/local-comments.ts';
+import { loadPartsView, saveVerdict, verdictSource, type PartsViewPackage } from '../src/parts-view.ts';
 import { startPartsServer } from '../src/parts-server.ts';
 import { writePartsPackage } from './helpers/parts-package.ts';
 
@@ -14,6 +15,9 @@ const roots: string[] = [];
 const LIMIT = 4 * 1024 * 1024;
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const input = { status: 'approved', issues: [] };
+const localSend = (pkg: PartsViewPackage) => ({
+  sendId: crypto.randomUUID(), sourceHash: verdictSource(pkg).sha256, value: {comments: [{text: 'Inspect the edge'}]},
+});
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'parts-input-boundaries-'));
@@ -77,22 +81,23 @@ for (const mode of ['parts', 'atlas'] as const) {
   });
 }
 
-test('#372: multibyte JSON is bounded by UTF-8 bytes', async () => {
+test('#372: multibyte local comment JSON is bounded by UTF-8 bytes', async () => {
   const pkg = await loadPartsView(await fixture());
   const server = await startPartsServer(pkg, { port: 0 });
   try {
     const origin = `http://127.0.0.1:${server.port}`;
-    const body = JSON.stringify({ ...input, padding: '한'.repeat(Math.ceil(LIMIT / 3)) });
+    const body = JSON.stringify({...localSend(pkg), padding: '한'.repeat(Math.ceil(LIMIT / 3))});
     expect(body.length).toBeLessThan(LIMIT);
     expect(Buffer.byteLength(body)).toBeGreaterThan(LIMIT);
-    const response = await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body });
+    const response = await fetch(origin + LOCAL_COMMENTS_ROUTE, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body });
     console.log(JSON.stringify({ case: 'multibyte', characters: body.length, bytes: Buffer.byteLength(body), status: response.status }));
     expect(response.status).toBe(400);
-    expect(await Bun.file(pkg.verdictPath).exists()).toBe(false);
+    expect(await response.json()).toEqual({error: 'LOCAL_COMMENTS_BODY_LIMIT'});
+    expect(await Bun.file(join(pkg.root, 'review-comments.json')).exists()).toBe(false);
   } finally { server.stop(true); }
 });
 
-test('#372: an oversized chunked request refuses before reading its remainder', async () => {
+test('#372: an oversized chunked local comment request refuses before reading its remainder', async () => {
   const pkg = await loadPartsView(await fixture());
   type Handler = (request: Request, host: { port: number; upgrade(): boolean }) => Promise<Response>;
   let dispatch: Handler | undefined;
@@ -103,7 +108,7 @@ test('#372: an oversized chunked request refuses before reading its remainder', 
   });
   const server = await startPartsServer(pkg, { port: 0 }).finally(() => capture.mockRestore());
   let pulled = 0, cancelled = false;
-  const chunks = [new Uint8Array(LIMIT).fill(32), new Uint8Array([32]), new TextEncoder().encode(JSON.stringify(input))];
+  const chunks = [new Uint8Array(LIMIT).fill(32), new Uint8Array([32]), new TextEncoder().encode(JSON.stringify(localSend(pkg)))];
   const body = new ReadableStream<Uint8Array>({
     pull(controller) {
       const chunk = chunks[pulled++];
@@ -114,12 +119,13 @@ test('#372: an oversized chunked request refuses before reading its remainder', 
   try {
     const origin = `http://127.0.0.1:${server.port}`;
     // Dispatch directly to the real server handler: network buffering must not mask reader pulls.
-    const response = await dispatch!(new Request(origin + '/api/parts/verdict', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body }), { port: server.port!, upgrade: () => false });
+    const response = await dispatch!(new Request(origin + LOCAL_COMMENTS_ROUTE, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body }), { port: server.port!, upgrade: () => false });
     console.log(JSON.stringify({ case: 'chunked-remainder', pulled, cancelled, status: response.status }));
     expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({error: 'LOCAL_COMMENTS_BODY_LIMIT'});
     expect(pulled).toBe(2);
     expect(cancelled).toBe(true);
-    expect(await Bun.file(pkg.verdictPath).exists()).toBe(false);
+    expect(await Bun.file(join(pkg.root, 'review-comments.json')).exists()).toBe(false);
   } finally { server.stop(true); }
 });
 
@@ -178,24 +184,28 @@ test('#372: a failed atomic replacement cleans its temporary output', async () =
   expect(await readdir(verdict)).toEqual([]);
 });
 
-test('#372: exact byte cap saves, while origin, JSON type and capability gates remain enforced', async () => {
+test('#372: local comment sends at the exact byte cap still enforce origin, JSON type and capability', async () => {
   const pkg = await loadPartsView(await fixture()), capability = 'd'.repeat(64);
   const before = await Promise.all(pkg.files.map(async file => digest(await readFile(file.abs))));
   const server = await startPartsServer(pkg, { port: 0, capability });
   try {
     const origin = `http://127.0.0.1:${server.port}`;
     const headers = { Origin: origin, 'Content-Type': 'application/json', 'X-Review-Capability': capability };
-    const payload = JSON.stringify(input);
-    const request = (body: string, values = headers) => fetch(origin + '/api/parts/verdict', { method: 'POST', headers: values, body });
+    const send = localSend(pkg), payload = JSON.stringify(send);
+    const commentsFile = join(pkg.root, 'review-comments.json');
+    const request = (body: string, values = headers) => fetch(origin + LOCAL_COMMENTS_ROUTE, { method: 'POST', headers: values, body });
     expect((await request(payload, { ...headers, Origin: 'http://localhost:1' })).status).toBe(403);
     expect((await request(payload, { ...headers, 'X-Review-Capability': 'wrong' })).status).toBe(403);
     expect((await request(payload, { ...headers, 'Content-Type': 'text/plain' })).status).toBe(400);
-    expect(await Bun.file(pkg.verdictPath).exists()).toBe(false);
+    expect(await Bun.file(commentsFile).exists()).toBe(false);
     // Legal JSON whitespace makes the precise byte boundary valid without relaxing note limits.
     const body = payload + ' '.repeat(LIMIT - Buffer.byteLength(payload));
     expect(Buffer.byteLength(body)).toBe(LIMIT);
-    expect((await request(body)).status).toBe(200);
-    expect(JSON.parse(await readFile(pkg.verdictPath, 'utf8')).status).toBe('approved');
+    const response = await request(body);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({sendId: send.sendId, at: expect.any(String)});
+    expect(JSON.parse(await readFile(commentsFile, 'utf8')).sends).toMatchObject([{sendId: send.sendId, value: send.value}]);
+    expect(await Bun.file(pkg.verdictPath).exists()).toBe(false);
     expect(await Promise.all(pkg.files.map(async file => digest(await readFile(file.abs))))).toEqual(before);
   } finally { server.stop(true); }
 });

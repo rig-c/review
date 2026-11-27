@@ -1,7 +1,6 @@
 import { interviewRequest, interviewRoutes } from './interview-routes.ts';
 import { directionStale, interviewUnavailable, interviewStale, type JoinedProject } from './joined-project.ts';
-import {isDeepStrictEqual} from 'node:util';
-import {appliedValue,parseCorrection,projectSessionCorrection} from './correction-handoff.ts';
+import {appliedValue} from './correction-handoff.ts';
 import {stagePartsRoutes,stageVerdictLimit} from './stage-parts.ts';
 import {createControlServer,type ControlIdentity} from './control-server.ts';
 import { readFile } from 'node:fs/promises';
@@ -11,7 +10,7 @@ import { packagePath, previousBuildFiles, reviewProducerStarts, safeFile, type R
 import { exportReviewStrip, stripJson } from './strip-export.ts';
 import {assertReviewUnchanged,referenceBinding,selectedReference,safeSelectedReference,servePreviousBuildAsset,serveReference} from './reference.ts';
 import {openGate,staleOpenStatus,accessGate,openNonceGate,openNonceHeader,sameSecret,stampOpen,type OpenIdentity} from './open-protocol.ts';
-import { readSession, saveSession } from './session.ts';
+import { readSession } from './session.ts';
 import { createRebuilds, draftRebuildOption, RebuildError } from './rebuild.ts';
 import { DENSITY_STRIP_LIMIT } from './density-strip.ts';
 import { createReadings } from './readings-run.ts';
@@ -157,28 +156,6 @@ export async function createReviewRequestContext(p: ReviewPackage | null, option
         }));
       }
 
-      if(req.method==='PUT'&&url.pathname==='/api/session'){
-        if(joined?.draft)return json({error:'MODEL_UNAVAILABLE'},409);
-        if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
-        const input=await bodyJson(req);await unchanged();
-        return json(await saveSession(p,input,options.stateDir,async(session,sessionBytes,previous)=>{
-          const source={id:p.manifest.id,revision:p.manifest.revision,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource};
-          const previousRows=new Map(previous.feedback.map(row=>[row.id,row]));
-          for(const feedback of session.feedback){
-            const correction=parseCorrection((feedback.context as any)?.correction);
-            // An unchanged submitted row is historical, even after its scratch build is evicted.
-            if(correction?.path==='made'&&isDeepStrictEqual(previousRows.get(feedback.id),feedback))continue;
-            const applied=appliedValue(feedback);
-            await rebuilds.validateApplied(applied);
-            if(correction){
-              if(correction.path==='described'&&isDeepStrictEqual(previousRows.get(feedback.id),feedback))continue;
-              const settled=correction.path==='made'&&correction.selector.kind!=='post'?await rebuilds.correctionEvidence(applied):undefined;
-              projectSessionCorrection({...correction,source,session,sessionBytes,itemId:feedback.id,settled,direction:p.direction});
-            }
-          }
-          await unchanged();
-        }));
-      }
     // Apply · Rebuild (#99 regions, #102 {patch}): typed data, never a path; the server runs the installed producer into scratch.
     if(req.method==='POST'&&url.pathname==='/api/rebuild'){
       if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);

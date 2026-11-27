@@ -261,41 +261,22 @@ npx rig-review parts /absolute/path/to/out/rig --format json
 ```
 
 `--by` requires a nonblank name and stores the argument verbatim, including Unicode and surrounding
-whitespace, on each explicit Save. Empty, whitespace-only, duplicate or export/correction-mode use fails
+whitespace, on each local **Send comments** record. Empty, whitespace-only, duplicate or export/correction-mode use fails
 with exit 1. The name comes from the launch declaration. Browser fields and a reader's identity provide
 no attribution authority. Opening and reading preserve the saved bytes.
 
 ### Durable save notifications
 
-Each successful standalone Save emits one UTF-8 stdout record after file and parent-directory fsync.
-The illustrative path and digest below show the framing.
+Review #1233 retired standalone `POST /api/parts/verdict` and its
+`RIG_REVIEW_PARTS_SAVED` stdout records. The former notification carried
+`verdictPath`, the saved file's `sha256`, `status` and a process-scoped
+`saveCount` after a durable verdict write.
 
-```text
-RIG_REVIEW_PARTS_SAVED {"verdictPath":"/absolute/path/to/parts-review.json","sha256":"0000000000000000000000000000000000000000000000000000000000000000","status":"approved","saveCount":1}
-```
-
-Match the literal `RIG_REVIEW_PARTS_SAVED ` prefix, including its ASCII space, then parse the compact
-JSON with keys `verdictPath`, `sha256`, `status`, `saveCount` in that order and one terminating LF.
-Control characters and U+2028/U+2029 are escaped within the JSON. Accept complete LF-terminated records.
-Existing startup output shares stdout. The writer awaits output completion and backpressure before
-reporting ordinary save success.
-
-`sha256` hashes the exact committed save buffer (matching `savedFileSha256` when that commit is read via
-`--format json`, and distinct from the normalized CLI stdout receipt bytes) and uses 64 lowercase hex
-characters. A new save's `status` is `approved` or `changes-requested`. Saves are serialized within one foreground process.
-`saveCount` starts at 1 and advances through 2, 3 and onward for every durable save, including identical
-saves, then restarts with a new process. The positive safe-integer counter is process-scoped.
-`verdictPath` is informational. Agents query the CLI above for the validated result. A later save can
-give that read a different digest.
-
-A failed durable write emits zero save events and leaves the counter unadvanced, with named
-`PARTS_VERDICT_WRITE_FAILED` or the existing validation refusal. Pre-replacement failure preserves the
-previous file. Post-replacement durability failure can leave visible bytes requiring CLI readback.
-Stdout failure after commit, including EPIPE, reports `PARTS_VERDICT_NOTIFY_FAILED` and exit 1 while
-preserving the committed file and allocated count. Recovery uses CLI readback. Automatic save or
-notification replay is disabled. A crash between commit and delivery can lose the event. The guarantee
-covers an emission attempt after each durable commit while the process and stream remain available.
-Crash-proof exactly-once delivery requires an additional acknowledgment/replay protocol.
+Use **Send comments** to save local feedback. The page receives a receipt with
+`sendId` and `at`. Read the stored comments with
+`rig-review parts <dir> --format json|issue`. When an export includes a
+historical verdict, `savedFileSha256` still identifies the verdict's raw
+saved bytes. See [Local comment sends](REVIEW_PACKAGE.md#local-comment-sends).
 
 ## Compatibility and historical UI
 
@@ -388,8 +369,9 @@ The occlusion-coverage report (rig-c/parts#998) is not read yet; the footprint t
 Historically, **Approve all** marked every pending part and available mesh clean and saved an approved
 sign-off. It preserved notes and existing clean outcomes, and refused flagged items.
 Per-part approval and mesh outcomes belong to that historical UI and `/1`–`/3` read compatibility.
-`tests/parts-view.test.ts` exercises the current issue-based save flow. A standalone approval with
-any issues refuses `PARTS_VERDICT_NOT_CLEAN`.
+`tests/parts-view.test.ts` exercises the shared verdict writer and historical
+readers. The shared writer refuses approvals with issues as
+`PARTS_VERDICT_NOT_CLEAN`.
 
 In historical `/1`–`/3` saves, each item was pending, clean or flagged with a note
 (optional on clean). An unnamed historical `/2` save had this shape.
@@ -427,9 +409,10 @@ A verdict destination matching a protected part, producer report, rig/package in
 refused as `PARTS_VERDICT_INPUT_COLLISION`, including normalized paths, symbolic links and filesystem aliases.
 Choose a separate verdict file; saving an existing verdict again remains supported.
 
-Sign-off JSON requests are limited to 4 MiB (4,194,304 bytes) of UTF-8 while streaming. An over-limit body is
-cancelled before its remainder is read; a valid request exactly at the byte limit is accepted. Same-origin and
-write-capability requirements remain unchanged.
+Standalone local comment requests are limited to 4 MiB (4,194,304 bytes) of
+UTF-8 while streaming. An over-limit body is cancelled before its remainder
+is read, and a valid request exactly at the byte limit is accepted. The request
+must be same-origin and carry the write capability when the server requires it.
 
 **Historical flag-bound sign-off UI:** on reopen, the former page offered a saved sign-off only when both `source.sha256` and `source.flags` matched the files on disk.
 **Historical UI:** when only the producer flags differed, the page said the saved sign-off was for different producer flags and started fresh.
@@ -449,7 +432,7 @@ Editing parts is out of scope: repairs go through the producer's source ladder, 
 | Legacy `rig-review-parts-verdict/1` or `/2` | `by: null`, including an ignored historical `by` extension |
 | Named `rig-review-parts-verdict/3` | Required nonblank `by`, preserved verbatim |
 | Pointed-issue `rig-review-parts-verdict/4` | `issues: PartsIssue[]` (`rig-review-parts-comment/2`), optional nonblank `by` (`null` on CLI read when omitted) |
-| Explicit resave from an unnamed launch | New `/4` save (historical `/2` before `/4`) with `by: null` on read, clearing the earlier name |
+| Historical explicit resave from an unnamed launch | New `/4` save (historical `/2` before `/4`) with `by: null` on read, clearing the earlier name |
 
 Named `/3` keeps the existing historical verdict fields and adds required `by`. Pointed-issue `/4` replaces the per-part outcome map with `issues` (`rig-review-parts-comment/2`) and optional `by`; historical `/1`, `/2` and `/3` saves that are `pending` or contain bare flagged part or mesh notes without a matching comment surface in the UI as read-only legacy verdicts (`PARTS_VERDICT_LEGACY_FORMAT`, `flaggedCount`) and preserve their historical `/1`..`/3` schema and `parts` map on `parts <input> --format json`. A missing, null, non-string or
 whitespace-only `/3` (or present `/4`) name refuses `PARTS_VERDICT_INVALID`. Older executables accepting only `/1` and `/2`

@@ -268,49 +268,20 @@ async function partsCommand(args:string[]){
  }
  assertPartsCanOpen(pkg);
  const capability=randomBytes(32).toString('hex');
- let outputFailure: Error | null = null;
- let rejectWrite: ((error: Error) => void) | undefined;
- let server: Awaited<ReturnType<typeof startPartsServer>> | undefined;
+ const server = await startPartsServer(pkg, {port, capability, by});
  let stopping: Promise<void> | undefined;
- const shutdown = () => stopping ??= server!.shutdown();
- const failOutput = (cause: unknown) => {
-   if (outputFailure) return;
-   outputFailure = new Error('PARTS_VERDICT_NOTIFY_FAILED: stdout failed', {cause});
-   process.exitCode = 1;
-   console.error(outputFailure.message);
-   rejectWrite?.(outputFailure);
-   if (server) void shutdown();
- };
- const outputClosed = () => failOutput(new Error('stdout closed'));
- process.stdout.on('error', failOutput);
- process.stdout.on('close', outputClosed);
  const stop = (signal: string) => {
-   if (!outputFailure) console.log(`review parts: exiting — received ${signal}.`);
-   void shutdown();
+   console.log(`review parts: exiting — received ${signal}.`);
+   stopping ??= server.shutdown();
  };
  const interrupt = () => stop('SIGINT'), terminate = () => stop('SIGTERM');
  try {
-   server = await startPartsServer(pkg, {port, capability, by, onNotifyFailure: failOutput,
-     onWriteFailure: error => console.error(error.message),
-     onSaved: async event => {
-       if (outputFailure) throw outputFailure;
-       const line = 'RIG_REVIEW_PARTS_SAVED ' + JSON.stringify(event).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029') + '\n';
-       // The callback settles after the complete write, including when write() reports backpressure.
-       await new Promise<void>((resolve, reject) => {
-         rejectWrite = reject;
-         try { process.stdout.write(line, error => error ? failOutput(error) : resolve()); }
-         catch (error) { failOutput(error); }
-       }).finally(() => { rejectWrite = undefined; });
-     },
-   });
    process.once('SIGINT', interrupt);process.once('SIGTERM', terminate);
    console.log(`Parts view ready: http://127.0.0.1:${server.port}/#cap=${capability}\nMode: ${pkg.mode} · ${pkg.items.length} ${pkg.mode==='parts'?'parts':'regions'} · ${pkg.flags.length} producer flags\nSign-off: ${pkg.verdictPath}\nPress Ctrl+C to stop.`);
-   if (outputFailure) await shutdown();
    await server.live.exited;
    if (stopping) await stopping;
  } finally {
    process.removeListener('SIGINT', interrupt);process.removeListener('SIGTERM', terminate);
-   process.stdout.removeListener('error', failOutput);process.stdout.removeListener('close', outputClosed);
  }
 }
 export async function main(args:string[],options:{stateDir?:string}={}){

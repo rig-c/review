@@ -58,7 +58,13 @@ test('no-listener single and compare contexts retain route, origin, capability a
       expect(asset?.headers.get('Content-Security-Policy')).toBe("default-src 'none'; script-src 'none'; sandbox");
       expect((await entry.context.handle(new Request('http://localhost:' + port + entry.metadata), port, unusedUpgrade))?.status).toBe(403);
       expect((await request(entry.session, {method: 'PUT', headers: {'Content-Type': 'application/json', Origin: origin}, body: '{}'}))?.status).toBe(403);
-      expect((await request(entry.session, {method: 'PUT', headers: {'Content-Type': 'application/json', Origin: 'http://foreign.test', 'X-Review-Capability': capability}, body: '{}'}))?.status).toBe(403);
+      const put = (requestOrigin: string) => request(entry.session, {
+        method: 'PUT', headers: {'Content-Type': 'application/json', Origin: requestOrigin, 'X-Review-Capability': capability}, body: '{}',
+      });
+      if (entry.context === single) {
+        expect((await put(origin))?.status).toBe(405);
+      }
+      expect((await put('http://foreign.test'))?.status).toBe(entry.context === single ? 405 : 403);
       expect(entry.context.busy()).toBe(false);
     }
     expect(await Promise.all(inputPaths.map(path => readFile(path)))).toEqual(before);

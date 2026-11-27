@@ -19,8 +19,9 @@
 | [Current output selector](REVIEW_PACKAGE.md#current-output-selector) | `{kind: 'current', output, record}` in `JobSelector` | Additive selector arm under `rig-review/job-api@2` and `@3` for unnumbered current `parts`, `rig` and `direction` outputs, with no ask (`JOB_ASK_INVALID`), `rig-review/act@10` comments whose send-time check re-hashes every seal except `project.json`, and three `JOB_CURRENT_*` publication refusal codes. | Review #1267 |
 | [Package manifest `frames`](#package-manifest-frames-declaration) | Optional `rigc-frames/1` in `rig-review/1` | The declared record is validated and hashed. Older manifests without the field keep their source hash. | Review #1018 |
 
-Standalone `rig-review-session/1` saves accept an inclusive range containing the
-producer frame pinned by a stage comment, subject to the existing clip bounds.
+In standalone `rig-review-session/1` records and local package comment sends, a
+stage comment's inclusive range contains its pinned producer frame and obeys
+the existing clip bounds.
 The selected rig, bone or slot must belong to the package's actual target
 catalog. Previously valid records remain valid under the same schema. See
 [Stage region comments](REVIEW_PACKAGE.md#stage-region-comments).
@@ -35,7 +36,7 @@ catalog. Previously valid records remain valid under the same schema. See
 | `rig-review/act@5` | Historical parts verdict with pointed issues. |
 | `rig-review/act@6` | Structured comment acts through `parseCommentsAct`, including historical package and record interview picks. |
 | `rig-review/act@7` | Context-aware comment acts through `parseContextCommentsAct`. Historical interview picks use @6. |
-| `rig-review/act@8` | `parseMeshEditsAct` accepts the @7 envelope with optional mesh edits on a rig Request changes verdict. Fresh verdicts carrying mesh edits without chest landmark edits use @8. |
+| `rig-review/act@8` | `parseMeshEditsAct` accepts the @7 envelope with optional mesh edits on a rig Request changes verdict. Historical verdicts carrying mesh edits without chest landmark edits use @8. |
 | `rig-review/act@9` | `parseChestLandmarksAct` accepts chest landmark edits on a compiled-rig Request changes verdict, with optional mesh edits and comment context. |
 | `rig-review/act@10` | Comment-only acts through `parseCommentOnlyAct`: comments and optional mesh-edit or chest-landmark carriers on the displayed publication, sent without an ask. No verdict, outcome, decision or selections. Historical @2–@9 acts keep their readers. |
 
@@ -48,12 +49,12 @@ See the [comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract)
 | `rig-review/job-api@2` | `ask` with one `JobSubject`. A record-and-package listener also accepts the @2 request envelope. |
 | `rig-review/job-api@3` | `ask` with one package or record subject. `ask-batch` requires a record publication. |
 
-Package asks cover parts verdict, and rig or direction verdict, on numbered
-`draft`, `rig` and `post` publications. Publications with a `current` selector
-accept no asks (`JOB_ASK_INVALID`) and receive feedback through comment-only
-acts (`rig-review/act@10`). Fresh record
-asks, image-review, reopen, signoff (including `plan-approved`), checkpoint,
-and interview-picks asks are refused. See [Act kinds, plan identity and parts identity](REVIEW_PACKAGE.md#act-kinds-plan-identity-and-parts-identity),
+Fresh record asks and fresh image-review, reopen, signoff (including
+`plan-approved`), checkpoint, interview-picks, parts-verdict and review-verdict
+asks are refused.
+The verdict kinds refuse a fresh submission with `JOB_ACT_KIND_DISABLED` and still replay a committed one.
+Publications with a `current` selector accept no asks (`JOB_ASK_INVALID`) and receive feedback through
+comment-only acts (`rig-review/act@10`). See [Act kinds, plan identity and parts identity](REVIEW_PACKAGE.md#act-kinds-plan-identity-and-parts-identity),
 [Current output selector](REVIEW_PACKAGE.md#current-output-selector)
 and [the record contract](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
 
@@ -87,7 +88,9 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | Interview answer form | #1230 | Live job comments (`rig-review/act@10`); option-set pictures stay in the shared main view. |
 | `--picks-dir`'s UI | #1230 | Now the `INTERVIEW_PICKS_DISABLED` refusal on the workspace; CLI and file readers still read `rig-review/interview-picks@1`. |
 | Historical interview answer display | #1230 | A person can no longer see an old interview answer or its note on a Review screen; agents and the CLI read them byte for byte. |
-| Fresh `review-verdict` and `parts-verdict` asks | #1232 | Fresh asks refuse with `JOB_ASK_INVALID`. Historical asks, replays and acts retain their readers. Send comments on the displayed publication produces an act@10. |
+| Fresh `review-verdict` and `parts-verdict` asks | #1232 | Fresh asks refuse with `JOB_ASK_INVALID`. Send comments on the displayed publication produces an act@10. |
+| Fresh verdict submissions | #1233 | Stored verdict acts retain their readers and replay behavior. |
+| Standalone parts verdict and package session writers | #1233 | `POST /api/parts/verdict`, `PUT /api/session` and the parts CLI's `RIG_REVIEW_PARTS_SAVED` stdout records are retired. Send comments writes local feedback. Historical verdict and session exports remain supported. |
 
 ## History
 

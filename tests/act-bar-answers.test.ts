@@ -4,8 +4,9 @@ import {readFileSync} from 'node:fs';
 // Execute the production act-bar renderer with the same host/DOM seams, without a browser.
 const main=readFileSync(new URL('../web/main.ts',import.meta.url),'utf8');
 const start=main.indexOf('function renderAnswerControls():void {');
-const end=main.indexOf('/** The rig pane',start);
+const end=main.indexOf('async function restorePublicationNavigation(',start);
 const rowStart=main.indexOf('function renderPendingSubjects('),rowEnd=main.indexOf('function setJobProgress(',rowStart);
+if(start<0||end<=start||rowStart<0||rowEnd<=rowStart)throw new Error('ACT_BAR_SOURCE_ANCHOR');
 const renderer=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(rowStart,rowEnd)+main.slice(start,end));
 function harness(commenting=true) {
  const control=()=>({hidden:false,disabled:false,classList:{values:new Set<string>(),toggle(name:string,on:boolean){on?this.values.add(name):this.values.delete(name);}}});
@@ -81,7 +82,7 @@ function draftStateRenderer(env:object):()=>void {
 
 test('#825 draft failure leads the live job state; saved sessions use the act-bar saved label',()=>{
  const states:any[]=[];
- const env={host:{reviewState:()=> 'Reviewing · 0 issues'},liveIssueCount:()=>0,saving:false,draftConflict:true,draftStatus:'Saved local draft was not restored: fixture.',actReadOnly:null,dirty:false,partsOnly:false,verdictSubmit:null,session:{updatedAt:'2026-11-20T00:00:00.000Z',feedbackWarnings:[]},
+ const env={host:{},saving:false,draftConflict:true,draftStatus:'Saved local draft was not restored: fixture.',actReadOnly:null,dirty:false,partsOnly:false,session:{updatedAt:'2026-11-20T00:00:00.000Z',feedbackWarnings:[]},
   renderAnswerControls(){},rigInspector:{actBar:{setSaveState:(state:any)=>states.push(state)}}};
  const render=draftStateRenderer(env);render();
  expect(states.at(-1).kind).toBe('failed');expect(states.at(-1).text).toBe('Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.');

@@ -10,7 +10,8 @@ import { digest } from '../src/interview-project.ts';
 import { loadOpenPackage, openKey } from '../src/open.ts';
 import { producerInputs } from '../src/rebuild.ts';
 import { startServer } from '../src/server.ts';
-import { freshSession, sessionFile } from '../src/session.ts';
+import { sessionFile, type Feedback } from '../src/session.ts';
+import { postLocalPackageFeedback } from './helpers/local-package-feedback.ts';
 
 test('joined open requires an explicit project, version and picks directory together', () => {
   const flags = ['--project','create','--project-version','2','--picks-dir','picks'];
@@ -218,27 +219,37 @@ test('joined authored post maps the recorded package and isolates feedback and s
     expect(parts.status).toBe(200);
     expect((await parts.json()).inspectionSourceHash).toBe(p.sourceHash);
     expect((await get('/assets/' + authored.file.path)).status).toBe(404);
-    const session = freshSession(p);
     const item = {id:'authored-request', frameStart:0, frameEnd:0, target:{kind:'rig',name:p.manifest.id},
       category:'quality', summary:'  Keep this timing.\r\n프레이밍 유지  \n',
-      context:{correction:{path:'described',selector:{stage:'direction-review',kind:'post',version:2,modelFile:p.reviewedSource.rig!.path}}}};
-    const submit = (source = session) => fetch(origin + '/api/session', {
-      method:'PUT', headers:{origin,'content-type':'application/json','x-review-capability':capability},
-      body:JSON.stringify({...source,feedback:[item]}),
-    });
-    const stale = await submit(freshSession(standalone.p));
-    expect(stale.ok).toBe(false);
-    expect(await stale.text()).toContain('session.sourceHash: does not match loaded package');
-    item.context.correction.selector.version = 1;
-    expect(await (await submit()).text()).toContain('CORRECTION_DIRECTION_SOURCE');
-    item.context.correction.selector.version = 2;
-    item.context.correction.path = 'made';
-    expect(await (await submit()).text()).toContain('CAMERA_APPLY_UNSUPPORTED');
-    item.context.correction.path = 'described';
+      context:{correction:{path:'described',selector:{stage:'direction-review',kind:'post',version:2,modelFile:p.reviewedSource.rig!.path}}}} satisfies Feedback;
+    const submit = (feedback = item, sourceHash = p.sourceHash) =>
+      postLocalPackageFeedback(origin, sourceHash, [feedback], {'X-Review-Capability':capability});
+    const stale = await submit(item, standalone.p.sourceHash);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({error:'JOB_ACT_SOURCE_STALE'});
+
+    const exportCorrection = (id: string) => Bun.spawnSync([process.execPath,'src/cli.ts','feedback',input,...flags,
+      '--correction',id,'--format','issue'], {env:{...process.env,RIG_REVIEW_STATE_DIR:stateDir}});
+    const refuseExport = async (candidate: typeof item, code: string) => {
+      const saved = await submit(candidate);
+      expect(saved.status, await saved.text()).toBe(200);
+      const refused = exportCorrection(candidate.id);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stdout.toString()).toBe('');
+      expect(refused.stderr.toString()).toContain(code);
+    };
+    const wrongPost = structuredClone(item);
+    wrongPost.id = 'wrong-post';
+    wrongPost.context.correction.selector.version = 1;
+    await refuseExport(wrongPost, 'CORRECTION_DIRECTION_SOURCE');
+    const made = structuredClone(item);
+    made.id = 'unsupported-camera-apply';
+    made.context.correction.path = 'made';
+    await refuseExport(made, 'CAMERA_APPLY_UNSUPPORTED');
     const saved = await submit();
     expect(saved.status, await saved.text()).toBe(200);
-    const exported = Bun.spawnSync([process.execPath,'src/cli.ts','feedback',input,...flags,
-      '--correction',item.id,'--format','issue'], {env:{...process.env,RIG_REVIEW_STATE_DIR:stateDir}});
+
+    const exported = exportCorrection(item.id);
     expect(exported.exitCode,exported.stderr.toString()).toBe(0);
     const issue = JSON.parse(exported.stdout.toString().split('\n').slice(5,-2).join('\n'));
     expect(issue.verbatim).toBe(item.summary);

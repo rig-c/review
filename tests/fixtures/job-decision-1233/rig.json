@@ -1,0 +1,147 @@
+{
+  "writer": "c34b5d6c83e3cc54dd40ce2ed6b7bcfc4fa44a46",
+  "key": "ui:page-one:still-88972991-ad6b-4877-b3a2-013834ee672f",
+  "request": {
+    "publicationId": "517714be-84a1-4da8-8fa4-e153f9d048da",
+    "pageId": "page-one",
+    "displayedNonce": "5cb80397e538588c400b463b97313a2e8bc88f394e0a0d30cf95e94dde02f95f",
+    "askId": "88972991-ad6b-4877-b3a2-013834ee672f",
+    "expectedGeneration": 2,
+    "submissionId": "still-88972991-ad6b-4877-b3a2-013834ee672f",
+    "kind": "review-verdict",
+    "value": {
+      "stage": "rig-review",
+      "verdict": "approved",
+      "words": " \n원문 그대로\t "
+    },
+    "capture": {
+      "png": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAG0lEQVR4AWOU0LD5P0fjBgPTnx4RhjlHFjAAADsABrfCDphAAAAAAElFTkSuQmCC",
+      "width": 2,
+      "height": 2,
+      "camera": "fixed",
+      "framing": "default",
+      "view": "whole-rig",
+      "frame": "setup",
+      "playing": false,
+      "binding": {
+        "publicationId": "517714be-84a1-4da8-8fa4-e153f9d048da",
+        "instanceKey": "6f3b5d0f633b8cacbb3c836f754022bad54d5244afc50aadb27d656b746b6f84",
+        "sourceHash": "1e9ac4acf8a7990f836961be5f8820d614b4d3c0ada13b66bd2d821d6e4fba42",
+        "pageId": "page-one",
+        "askId": "88972991-ad6b-4877-b3a2-013834ee672f",
+        "drawGeneration": 1,
+        "playerGeneration": 1
+      }
+    }
+  },
+  "receipt": {
+    "digest": "099ab2dfa2708ec2095696b6aec733d5f2c799994ef1d29aab39683191401a11",
+    "value": {
+      "schema": "rig-review/act@6",
+      "actId": "6f9999aa-5dfe-4860-9878-df2596d0e4f9",
+      "jobId": "ed273b55-5d1c-460f-b52e-f96eb6a7d432",
+      "askId": "88972991-ad6b-4877-b3a2-013834ee672f",
+      "publicationId": "517714be-84a1-4da8-8fa4-e153f9d048da",
+      "authority": {
+        "actor": "human",
+        "channel": "review-ui",
+        "reviewer": {
+          "id": "declared-owner",
+          "role": "owner"
+        }
+      },
+      "at": "2026-11-27T11:49:32.802Z",
+      "kind": "review-verdict",
+      "source": {
+        "sourceHash": "1e9ac4acf8a7990f836961be5f8820d614b4d3c0ada13b66bd2d821d6e4fba42",
+        "projectHash": null,
+        "package": {
+          "id": "viewport-387-public",
+          "revision": "1"
+        },
+        "selector": {
+          "kind": "rig",
+          "version": 1
+        },
+        "model": {
+          "path": "out/skeleton.model.json",
+          "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+        },
+        "direction": null,
+        "optionSet": null,
+        "appliedResult": null,
+        "plan": {
+          "steps": [
+            {
+              "id": "step-one",
+              "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+            }
+          ]
+        },
+        "parts": null
+      },
+      "value": {
+        "stage": "rig-review",
+        "verdict": "approved",
+        "comments": [
+          {
+            "text": " \n원문 그대로\t "
+          }
+        ]
+      },
+      "still": {
+        "path": "eeecc8f4f15bba615ce6caffdf149ec3e78ffb7fee377074f443ee10a9691f59.png",
+        "sha256": "eeecc8f4f15bba615ce6caffdf149ec3e78ffb7fee377074f443ee10a9691f59",
+        "camera": "fixed",
+        "frame": "setup"
+      }
+    }
+  },
+  "sha256": "d5075344a29884a1958794558d6804dd3c9bf42e305c8f9b0a3fe32f9e7f1da7",
+  "bytes": "{\"schema\":\"rig-review/act@6\",\"actId\":\"6f9999aa-5dfe-4860-9878-df2596d0e4f9\",\"jobId\":\"ed273b55-5d1c-460f-b52e-f96eb6a7d432\",\"askId\":\"88972991-ad6b-4877-b3a2-013834ee672f\",\"publicationId\":\"517714be-84a1-4da8-8fa4-e153f9d048da\",\"authority\":{\"actor\":\"human\",\"channel\":\"review-ui\",\"reviewer\":{\"id\":\"declared-owner\",\"role\":\"owner\"}},\"at\":\"2026-11-27T11:49:32.802Z\",\"kind\":\"review-verdict\",\"source\":{\"sourceHash\":\"1e9ac4acf8a7990f836961be5f8820d614b4d3c0ada13b66bd2d821d6e4fba42\",\"projectHash\":null,\"package\":{\"id\":\"viewport-387-public\",\"revision\":\"1\"},\"selector\":{\"kind\":\"rig\",\"version\":1},\"model\":{\"path\":\"out/skeleton.model.json\",\"sha256\":\"ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335\"},\"direction\":null,\"optionSet\":null,\"appliedResult\":null,\"plan\":{\"steps\":[{\"id\":\"step-one\",\"hash\":\"1111111111111111111111111111111111111111111111111111111111111111\"}]},\"parts\":null},\"value\":{\"stage\":\"rig-review\",\"verdict\":\"approved\",\"comments\":[{\"text\":\" \\n원문 그대로\\t \"}]},\"still\":{\"path\":\"eeecc8f4f15bba615ce6caffdf149ec3e78ffb7fee377074f443ee10a9691f59.png\",\"sha256\":\"eeecc8f4f15bba615ce6caffdf149ec3e78ffb7fee377074f443ee10a9691f59\",\"camera\":\"fixed\",\"frame\":\"setup\"}}",
+  "still": {
+    "sha256": "eeecc8f4f15bba615ce6caffdf149ec3e78ffb7fee377074f443ee10a9691f59",
+    "png": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAG0lEQVR4AWOU0LD5P0fjBgPTnx4RhjlHFjAAADsABrfCDphAAAAAAElFTkSuQmCC",
+    "actBytes": "{\"schema\":\"rig-review/act@6\",\"actId\":\"6f9999aa-5dfe-4860-9878-df2596d0e4f9\",\"jobId\":\"ed273b55-5d1c-460f-b52e-f96eb6a7d432\",\"askId\":\"88972991-ad6b-4877-b3a2-013834ee672f\",\"publicationId\":\"517714be-84a1-4da8-8fa4-e153f9d048da\",\"authority\":{\"actor\":\"human\",\"channel\":\"review-ui\",\"reviewer\":{\"id\":\"declared-owner\",\"role\":\"owner\"}},\"at\":\"2026-11-27T11:49:32.802Z\",\"kind\":\"review-verdict\",\"source\":{\"sourceHash\":\"1e9ac4acf8a7990f836961be5f8820d614b4d3c0ada13b66bd2d821d6e4fba42\",\"projectHash\":null,\"package\":{\"id\":\"viewport-387-public\",\"revision\":\"1\"},\"selector\":{\"kind\":\"rig\",\"version\":1},\"model\":{\"path\":\"out/skeleton.model.json\",\"sha256\":\"ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335\"},\"direction\":null,\"optionSet\":null,\"appliedResult\":null,\"plan\":{\"steps\":[{\"id\":\"step-one\",\"hash\":\"1111111111111111111111111111111111111111111111111111111111111111\"}]},\"parts\":null},\"value\":{\"stage\":\"rig-review\",\"verdict\":\"approved\",\"comments\":[{\"text\":\" \\n원문 그대로\\t \"}]},\"still\":{\"path\":\"eeecc8f4f15bba615ce6caffdf149ec3e78ffb7fee377074f443ee10a9691f59.png\",\"sha256\":\"eeecc8f4f15bba615ce6caffdf149ec3e78ffb7fee377074f443ee10a9691f59\",\"camera\":\"fixed\",\"frame\":\"setup\"}}",
+    "binding": "{\"publicationId\":\"517714be-84a1-4da8-8fa4-e153f9d048da\",\"instanceKey\":\"6f3b5d0f633b8cacbb3c836f754022bad54d5244afc50aadb27d656b746b6f84\",\"sourceHash\":\"1e9ac4acf8a7990f836961be5f8820d614b4d3c0ada13b66bd2d821d6e4fba42\",\"pageId\":\"page-one\",\"askId\":\"88972991-ad6b-4877-b3a2-013834ee672f\",\"drawGeneration\":1,\"playerGeneration\":1}"
+  },
+  "publication": {
+    "publicationId": "517714be-84a1-4da8-8fa4-e153f9d048da",
+    "instanceKey": "6f3b5d0f633b8cacbb3c836f754022bad54d5244afc50aadb27d656b746b6f84",
+    "generation": 1,
+    "source": {
+      "sourceHash": "1e9ac4acf8a7990f836961be5f8820d614b4d3c0ada13b66bd2d821d6e4fba42",
+      "projectHash": null,
+      "package": {
+        "id": "viewport-387-public",
+        "revision": "1"
+      },
+      "selector": {
+        "kind": "rig",
+        "version": 1
+      },
+      "model": {
+        "path": "out/skeleton.model.json",
+        "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+      },
+      "direction": null,
+      "optionSet": null,
+      "appliedResult": null,
+      "plan": {
+        "steps": [
+          {
+            "id": "step-one",
+            "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ]
+      },
+      "parts": null
+    },
+    "label": "Viewport extraction public control",
+    "previousPublicationId": null,
+    "visual": {
+      "status": "available"
+    },
+    "interview": null
+  }
+}
