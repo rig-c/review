@@ -9,16 +9,19 @@ import {ellipsePolygon,fitChestEllipse,CHEST_ELLIPSE_MIN_POINTS} from '../src/ch
 import {deriveBust,parseBustSpec,type BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
 import {APPLIED_ANIMATION_SCHEMA,APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,APPLIED_RETARGET_SCHEMA,filesDiffText,type AppliedAnimation,type AppliedAssembled,type AppliedDelta,type AppliedPatch,type AppliedRetarget,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
-import {appliedBuildOwner,appliedPanelOps,reconcilePanelStatuses,staleReadouts,type RebuildPanelKind,type RestoredPanelOutcome} from '../src/applied-blocks.ts';
+import {appliedBuildOwner,appliedPanelOps,reconcilePanelStatuses,staleReadouts,type AppliedPatchPanel,type RebuildPanelKind,type RestoredPanelOutcome} from '../src/applied-blocks.ts';
 import {meshApplyOutcome,meshMode} from '../src/mesh-entry.ts';
 import type {AnimationSourceOp} from '../src/animation-ops.ts';
 import type {MotionSummary,RetargetFlags,RetargetLine,RetargetRecord} from '../src/retarget.ts';
 export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,AppliedRetarget,AppliedAnimation,AnimationSourceOp,CheckSummary,BustSpec};
 import {chestContourFields,chestRegionFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
 import {readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
+import {IDLE_READOUT_BARS} from '../src/idle-tracks.ts';
+import {assertRigFieldOps,RIG_FIELDS_READOUT_BARS} from '../src/rig-fields.ts';
+import type {StageWorld} from './environment-world.ts';
 import {samplesClock,type StageClock} from '../src/frame-clock.ts';
 import {worstLine,type ReadingsRequest} from '../src/readings.ts';
-import type {RequirementsCatalogView} from './requirements-panel.ts';
+import type {RequirementsCatalogView,RequirementsPanel} from './requirements-panel.ts';
 import type {ReadingsJobView,ReadingsRefusal} from './readings-panel.ts';
 import type {AnimationInspectionPanel} from './animation-inspection.ts';
 import type {BonesPanel} from './bones-panel.ts';
@@ -447,72 +450,93 @@ export async function runRebuildUndo(from:string,{path,api,onLine,showLines=()=>
 }
 
 
-/** The handoff line (#101), with one display-owned baseline refresh timer per screen. */
-export function createHandoffRefresh() {
+/** One display-owned baseline refresh timer per screen, shared by its bound status ports. */
+export function createHandoffRefresh(line:()=>HTMLElement) {
  let timer:ReturnType<typeof setTimeout>|null=null;
  const cancel=()=>{if(timer)clearTimeout(timer);timer=null;};
- function show(status:RebuildStatusView,{api,path,save,line,ui}:JobApi&{
-  save:(next:RebuildStatusView)=>void;line:()=>HTMLElement;ui:JobUiSink;
- }):void {
-  ui.render(()=>{
-   const node=line(),shown=handoffText(status);
-   node.textContent=shown.text;node.title=shown.text;node.classList.toggle('error',shown.error);
-  });
-  ui.poll(()=>{
-   cancel();
-   if(status.baseline?.status!=='running')return;
-   timer=setTimeout(()=>{
-    void api<RebuildStatusView>(path).then(next=>{
-     save(next);
-     show(next,{api,path,save,line,ui});
-    }).catch(()=>{});
-   },2000);
-  });
- }
- return {show,cancel};
-}
+ function bind({api,path,read,save,ui,sleep=wait}:JobApi&{
+  read:()=>RebuildStatusView|null;save:(next:RebuildStatusView)=>void;ui:JobUiSink;
+ }) {
+  function renderHandoff(status:RebuildStatusView):void {
+   ui.render(()=>{
+    const node=line(),shown=handoffText(status);
+    node.textContent=shown.text;node.title=shown.text;node.classList.toggle('error',shown.error);
+   });
+   ui.poll(()=>{
+    cancel();
+    if(status.baseline?.status!=='running')return;
+    timer=setTimeout(()=>{
+     void api<RebuildStatusView>(path).then(next=>{
+      save(next);
+      renderHandoff(next);
+     }).catch(()=>{});
+    },2000);
+   });
+  }
 
-/** Follow the inspected check even if the readout's screen has moved to another side. */
-export async function followInspectedCheckStatus({api,path,read,save,onReply,sleep=wait}:JobApi&{
- read:()=>RebuildStatusView|null;save:(status:RebuildStatusView)=>void;onReply:()=>void;
-}):Promise<void> {
- const pending=(status:RebuildStatusView|null)=>!status?.inspectedCheck||status.inspectedCheck.status==='running';
- for(let i=0;i<120&&pending(read());i++){
-  try{save(await api<RebuildStatusView>(path));}catch{return;}
-  onReply();
-  const status=read();
-  if(!pending(status)||(!status?.inspectedCheck&&status?.baseline?.status!=='running'))return;
-  await sleep(3000);
+  async function followInspectedCheck(show:()=>void,display=ui):Promise<void> {
+   // Required polling and cache writes stay with the origin when the screen switches.
+   const pending=(status:RebuildStatusView|null)=>!status?.inspectedCheck||status.inspectedCheck.status==='running';
+   for(let i=0;i<120&&pending(read());i++){
+    try{save(await api<RebuildStatusView>(path));}catch{return;}
+    display.render(show);
+    const status=read();
+    if(!pending(status)||(!status?.inspectedCheck&&status?.baseline?.status!=='running'))return;
+    await sleep(3000);
+   }
+  }
+  return {renderHandoff,followInspectedCheck};
  }
+ return {bind,cancel};
 }
 
 /** Requirements (#113): the producer's spec, or the refusal in the same catalog slot. */
-export async function loadRequirementsCatalog({api,path,save,show}:JobApi&{
- save?:(catalog:RequirementsCatalogView)=>void;show:(catalog:RequirementsCatalogView|null,reason:string|null)=>void;
-}):Promise<void> {
- try{
-  const catalog=await api<RequirementsCatalogView>(path);
-  save?.(catalog);
-  show(catalog,catalog.reason);
- }catch(error){show(null,`REQUIREMENTS_UNAVAILABLE: ${error instanceof Error?error.message:String(error)}`);}
+export function bindRequirementsCatalog({api,path,save,panel,ui}:JobApi&{
+ save?:(catalog:RequirementsCatalogView)=>void;panel:()=>RequirementsPanel|null;ui:ScopedJobUiSink;
+}):()=>Promise<void> {
+ const clear=()=>{
+  const line=document.getElementById('requirements-state');
+  if(!line)return;
+  line.textContent='Reading the producer handoff…';
+  line.classList.remove('error');
+ };
+ return async()=>{
+  ui.clearOutcome('requirements');
+  try{
+   const catalog=await api<RequirementsCatalogView>(path);
+   save?.(catalog);
+   ui.render(()=>panel()?.load(catalog,catalog.reason));
+  }catch(error){
+   const reason=`REQUIREMENTS_UNAVAILABLE: ${error instanceof Error?error.message:String(error)}`;
+   ui.outcome('requirements',()=>panel()?.load(null,reason),clear);
+  }
+ };
 }
 
 /** The folds reading (#108) has one summary line per inspected/scratch build. */
-export async function runMeshFolds(read:()=>Promise<ReadingsJobView|ReadingsRefusal|null>,
- outcome:(text:string,error:boolean)=>void):Promise<string[]> {
- const job=await read();
- if(!job||!('runs' in job)){
-  const text=job&&'error' in job&&job.error?job.error:'READINGS_UNAVAILABLE: no reading ran';
-  outcome(text,true);
-  return [text];
- }
- const lines=job.runs.map(run=>{
-  const result=run.results[0];
-  return result?worstLine(run.build,result):`${run.build} · folds: not run`;
- });
- if(job.runs.length<2)lines.push('scratch · folds: no scratch build yet (Apply builds one)');
- outcome(lines.join(' | '),job.runs.some(run=>run.results.some(result=>result.status!=='read')));
- return lines;
+export function bindMeshFolds(ui:ScopedJobUiSink,animation:()=>string,
+ read:(request:Pick<ReadingsRequest,'readings'>)=>Promise<ReadingsJobView|ReadingsRefusal|null>,panel:()=>MeshPanel|null,
+):()=>Promise<string[]> {
+ const clear=()=>panel()?.status('',false);
+ const outcome=(text:string,error:boolean)=>ui.outcome('mesh',()=>panel()?.status(text,error),clear);
+ return async()=>{
+  const name=animation();
+  ui.clearOutcome('mesh');
+  ui.transient('mesh',()=>panel()?.status(`Running the folds reading of ${name}…`,false),clear);
+  const job=await read({readings:[{kind:'folds'}]});
+  if(!job||!('runs' in job)){
+   const text=job&&'error' in job&&job.error?job.error:'READINGS_UNAVAILABLE: no reading ran';
+   outcome(text,true);
+   return [text];
+  }
+  const lines=job.runs.map(run=>{
+   const result=run.results[0];
+   return result?worstLine(run.build,result):`${run.build} · folds: not run`;
+  });
+  if(job.runs.length<2)lines.push('scratch · folds: no scratch build yet (Apply builds one)');
+  outcome(lines.join(' | '),job.runs.some(run=>run.results.some(result=>result.status!=='read')));
+  return lines;
+ };
 }
 
 type ReadingsActions={onProgress?:(job:ReadingsJobView)=>void;onError?:(text:string)=>void};
@@ -591,21 +615,61 @@ export function appliedStatus(node:HTMLElement,text:string,error=false):void {
  node.classList.toggle('error',error);
 }
 
-type RebuildPanelJob = {
- busy(value:boolean):void;
- status(text:string,error:boolean):void;
- progress?(write:()=>void):void;
+type PanelRebuildKey = AppliedPatchPanel | 'mesh';
+type IdleKeys = 'ctl' | 'direct' | null;
+type PanelReadout = ReturnType<typeof readoutRows>;
+type PatchResult = PatchJobView | RebuildRefusal;
+
+interface PanelRebuildEditors {
+ bones:()=>BonesPanel|null;
+ cloth:()=>ClothPanel|null;
+ cuts:()=>CutsPanel|null;
+ idle:()=>IdlePanel|null;
+ mesh:()=>MeshPanel|null;
+ physics:()=>PhysicsPanel|null;
+ 'rig-fields':()=>RigFieldsPanel|null;
+}
+
+interface PanelRebuildScreen<S> {
+ origin:()=>S;
+ sink:(origin:S)=>ScopedJobUiSink;
+ status:(origin:S)=>RebuildStatusView|null;
+ loadStatus:(origin:S)=>Promise<RebuildStatusView|null>;
+ stageWorld:()=>StageWorld;
+ canReset:(origin:S,key:PanelRebuildKey)=>boolean;
+ apply:(origin:S,patch:ConfigPatch,world:StageWorld,ui:ScopedJobUiSink)=>Promise<PatchResult>;
+ reset:(origin:S,world:StageWorld,ui:ScopedJobUiSink)=>Promise<void>;
+ before:(origin:S)=>Parameters<typeof readoutRows>[0];
+ inspected:(origin:S)=>InspectedCheckView|null;
+ follow:(origin:S,show:()=>void,ui:ScopedJobUiSink)=>Promise<void>;
+ redraw:()=>void;
+ progress:(origin:S,key:AppliedPatchPanel,patch:ConfigPatch,status:RebuildStatusView|null,keys:IdleKeys)=>string;
+}
+
+const panelEmpty:Record<AppliedPatchPanel,string>={
+ bones:'BONES_NOTHING_PENDING: no pending ops',
+ cloth:'CLOTH_NOTHING_PENDING: no pending ops',
+ cuts:'CUTS_NOTHING_PENDING: no pending ops',
+ idle:'IDLE_NOTHING_PENDING: no pending ops',
+ physics:'PHYSICS_NOTHING_PENDING: no pending ops',
+ 'rig-fields':'RIG_FIELDS_NOTHING_PENDING: no pending ops',
+};
+
+const panelReset:Partial<Record<PanelRebuildKey,string>>={
+ idle:'Reset: the inspected build is on the stage; no pending ops; the preview is cleared.',
+ mesh:'Reset: the inspected build is on the stage; the pending entry is the config\'s.',
+ 'rig-fields':'Reset: the inspected build is on the stage; no pending ops; the dial is at 0.',
 };
 
 export function preparePanelPatch(status:RebuildStatusView|null,ops:PatchOp[],empty:string,
- panel:Pick<RebuildPanelJob,'status'>,args?:string[]):ConfigPatch|null {
+ panel:{status(text:string,error:boolean):void},args?:string[]):ConfigPatch|null {
  const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig',args}):null;
  if(!patch)panel.status(!ops.length?empty:status?.reason??'REBUILD_STATUS_UNAVAILABLE',true);
  return patch;
 }
 
-/** The before reading follows the inspected check when there was no scratch build on stage. */
-export function followApplyReadout(
+/** BEFORE for the inspected build is its stored background check (#108, HQ ruling); re-read while it still runs. */
+function followApplyReadout(
  before:Parameters<typeof readoutRows>[0],result:PatchJobView,inspected:()=>InspectedCheckView|null,
  show:(rows:ReturnType<typeof readoutRows>)=>void,follow:(refresh:()=>void)=>Promise<void>,
  bars?:readonly string[],
@@ -622,31 +686,103 @@ export function followApplyReadout(
  if(!before)void follow(refresh).then(refresh);
 }
 
-/** The existing panel lifecycle around a config patch; each screen owns its request, wording and built-stage effects. */
-export async function applyPanelPatch(
- panel:RebuildPanelJob,
- progress:()=>void,
- apply:()=>Promise<PatchJobView|RebuildRefusal>,
- built:(result:PatchJobView)=>void,
-):Promise<PatchJobView|RebuildRefusal> {
- panel.busy(true);
- if(panel.progress)panel.progress(progress);else directJobUiSink.status(progress);
- try{
-  const result=await apply();
-  const {text,error}=patchOutcomeLine(result);
-  panel.status(text,error);
-  if('id' in result&&result.status==='built')built(result);
-  return result;
- }finally{panel.busy(false);}
-}
+/** Captures the origin for each job while resolving the mounted editor at the time of the write. */
+export function bindPanelRebuilds<S>(editors:PanelRebuildEditors,screen:PanelRebuildScreen<S>) {
+ const readoutOwners=new WeakMap<ScopedJobUiSink,Map<PanelRebuildKey,symbol>>();
 
-/** Preserve the panel's unconditional Reset announcement after the optional stage reset. */
-export async function resetPanelBuild(panel:RebuildPanelJob,reset:(()=>Promise<void>)|null,done:string):Promise<void> {
- if(reset){
-  panel.busy(true);
-  try{await reset();}finally{panel.busy(false);}
+ function beginPanelRebuild<K extends PanelRebuildKey>(key:K) {
+  const origin=screen.origin(),ui=screen.sink(origin),editor=editors[key];
+  const clear=()=>editor()?.status('',false);
+  const readoutKey=`${key}-readout`,owner=Symbol();
+  ui.clearOutcome('message');
+  ui.clearOutcome(key);
+  const panel=editor();
+  if(ui!==directJobUiSink&&panel&&'readout' in panel){
+   // A prior Apply can still be following the inspected check on this side.
+   ui.clearOutcome(readoutKey);
+   let owners=readoutOwners.get(ui);
+   if(!owners)readoutOwners.set(ui,owners=new Map());
+   owners.set(key,owner);
+  }
+  const writeReadout=(rows:PanelReadout)=>{
+   const mounted=editor();
+   if(mounted&&'readout' in mounted)mounted.readout(rows);
+  };
+  return {
+   key,origin,ui,
+   busy:(value:boolean)=>ui.projectBusy(key,value,busy=>editor()?.busy(busy)),
+   progress:(text:()=>string)=>ui.transient(key,()=>editor()?.status(text(),false),clear),
+   status:(text:string,error:boolean)=>ui.outcome(key,()=>editor()?.status(text,error),clear),
+   readout:(rows:PanelReadout)=>{
+    if(ui===directJobUiSink||readoutOwners.get(ui)?.get(key)===owner)
+     ui.outcome(readoutKey,()=>writeReadout(rows),()=>writeReadout([]));
+   },
+  };
  }
- panel.status(done,false);
+
+ type ApplyJob=ReturnType<typeof beginPanelRebuild<AppliedPatchPanel>>;
+ function readsCheck(key:AppliedPatchPanel):boolean {
+  return key==='physics'||key==='idle'||key==='rig-fields';
+ }
+
+ async function applyPanelPatch(job:ApplyJob,patch:ConfigPatch,status:RebuildStatusView|null,keys:IdleKeys,run:()=>Promise<PatchResult>):Promise<PatchResult> {
+  const {key,origin,ui}=job;
+  const before=readsCheck(key)?screen.before(origin):null;
+  job.busy(true);
+  job.progress(()=>screen.progress(origin,key,patch,status,keys));
+  try{
+   const result=await run();
+   const {text,error}=patchOutcomeLine(result);
+   job.status(text,error);
+   if('id' in result&&result.status==='built'){
+    if(key==='bones'||key==='physics'||key==='rig-fields')
+     ui.render(()=>editors[key]()?.applied(result.request.patch.ops));
+    if(key==='bones'||key==='cuts'||key==='cloth')ui.render(screen.redraw);
+    if(readsCheck(key)){
+     const bars=key==='idle'?IDLE_READOUT_BARS:key==='rig-fields'?RIG_FIELDS_READOUT_BARS:undefined;
+     followApplyReadout(before,result,()=>screen.inspected(origin),job.readout,show=>screen.follow(origin,show,ui),bars);
+    }
+   }
+   return result;
+  }finally{job.busy(false);}
+ }
+
+ async function apply(key:AppliedPatchPanel,ops:PatchOp[],keys:IdleKeys=null):Promise<PatchResult|null> {
+  const job=beginPanelRebuild(key),{origin,ui}=job;
+  const status=screen.status(origin)??await screen.loadStatus(origin);
+  if(key==='rig-fields'){
+   try{assertRigFieldOps(ops);}catch(error){
+    job.status(error instanceof Error?error.message:String(error),true);
+    return null;
+   }
+  }
+  const patch=preparePanelPatch(status,ops,panelEmpty[key],job,keys?['--idle-keys',keys]:undefined);
+  if(!patch)return null;
+  if(key==='physics')ui.render(()=>editors.physics()?.clearPreview());
+  const world=readsCheck(key)?screen.stageWorld():null;
+  return applyPanelPatch(job,patch,status,keys,()=>screen.apply(origin,patch,world??screen.stageWorld(),ui));
+ }
+
+ async function resetPanelBuild(key:PanelRebuildKey):Promise<void> {
+  const job=beginPanelRebuild(key),{origin,ui}=job;
+  ui.render(()=>{
+   const panel=editors[key]();
+   if(!panel)return;
+   if('setDial' in panel)panel.setDial(0);
+   if('clear' in panel)panel.clear();
+   if('shown' in panel)panel.shown(null);
+   else if('applied' in panel)panel.applied(null);
+   if('counts' in panel)panel.counts([]);
+   if('readout' in panel)panel.readout([]);
+  });
+  if(screen.canReset(origin,key)){
+   job.busy(true);
+   try{await screen.reset(origin,screen.stageWorld(),ui);}finally{job.busy(false);}
+  }
+  job.status(panelReset[key]??'Reset: the inspected build is on the stage; no pending ops.',false);
+ }
+
+ return {beginPanelRebuild,applyPanelPatch,apply,reset:resetPanelBuild};
 }
 
 export function renderApplied(
@@ -812,9 +948,19 @@ export interface JobUiSink {
  poll(schedule:()=>void):void;
 }
 
+export interface ScopedJobUiSink extends JobUiSink {
+ transient(key:string,write:()=>void,clear:()=>void):void;
+ outcome(key:string,write:()=>void,clear:()=>void):void;
+ clearOutcome(key:string):void;
+ projectBusy(key:string,value:boolean,write:(value:boolean)=>void):void;
+}
+
 const writeJobUi=(write:()=>void):void=>write();
-export const directJobUiSink:JobUiSink={
+const showJobStatus=(_key:string,write:()=>void):void=>write();
+export const directJobUiSink:ScopedJobUiSink={
  status:writeJobUi,busy:writeJobUi,render:writeJobUi,poll:writeJobUi,
+ transient:showJobStatus,outcome:showJobStatus,clearOutcome:()=>{},
+ projectBusy:(_key,value,write)=>write(value),
 };
 
 type JobStatusWrite={write:()=>void;clear:()=>void};
@@ -822,7 +968,7 @@ type JobBusyWrite=(value:boolean)=>void;
 type JobBusyState<S>={active:Map<S,JobBusyWrite>;painted?:JobBusyWrite};
 
 /** Call leave before switching sides, then enter after hydrating the newly selected side. */
-export function createJobUiState<S>(selected:()=>S) {
+export function createJobUiState<S>(selected:()=>S,trackOutcome?:(key:string,write:()=>void)=>void) {
  const outcomes=new Map<S,Map<string,JobStatusWrite>>();
  const displayed=new Map<string,{side:S;clear:()=>void}>();
  const busyByKey=new Map<string,JobBusyState<S>>();
@@ -839,10 +985,16 @@ export function createJobUiState<S>(selected:()=>S) {
   current.clear();
  }
 
- return {
-  sink(side:S):JobUiSink {
+ const state={
+  sink(side:S):ScopedJobUiSink {
    const emit=(write:()=>void):void=>{if(selected()===side)write();};
-   return {status:emit,busy:emit,render:emit,poll:emit};
+   return {
+    status:emit,busy:emit,render:emit,poll:emit,
+    transient:(key,write,clear)=>state.transient(side,key,write,clear),
+    outcome:(key,write,clear)=>state.outcome(side,key,write,clear),
+    clearOutcome:key=>state.clearOutcome(side,key),
+    projectBusy:(key,value,write)=>state.busy(side,key,value,write),
+   };
   },
   transient(side:S,key:string,write:()=>void,clear:()=>void):void {
    if(selected()===side)showStatus(side,key,{write,clear});
@@ -850,7 +1002,7 @@ export function createJobUiState<S>(selected:()=>S) {
   outcome(side:S,key:string,write:()=>void,clear:()=>void):void {
    let sideOutcomes=outcomes.get(side);
    if(!sideOutcomes)outcomes.set(side,sideOutcomes=new Map());
-   const terminal={write,clear};
+   const terminal={write:trackOutcome?()=>trackOutcome(key,write):write,clear};
    sideOutcomes.set(key,terminal);
    if(selected()===side)showStatus(side,key,terminal);
   },
@@ -886,4 +1038,5 @@ export function createJobUiState<S>(selected:()=>S) {
    if(sideOutcomes)for(const [key,terminal] of sideOutcomes)showStatus(side,key,terminal);
   },
  };
+ return state;
 }
