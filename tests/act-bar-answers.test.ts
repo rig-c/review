@@ -73,16 +73,34 @@ test('#987 and #904 progress and first-publication waiting show the row with no 
  expect(h.sendComments.hidden).toBe(true);
 });
 
-test('#825 draft failure leads the live job state; saved sessions use the act-bar saved label',()=>{
+function draftStateRenderer(env:object):()=>void {
  const begin=main.indexOf('function renderDraftState(): void {'),end=main.indexOf('\nfunction renderProvenance',begin);
  const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end));
+ return new Function('env',`with(env){${script};return renderDraftState;}`)(env);
+}
+
+test('#825 draft failure leads the live job state; saved sessions use the act-bar saved label',()=>{
  const states:any[]=[];
  const env={host:{reviewState:()=> 'Reviewing · 0 issues'},liveIssueCount:()=>0,saving:false,draftConflict:true,draftStatus:'Saved local draft was not restored: fixture.',actReadOnly:null,dirty:false,partsOnly:false,verdictSubmit:null,session:{updatedAt:'2026-11-20T00:00:00.000Z',feedbackWarnings:[]},
   renderAnswerControls(){},rigInspector:{actBar:{setSaveState:(state:any)=>states.push(state)}}};
- const render=new Function('env',`with(env){${script};return renderDraftState;}`)(env);render();
+ const render=draftStateRenderer(env);render();
  expect(states.at(-1).kind).toBe('failed');expect(states.at(-1).text).toBe('Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.');
  env.draftConflict=false;env.draftStatus='Local draft could not be saved: Draft exceeds 512 KiB. Export feedback before leaving.';render();expect(states.at(-1).text).toBe(env.draftStatus);
  (env as any).draftStatus=null;(env as any).host=null;render();expect(states.at(-1)).toEqual({kind:'saved',text:'Submitted'});
+});
+
+test.each([
+ {name:'standalone package',host:null,showsRefusal:true},
+ {name:'live job',host:{},showsRefusal:false},
+])('#1232 $name keeps the inspection restore refusal precedence from main',({host,showsRefusal})=>{
+ const draftStatus='Inspection was not restored: Saved inspection time is outside the selected clip/reference';
+ const states:{kind:string;text:string}[]=[];
+ draftStateRenderer({host,draftStatus,saving:false,draftConflict:false,actReadOnly:null,dirty:false,
+  renderAnswerControls(){},commentHost:()=>true,hasUnsentContent:()=>false,
+  commentSendState:null,session:{updatedAt:null},sentAloneRows:()=>({}),
+  rigInspector:{actBar:{setSaveState:(state:{kind:string;text:string})=>states.push(state)}},
+ })();
+ expect(states).toEqual([showsRefusal?{kind:'saved',text:draftStatus}:{kind:'unsaved',text:'Not submitted'}]);
 });
 
 test('#833 revealing the live act row from initial markup hides the legacy controls first',()=>{

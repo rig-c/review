@@ -513,15 +513,17 @@ function renderDraftState(): void {
     rigInspector.actBar.setSaveState({kind:'unsaved',text:'Not submitted'});
   }
   renderAnswerControls();
-  // Live feedback reports the state of the comment submission.
-  if(typeof commentHost==='function'&&commentHost()&&!(saving&&!commentSending)&&!draftConflict&&!actReadOnly&&!(draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus))){
+  const draftStorageProblem=draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus)?draftStatus:null;
+  const standaloneRestoreRefusal=!host&&draftStatus&&/^(Inspection was not restored|View link refused|View link was not restored): /.test(draftStatus);
+  // Standalone inspection refusals keep their place in the draft state beside Send comments.
+  if(typeof commentHost==='function'&&commentHost()&&!(saving&&!commentSending)&&!draftConflict&&!actReadOnly&&!draftStorageProblem&&!standaloneRestoreRefusal){
     const unsent=hasUnsentContent();
     rigInspector.actBar.setSaveState(saving?{kind:'saving',text:'Sending'}:
       !unsent&&(commentSendState==='sent'||!!session?.updatedAt||Object.keys(sentAloneRows()).length>0)?{kind:'saved',text:'Submitted'}:{kind:'unsaved',text:'Not submitted'});
     return;
   }
   if (draftStatus === null && !dirty && !saving && !draftConflict && !actReadOnly && !session?.updatedAt) return;
-  rigInspector.actBar.setSaveState({ kind: actReadOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftConflict ? 'Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.' : saving ? 'Saving…' : draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus)?draftStatus:actReadOnly??draftStatus??(dirty ? 'Unsubmitted changes' : session?.updatedAt ? 'Submitted' : 'Not submitted') });
+  rigInspector.actBar.setSaveState({ kind: actReadOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftConflict ? 'Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.' : saving ? 'Saving…' : draftStorageProblem??actReadOnly??draftStatus??(dirty ? 'Unsubmitted changes' : session?.updatedAt ? 'Submitted' : 'Not submitted') });
 }
 
 function renderProvenance(): void {
