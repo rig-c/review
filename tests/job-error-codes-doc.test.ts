@@ -12,7 +12,7 @@ test('#1273: docs/REVIEW_PACKAGE.md error codes bullet matches src/job-contract.
   const parenMatch = /\(([^)]*)\)/u.exec(bullets[0]!);
   expect(parenMatch).not.toBeNull();
 
-  const docCodes = [...parenMatch![1]!.matchAll(/`(JOB_[^`]+)`/gu)].map(match => match[1]!);
+  const docCodes = [...parenMatch![1]!.matchAll(/`([^`]+)`/gu)].map(match => match[1]!);
   const sourceSet = new Set<string>(JOB_ERROR_CODES);
   const docSet = new Set<string>(docCodes);
   const missing = JOB_ERROR_CODES.filter(code => !docSet.has(code));
