@@ -193,6 +193,41 @@ test('retained public identity owns row copies and never rereads later prepared 
 
 /** The draw boundary as main.ts/compare.ts run it: the player draws whole first, then parts present inside the same try. */
 function drawBoundary(explorer:PartInspection,side:'single'|'a'|'b',drawn:string[]):void {drawn.push(side);explorer.present(side);}
+test('#1288 Compare lists A before B even when B registers and draws first',async()=>{
+ const {host,detail,Explorer}=await explorerHarness(),a=fake(),b=fake();
+ const explorer=new Explorer(host as unknown as HTMLElement,detail as unknown as HTMLElement,()=>{});
+ const drawn:string[]=[],list=host.querySelector('[data-part-list]')!,solo=host.querySelector('[data-part-solo]')!;
+ const rows=()=>list.querySelectorAll('button');
+ const keys=()=>rows().map(row=>[row.dataset.side,row.dataset.slot].join(':'));
+ const aSlots=['a:s','a:other','a:clip'],bSlots=['b:s','b:other','b:clip'];
+
+ explorer.register('b',entries,b.player);
+ drawBoundary(explorer,'b',drawn);
+ expect(keys()).toEqual(bSlots);
+ rows()[0]!.onclick!();
+ expect(explorer.value()).toMatchObject({side:'b',slot:'s',mode:'context'});
+
+ explorer.register('a',entries,a.player);
+ expect(keys()).toEqual([...aSlots,...bSlots]);
+ drawBoundary(explorer,'a',drawn);
+ expect(keys()).toEqual([...aSlots,...bSlots]);
+ expect(rows().filter(row=>row.attributes.get('aria-pressed')==='true').map(row=>row.dataset.side)).toEqual(['b']);
+ solo.checked=true;solo.onchange!();
+ expect(explorer.value()).toMatchObject({side:'b',slot:'s',mode:'solo'});
+ expect(a.rendered.at(-1)!.order.map(row=>row.slot)).toEqual(['s','other']);
+
+ const snapshot=b.player.slotIdentity(),reordered=copyPartFrame(frame);
+ reordered.order.reverse().forEach((row,z)=>{row.z=z;});
+ b.source(reordered);
+ b.identity({...snapshot,generation:b.player.generation,slots:[snapshot.slots[1]!,snapshot.slots[0]!,snapshot.slots[2]!].map((row,z)=>({...row,z}))});
+ drawBoundary(explorer,'b',drawn);
+ expect(drawn).toEqual(['b','a','b']);
+ expect(keys()).toEqual([...aSlots,'b:other','b:s','b:clip']);
+ expect(b.rendered.at(-1)!.order.map(row=>row.slot)).toEqual(['s']);
+ explorer.setVisibleSide('b');
+ expect(keys()).toEqual(['b:other','b:s','b:clip']);
+});
+
 test('identity mismatch keeps the rig drawn whole, names the refusal, offers nothing stale, and a later valid frame recovers Solo',async()=>{
  const {host,detail,Explorer,counter}=await explorerHarness(),a=fake(),changes:unknown[]=[],explorer=new Explorer(host as unknown as HTMLElement,detail as unknown as HTMLElement,previous=>changes.push(previous),()=>{});
  const drawn:string[]=[],list=host.querySelector('[data-part-list]')!,status=host.querySelector('[data-part-status]')!,solo=host.querySelector('[data-part-solo]')!,rows=()=>list.querySelectorAll('button');
