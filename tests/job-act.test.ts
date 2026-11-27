@@ -3,7 +3,7 @@ import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
 import { afterEach, expect, test } from 'bun:test';
 import { parseUISubmission } from '../src/job-act.ts';
-import { JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS, type JobUISubmission } from '../src/job-contract.ts';
+import { JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS, type JobUISubmission } from '../src/job-contract.ts';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { jobFixture, syntheticJobParts } from './helpers/job-api-fixture.ts';
@@ -17,7 +17,7 @@ import {jobSnapshotHash} from '../src/job-source.ts';
 import {loadPartsView} from '../src/parts-view.ts';
 import {preparePartsComment,validateStoredPartsComment} from '../src/parts-comment-crops.ts';
 import {commentPartsIssues, parsePartsIssue} from '../src/parts-comment.ts';
-import {jobHash, parseCommentOnlyAct} from '../src/job-api.ts';
+import {createJobHostPorts, jobHash, parseCommentOnlyAct} from '../src/job-api.ts';
 import {PNG} from 'pngjs';
 import {parseCommentsAct, parseContextCommentsAct, projectComments, parseRecordAct, type JobComment} from '../src/job-host.ts';
 import {legacyFeedbackComments, partsIssueComments} from '../src/feedback-export.ts';
@@ -143,6 +143,75 @@ test('#646 question-answer-anchor-excluded: no question/ask feedback arm is inve
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
 async function fixture() { const f = await jobFixture(); fixtures.push(f); return f; }
+
+for (const schema of [JOB_API_SCHEMA, JOB_API_V3_SCHEMA]) {
+  test(`#1319 fixture A: status omits act kind lists and only comments commit (${schema})`, async () => {
+    const f = await fixture();
+    const session = schema === JOB_API_SCHEMA ? f.session : new JobSession({
+      root: f.root, stateDir: join(f.scratch, 'state-v3'), fingerprint: 'f'.repeat(64),
+      reviewer: {id: 'declared-owner', role: 'owner'}, publicationMode: 'record-and-package',
+      readPublished: async () => f.getContext(),
+    });
+    try {
+      expect(session.apiSchema).toBe(schema);
+      const ports = session === f.session ? f.ports : createJobHostPorts(session, f.origin);
+      const {agent, ui} = session.hostCredentials();
+      const url = `${f.origin}/jobs/${session.jobId}`;
+      const call = async (body: object) => (await ports.handleJobApi(new Request(url + '/api', {
+        method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + agent},
+        body: JSON.stringify({...body, ...f.base(), schema, jobId: session.jobId}),
+      }))).json();
+      const uiPost = (path: 'displayed' | 'acts', body: object) => new Request(`${url}/ui/${path}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json', Origin: f.origin, 'X-Review-Capability': ui},
+        body: JSON.stringify(body),
+      });
+
+      const publish = await f.publishRequest();
+      if (publish.verb !== 'publish') throw new Error('Expected a package publish request');
+      const published = await call({...publish, expectedGeneration: session.status().generation,
+        result: schema === JOB_API_V3_SCHEMA ? {kind: 'package', ...publish.result} : publish.result});
+      expect(published).toMatchObject({ok: true, schema});
+      const {publicationId, source} = published.value;
+      const displayed = await ports.ackDisplayed(session.jobId, uiPost('displayed', {
+        publicationId, pageId: 'page-1319', sourceHash: source.sourceHash,
+      }));
+      if (!displayed.ok) throw new Error(displayed.error.code);
+      const before = session.status();
+      expect(before.pending).toEqual([]);
+      const submit = (body: object) => ports.commitUIAct(session.jobId, uiPost('acts', {
+        ...displayed.value, expectedGeneration: before.generation, ...body,
+      }));
+
+      // Fresh legacy envelopes reach the replay-miss refusal. Reserved kinds can refuse during parsing.
+      for (const kind of ['interview-picks', 'checkpoint', 'parts-verdict', 'review-verdict', 'signoff',
+        'described-correction', 'mesh-edit']) {
+        const refused = await submit({kind, askId: 'ask-1319', submissionId: `fresh-${kind}`, value: {}});
+        expect(refused, kind).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+        expect(session.status()).toEqual(before);
+      }
+
+      const value = {comments: [{text: 'Current comment'}]};
+      const saved = await submit({submissionId: 'comments-1319', kind: 'comments', value});
+      expect(saved).toMatchObject({ok: true, value: {schema: 'rig-review/act@10', kind: 'comments', publicationId, value}});
+      if (!saved.ok) throw new Error(saved.error.code);
+      expect(Object.hasOwn(saved.value, 'askId')).toBe(false);
+      const after = session.status();
+      expect(after.generation).toBe(before.generation + 1);
+      expect(after.pending).toEqual([]);
+      const next = await call({verb: 'next', after: before.cursor, waitMs: 0});
+      expect(next).toMatchObject({ok: true, schema});
+      expect(next.value.events).toHaveLength(1);
+      expect(next.value.events[0]).toMatchObject({type: 'act', act: saved.value});
+
+      // Baseline is red here because status still owns enabledActKinds.
+      const statusKeys = ['cursor', 'generation', 'jobId', 'pending', 'publication', 'status'];
+      expect(Object.keys(before).sort()).toEqual(statusKeys);
+      expect(Object.keys(after).sort()).toEqual(statusKeys);
+    } finally {
+      if (session !== f.session) session.dispose();
+    }
+  });
+}
 
 test('actual UI ports finalize exact whitespace-bearing comment text with host-declared authority and idempotent act IDs', async () => {
   const f = await fixture(), publication = await f.publish();
