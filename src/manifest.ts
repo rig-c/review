@@ -565,7 +565,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
       if (manifest.sceneReport) sceneModelBytes = bytes;
     }
     if(isDirection)directionInput=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));
-    if(p===reportPath){let value:unknown;try{value=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));}catch(e){throw new Error(`${p}: ${e instanceof Error?e.message:String(e)}`);}report=parseReport(value,p);}
+    if(p===reportPath&&!sceneReport){let value:unknown;try{value=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));}catch(e){throw new Error(`${p}: ${e instanceof Error?e.message:String(e)}`);}report=parseReport(value,p);}
     if(p===manifest.frames)frames=parseFrames(Buffer.concat(metadataChunks).toString('utf8'),p,fileHashes.get(p)!);
   }
   if(painting){hash.update(SOURCE_PAINTING_ID);hash.update('\0');hash.update(painting.sha256);hash.update('\0');}

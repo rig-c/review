@@ -69,12 +69,13 @@ test.each([
 ] as const)('#1316 refuses sceneReport with %s', async (kind, bytes, declaredBytes, code) => {
  const f = await fixture();
  const model = 'skeleton.model.json';
- const path = 'scene.json';
+ const path = kind === 'malformed JSON' ? 'report.json' : 'scene.json';
  const scene = join(f.root, path);
  for (const file of [model, 'rigid.png', 'mesh.png'])
    await cp(join('tests/fixtures/viewport-387/package', file), join(f.root, file));
  const sha256 = createHash('sha256').update(declaredBytes).digest('hex');
- await writeFile(f.path, JSON.stringify({...f.input, model, sceneReport: {path, sha256}}));
+ const authoring = path === 'report.json' ? [{label: 'Parts scene report', path}] : undefined;
+ await writeFile(f.path, JSON.stringify({...f.input, model, authoring, sceneReport: {path, sha256}}));
  if (bytes !== null) await writeFile(scene, bytes);
  if (kind === 'escaping') {
    const outside = await fixture();
