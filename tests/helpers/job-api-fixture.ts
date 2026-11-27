@@ -2,7 +2,7 @@ import { cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/pr
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { JOB_API_SCHEMA, type JobAgentRequest, type JobPartsEnumerator, type JobPartsFileReference, type JobPublication, type JobPublicationV3, type JobSubject } from '../../src/job-contract.ts';
+import { JOB_API_SCHEMA, type JobAgentRequest, type JobPartsEnumerator, type JobPartsFileReference, type JobPublication, type JobPublicationV3 } from '../../src/job-contract.ts';
 import { createJobHostPorts, jobHash } from '../../src/job-api.ts';
 import { JobSession } from '../../src/job-session.ts';
 import type { JobPublishedContext } from '../../src/job-source.ts';
@@ -72,13 +72,6 @@ export async function jobFixture(options: {
     if (!result.ok) throw new Error(JSON.stringify(result));
     return result.value;
   }
-  async function ask(publication: JobPublication | JobPublicationV3, subject: JobSubject) {
-    const response = await call({ ...base(), verb: 'ask', expectedGeneration: session.status().generation,
-      idempotencyKey: `ask-${++sequence}`, publicationId: publication.publicationId, subject });
-    const result = await response.json();
-    if (!result.ok) throw new Error(JSON.stringify(result));
-    return result.value as import('../../src/job-contract.ts').JobPendingAsk;
-  }
   async function display(publication: JobPublication | JobPublicationV3) {
     const response = await ports.ackDisplayed(session.jobId, new Request(origin + `/jobs/${session.jobId}/ui/displayed`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': credentials.ui },
@@ -94,7 +87,7 @@ export async function jobFixture(options: {
     });
   }
   return {
-    scratch, root, state, session, ports, origin, credentials, partsEnumerator, base, call, publishRequest, publish, ask, display, uiRequest,
+    scratch, root, state, session, ports, origin, credentials, partsEnumerator, base, call, publishRequest, publish, display, uiRequest,
     setPartsReferences(value: readonly JobPartsFileReference[]) { references = structuredClone(value); },
     setContext(value: JobPublishedContext) { context = value; },
     setRecordPath(value: string) { recordPath = value; },

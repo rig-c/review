@@ -1,6 +1,6 @@
 /** Ordinary Nova orchestration for #629 and #606. Synthetic sealed evidence, never producer output.
  * #1229: converted from the retired checkpoint Pass/Fail form and outcome submission loop to verifying retained
- * checkpointEvidence API/seal routes, fresh checkpoint ask refusals (JOB_ASK_INVALID), no-ask comment survival + act@10
+ * checkpointEvidence API/seal routes, fresh checkpoint ask refusals (JOB_REQUEST_INVALID), no-ask comment survival + act@10
  * submission, historical checkpoint act consumer fetch-act readback, and corrupt tile hash refusal.
  */
 import assert from 'node:assert/strict';
@@ -97,10 +97,11 @@ async function run() {
                 expectedGeneration: host.session.status().generation, idempotencyKey: randomUUID(), publicationId,
                 subject: {kind: 'checkpoint', checkpointId: packet.checkpointId,
                     ...(schema === 'rig-review/job-api@2' ? {planStepId: packet.planStepId} : {})}})});
-        assert.equal(response.status, 409);
+        assert.equal(response.status, 400);
         const body = await response.json();
         assert.equal(body.ok, false, JSON.stringify(body));
-        assert.equal(body.error.code, 'JOB_ASK_INVALID');
+        assert.equal(body.error.code, 'JOB_REQUEST_INVALID');
+        assert.equal(body.error.message, 'Unknown job verb: ask');
     }
     async function inspect(host: Awaited<ReturnType<typeof startJobHost>>, schema: string,
         publication: {publicationId: string; source: {sourceHash: string; projectHash?: string | null}}, packet: JobCheckpointEvidence, prefix: string,

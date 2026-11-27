@@ -443,16 +443,16 @@ test('#1227 viewer and comments work on a production-shaped publication when a p
       verb: 'ask', expectedGeneration: f.host.session.status().generation, idempotencyKey: 'producer-signoff-ask',
       publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'plan-approved'},
     });
-    expect(signoffAsk.status).toBe(409);
-    await expect(signoffAsk.json()).resolves.toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+    expect(signoffAsk.status).toBe(400);
+    await expect(signoffAsk.json()).resolves.toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
 
     const checkpointAsk = await f.call({
       schema: JOB_API_SCHEMA, jobId: f.host.session.jobId, requestId: 'producer-checkpoint-ask',
       verb: 'ask', expectedGeneration: f.host.session.status().generation, idempotencyKey: 'producer-checkpoint-ask',
       publicationId: publication.publicationId, subject: {kind: 'checkpoint', checkpointId: 'step-one'},
     });
-    expect(checkpointAsk.status).toBe(409);
-    await expect(checkpointAsk.json()).resolves.toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+    expect(checkpointAsk.status).toBe(400);
+    await expect(checkpointAsk.json()).resolves.toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
 
     const reviewAfterRefusal = await fetch(entry + 'api/review', {headers: {'X-Review-Capability': f.credentials.ui}});
     expect(reviewAfterRefusal.status).toBe(200);
@@ -562,7 +562,7 @@ test('#1230 option-set publications render pictures and comments with no form ac
         const imageResponse = await routeFetch(host.record!.questionPictures![0]!.src!);
         expect(imageResponse.status).toBe(200);
 
-        // Old producer still sending a picks ask gets a named refusal (409 JOB_ASK_INVALID); comments still commit cleanly.
+        // Old producer still sending a picks ask gets a named refusal (400 JOB_REQUEST_INVALID); comments still commit cleanly.
         const legacyAsk = await realPorts.handleJobApi(new Request(`${fixture.origin}/jobs/${fixture.session.jobId}/api`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + fixture.session.hostCredentials().agent},
@@ -573,8 +573,8 @@ test('#1230 option-set publications render pictures and comments with no form ac
             subject: {kind: 'interview-picks', questionId: 'rig_type', setId: 'set_rig_type_01'},
           }),
         }));
-        expect(legacyAsk.status).toBe(409);
-        await expect(legacyAsk.json()).resolves.toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+        expect(legacyAsk.status).toBe(400);
+        await expect(legacyAsk.json()).resolves.toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
 
         const commentResult = await window.submit({
           kind: 'comments', publicationId: display.publication.publicationId, pageId,

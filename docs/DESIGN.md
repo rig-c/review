@@ -308,8 +308,8 @@ communication panel (#754, #1041). A record without a picture keeps that absence
 manufacture a model or package. Remaining B (#722), C (#715), F (#734) and #756
 work is tracked in [the screen specification](https://github.com/rig-c/review/blob/main/docs/SCREENS.md#4-migration-order).
 
-People submit decisions through Review's UI; agents use semantic `publish`,
-`ask`, `next` and `close`, and consumer writers fetch finalized acts directly.
+People submit decisions through Review's UI. Agents use `publish`, `next` and
+`close`, and consumer writers fetch finalized acts directly.
 Opening or navigating never approves. Preserve reviewer authority, exact
 source binding, publication freeze, generation checks, replay and recorded text.
 A UI requirement does not authorize changing those public contracts or carrying

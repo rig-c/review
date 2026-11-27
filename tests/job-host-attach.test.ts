@@ -942,7 +942,7 @@ test('CP1 lazy write adopts only the same existing file and same exact job ident
   }
 });
 
-test('CP1 later semantic publish, ask refusal and replay, next, UI finalization, fetch and close preserve CAS and revocation', async () => {
+test('CP1 later semantic publish, retired ask refusal, history via next, UI finalization, fetch and close preserve CAS and revocation', async () => {
   const f = await createFixture(); let installs = 0, reads = 0;
   const options = {...baseOptions(f), installWriterBinding: () => {installs++;},
     readPublished: async () => {reads++; return f.getContext();}};
@@ -956,16 +956,18 @@ test('CP1 later semantic publish, ask refusal and replay, next, UI finalization,
   const published = await semantic(attached, 'publish', fields);
   expect(published.ok).toBe(true); expect(reads).toBe(1);
   expect((await semantic(attached, 'publish', fields)).value).toEqual(published.value); expect(reads).toBe(1);
-  const stale = await semantic(attached, 'ask', {expectedGeneration: 0, idempotencyKey: 'stale', publicationId: published.value.publicationId,
-    subject: {kind: 'review-verdict', stage: 'rig-review'}});
+  const stale = await semantic(attached, 'publish', {...fields, idempotencyKey: 'stale'});
   expect(stale).toMatchObject({ok: false, error: {code: 'JOB_GENERATION_STALE'}});
+  expect(reads).toBe(1);
   const askFields = {expectedGeneration: 1, idempotencyKey: 'attached-ask', publicationId: published.value.publicationId,
     subject: {kind: 'review-verdict', stage: 'rig-review'} as const};
-  expect(await semantic(attached, 'ask', {...askFields, idempotencyKey: 'fresh-attached-ask'}))
-    .toMatchObject({ok: false, generation: 1, error: {code: 'JOB_ASK_INVALID'}});
   const historical = seedHistoricalVerdictAsk(attached.session, askFields.publicationId, askFields.subject, askFields.idempotencyKey);
-  expect(await semantic(attached, 'ask', askFields)).toMatchObject({ok: true, value: historical});
-  expect(await semantic(attached, 'next', {after: null, waitMs: 0})).toMatchObject({ok: true, value: {status: 'events'}});
+  expect(await semantic(attached, 'ask', askFields)).toMatchObject({
+    ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'},
+  });
+  const history = await semantic(attached, 'next', {after: null, waitMs: 0});
+  expect(history).toMatchObject({ok: true, value: {status: 'events'}});
+  expect(history.value.events).toContainEqual(expect.objectContaining({type: 'pending', ask: historical}));
   const uiHeaders = {'Content-Type': 'application/json', Origin: attached.origin, 'X-Review-Capability': credentials.ui};
   const display = await attached.ports.ackDisplayed(attached.session.jobId, new Request(attached.origin + `/jobs/${attached.session.jobId}/ui/displayed`, {
     method: 'POST', headers: uiHeaders, body: JSON.stringify({publicationId: published.value.publicationId, pageId: 'attached-page', sourceHash: published.value.source.sourceHash})}));

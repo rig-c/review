@@ -1,6 +1,6 @@
 import { parseUISubmission } from '../../src/job-act.ts';
-import { isRecordSource, parseCommentsAct, parseJobRequest, parseJobRequestV3, parseRecordAct, parseRecordSource, requestDigest } from '../../src/job-api.ts';
-import { JOB_API_V3_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, type JobCommentsAct, type JobPendingAsk, type PendingAskV3, type RecordAct } from '../../src/job-contract.ts';
+import { isRecordSource, parseCommentsAct, parseRecordAct, parseRecordSource, requestDigest } from '../../src/job-api.ts';
+import { JOB_COMMENTS_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, type JobCommentsAct, type JobPendingAsk, type PendingAskV3, type RecordAct } from '../../src/job-contract.ts';
 import { checkpointNoteComments } from '../../src/feedback-export.ts';
 import type { JobSession } from '../../src/job-session.ts';
 
@@ -142,12 +142,11 @@ export function seedHistoricalCheckpointAct(session: JobSession, input: {
 }
 
 /** #1229: a pending checkpoint ask stored by Review 4.21.0 or earlier, bound as the removed binder did.
- * A fresh submission against it refuses `JOB_ACT_KIND_DISABLED`, while an existing `agent:` receipt replays as before. */
+ * A fresh submission against it refuses `JOB_ACT_KIND_DISABLED`, and the pending event remains readable. */
 export function seedHistoricalCheckpointAsk(
   session: JobSession,
   publicationId: string,
   subject: { readonly kind: 'checkpoint'; readonly checkpointId: string; readonly planStepId?: string },
-  agentRequest?: Record<string, unknown>,
 ): PendingAskV3 | JobPendingAsk {
   const internal = session as unknown as {
     store: { update(jobId: string, revision: null, operation: (current: { data: any }) => { data: any }): void };
@@ -169,11 +168,6 @@ export function seedHistoricalCheckpointAsk(
     } as PendingAskV3 | JobPendingAsk;
     data.asks[ask.askId] = ask;
     internal.event(data, { type: 'pending', ask });
-    if (agentRequest) {
-      const parsed = agentRequest.schema === JOB_API_V3_SCHEMA ? parseJobRequestV3(agentRequest) : parseJobRequest(agentRequest);
-      const { requestId: _requestId, ...semantic } = parsed as unknown as Record<string, unknown>;
-      data.replays['agent:' + String(agentRequest.idempotencyKey)] = { digest: requestDigest(semantic), value: ask };
-    }
     return { data };
   });
   internal.notify();

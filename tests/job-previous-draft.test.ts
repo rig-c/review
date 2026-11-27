@@ -1,3 +1,4 @@
+import {assertRetainedSnapshotIntact} from '../src/job-source.ts';
 import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {afterEach, expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
@@ -412,7 +413,8 @@ test('standing owner prepares and commits a previous-draft pin without painting 
     expect(denied.status).toBe(409);
     expect((await denied.json()).error).toMatchObject({message: 'PREVIOUS_DRAFT_HASH_MISMATCH operand=previous'});
     expect(await session.commitUIAct(submission)).toEqual(act);
-    await expect(f.ask(publication, subject)).rejects.toThrow('JOB_SOURCE_UNRETAINABLE');
+    expect(() => assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals,
+      retained.snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE')).toThrow('JOB_SOURCE_UNRETAINABLE');
   } finally {
     if (previousState === undefined) delete process.env.RIG_REVIEW_STATE_DIR;
     else process.env.RIG_REVIEW_STATE_DIR = previousState;

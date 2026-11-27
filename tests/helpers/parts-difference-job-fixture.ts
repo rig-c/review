@@ -2,6 +2,7 @@ import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {PNG} from 'pngjs';
+import {seedHistoricalVerdictAsk} from './historical-verdict-ask.ts';
 import {jobHash} from '../../src/job-api.ts';
 import {scriptedJobWindowFixture} from './job-window-fixture.ts';
 import {writeDifferencePackage} from './parts-difference-package.ts';
@@ -116,7 +117,7 @@ async function serveFixtures() {
       if (interrupted) break;
       const fixture = await partsDifferenceJobFixture({previousDraft, scratchParent: previousDraftScratch});
       fixtures.push(fixture);
-      await fixture.ask(fixture.publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+      seedHistoricalVerdictAsk(fixture.host.session, fixture.publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
       const label = previousDraft ? 'with-previous-draft' : 'without-previous-draft';
       console.log(label + ' state ' + fixture.input.state);
       for (const lang of ['en', 'ko'] as const) console.log(label + ' ' + lang + ' ' + partsDifferenceOwnerUrl(fixture, lang));

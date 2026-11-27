@@ -53,7 +53,7 @@ async function setsFixture(prefix: string, build: (root: string) => SyntheticOpt
     dispose: async () => { session.dispose(); await rm(scratch, { recursive: true, force: true }); } };
 }
 
-test('#1004 / #1230 K = 4 publishes four questions; fresh asks refuse JOB_ASK_INVALID and historical per-set acts decode', async () => {
+test('#1004 / #1230 K = 4 publishes four questions; fresh asks refuse JOB_REQUEST_INVALID and historical per-set acts decode', async () => {
   const fixture = await setsFixture('review-1004-sets-', root => createSyntheticOptionSetsRecordWorkspace(root, { count: 4 }));
   try {
     const published = await fixture.publish();
@@ -73,7 +73,7 @@ test('#1004 / #1230 K = 4 publishes four questions; fresh asks refuse JOB_ASK_IN
     for (const [index, subject] of source.subjects.entries()) {
       const asked = await fixture.call({ verb: 'ask', expectedGeneration: generation,
         idempotencyKey: 'ask-' + index, publicationId: publication.publicationId, subject });
-      expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+      expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' } });
     }
     expect(fixture.session.status()).toMatchObject({ generation, pending: [] });
 
@@ -97,7 +97,7 @@ test('#1004 / #1230 K = 4 publishes four questions; fresh asks refuse JOB_ASK_IN
   } finally { await fixture.dispose(); }
 });
 
-test('#1004 / #1230 an ask-batch over a K = 4 publication refuses JOB_ASK_INVALID at its first picks subject', async () => {
+test('#1004 / #1230 an ask-batch over a K = 4 publication refuses JOB_REQUEST_INVALID by name', async () => {
   const fixture = await setsFixture('review-1004-batch-', root => createSyntheticOptionSetsRecordWorkspace(root, { count: 4 }));
   try {
     const publication = (await fixture.publish()).value as PublicationV3;
@@ -105,12 +105,12 @@ test('#1004 / #1230 an ask-batch over a K = 4 publication refuses JOB_ASK_INVALI
     const generation = fixture.session.status().generation;
     const batch = await fixture.call({ verb: 'ask-batch', expectedGeneration: generation,
       idempotencyKey: 'batch', publicationId: publication.publicationId, subjects });
-    expect(batch).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+    expect(batch).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask-batch' } });
     expect(fixture.session.status()).toMatchObject({ generation, pending: [] });
     // A set the publication does not carry is not askable either.
     const stray = await fixture.call({ verb: 'ask', expectedGeneration: generation, idempotencyKey: 'stray',
       publicationId: publication.publicationId, subject: { kind: 'interview-picks', questionId: 'bones', setId: 'rig-meshes-01' } });
-    expect(stray).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+    expect(stray).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' } });
   } finally { await fixture.dispose(); }
 });
 

@@ -903,12 +903,6 @@ export interface JobPublishRequest extends JobMutation {
   };
 }
 
-export interface JobAskRequest extends JobMutation {
-  readonly verb: 'ask';
-  readonly publicationId: JobPublicationId;
-  readonly subject: JobSubject;
-}
-
 export interface JobNextRequest extends JobRequestBase {
   readonly verb: 'next';
   readonly after: JobCursor | null;
@@ -923,7 +917,6 @@ export interface JobCloseRequest extends JobMutation {
 
 export type JobAgentRequest =
   | JobPublishRequest
-  | JobAskRequest
   | JobNextRequest
   | JobCloseRequest;
 
@@ -1019,7 +1012,6 @@ export interface JobNextValue {
 
 export interface JobResponseValues {
   readonly publish: JobPublication;
-  readonly ask: JobPendingAsk;
   readonly next: JobNextValue;
   readonly close: { readonly status: 'closed'; readonly cursor: JobCursor | null };
   readonly 'fetch-act': JobAct;
@@ -1196,22 +1188,6 @@ export type PublishRequestV3 = Omit<JobPublishRequest, 'schema' | 'result' | 'fr
   }
 );
 
-export type AskRequestV3 = Omit<JobAskRequest, 'schema' | 'subject'> & {
-  readonly schema: typeof JOB_API_V3_SCHEMA;
-  readonly subject: JobSubject | RecordSubject;
-};
-
-/** One request that asks every listed subject of the head record publication (#963). */
-export type AskBatchRequestV3 = Omit<AskRequestV3, 'verb' | 'subject'> & {
-  readonly verb: 'ask-batch';
-  readonly subjects: readonly (JobSubject | RecordSubject)[];
-};
-
-/** `asks[i]` answers `subjects[i]` of the request. */
-export interface AskBatchValueV3 {
-  readonly asks: readonly PendingAskV3[];
-}
-
 export interface JobProgressV3 {
   readonly seq: number;
   readonly phase: 'ingest' | 'build' | 'measure' | 'publish' | 'other';
@@ -1250,8 +1226,6 @@ export type CloseRequestV3 = Omit<JobCloseRequest, 'schema'> & {
 
 export type AgentRequestV3 =
   | PublishRequestV3
-  | AskRequestV3
-  | AskBatchRequestV3
   | JobProgressRequestV3
   | NextRequestV3
   | CloseRequestV3;
@@ -1470,22 +1444,15 @@ export type RecordUIAct = RecordAct | RecordPicksCommentsAct;
 export type SourceV3 = JobSourceBinding | RecordSource;
 export type ActV3 = JobAct | RecordAct;
 
-/**
- * `recordPublication`, `recordActSchema`, `askBatch` and `progress` describe the host, not the current head.
- * `ask-batch` applies only to a record-retained head publication; a package head refuses `JOB_REQUEST_INVALID`,
- * so a consumer checks the publication's mode as well as the flag (#972).
- */
 export interface JobCapabilitiesV3 extends JobCapabilities {
   readonly recordPublication: true;
   readonly recordActSchema: typeof JOB_RECORD_ACT_SCHEMA;
-  readonly askBatch: true;
   readonly progress: true;
 }
 
 export const JOB_CAPABILITIES_V3: JobCapabilitiesV3 = Object.freeze({
   recordPublication: true,
   recordActSchema: JOB_RECORD_ACT_SCHEMA,
-  askBatch: true,
   progress: true,
 });
 
@@ -1527,8 +1494,6 @@ export interface NextValueV3 {
 
 export interface ResponseValuesV3 {
   readonly publish: PublicationV3;
-  readonly ask: PendingAskV3;
-  readonly 'ask-batch': AskBatchValueV3;
   readonly progress: JobProgressValueV3;
   readonly next: NextValueV3;
   readonly close: { readonly status: 'closed'; readonly cursor: JobCursor | null };
@@ -1552,9 +1517,6 @@ export type JobPublishResultV3 = PublishResultV3;
 export type JobProjectRecord = ProjectRecord;
 export type JobRecordFreeze = RecordFreeze;
 export type JobPublishRequestV3 = PublishRequestV3;
-export type JobAskRequestV3 = AskRequestV3;
-export type JobAskBatchRequestV3 = AskBatchRequestV3;
-export type JobAskBatchValueV3 = AskBatchValueV3;
 export type JobNextRequestV3 = NextRequestV3;
 export type JobCloseRequestV3 = CloseRequestV3;
 export type JobAgentRequestV3 = AgentRequestV3;
