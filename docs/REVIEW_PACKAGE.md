@@ -2210,7 +2210,7 @@ other shape with `JOB_REQUEST_INVALID`. `result.selector` and
 | Record hash | `selector.record === freeze.record.sha256` (echoed as `source.projectHash`). | `JOB_CURRENT_RECORD_MISMATCH` (HTTP 409) |
 | `output: "parts"` | `JobPublishedContext.parts` and non-empty `partIds` enumerated through the Parts boundary; no package `model` or `direction` (`api/review` sets `capabilities.preRig: true`). | `JOB_CURRENT_OUTPUT_MISMATCH` (HTTP 409) |
 | `output: "rig"` | Package `model` present; `direction` absent and `parts: null`. | `JOB_CURRENT_OUTPUT_MISMATCH` (HTTP 409) |
-| `output: "direction"` | Package `model` and `direction` present (with optional `scene` plates as today) and `parts: null`; `api/review` `direction` carries no `postVersion`. | `JOB_CURRENT_OUTPUT_MISMATCH` (HTTP 409) |
+| `output: "direction"` | Package `model` and `rig-create/direction@4` `direction` present (`take.duration > 0` and boolean `take.loop`, up to 256 KiB; no `scene`, else `JOB_SOURCE_MISMATCH`) and `parts: null`; `api/review` `direction` carries no `postVersion` or `rigVersion`. | `JOB_CURRENT_OUTPUT_MISMATCH` (HTTP 409) |
 | Plan and numbered-only declarations | `plan` must be `null`; `previousDraft`, `previousBuild`, `answeredDirectionFeedback`, `chestLandmarks` and `checkpointEvidence` are not accepted on `current`. Optional `commit` is allowed and echoed. | `JOB_SOURCE_MISMATCH` (HTTP 409) |
 | `ask` and `ask-batch` | No ask is accepted on a `current` publication (`review-verdict`, `parts-verdict` and retired kinds). | `JOB_ASK_INVALID` (HTTP 409) |
 

@@ -6,7 +6,7 @@ import {basename,resolve} from 'node:path';
 import {isDeepStrictEqual} from 'node:util';
 import {loadReview,previousBuildByteLimit,previousBuildFileError,previousBuildLimit,type ReviewPackage} from './manifest.ts';
 import {checkedPath} from './interview-project.ts';
-import type {JobFileIdentity} from './job-contract.ts';
+import type {JobFileIdentity,JobSelector} from './job-contract.ts';
 import {JobError} from './job-validation.ts';
 import type {HandoffFlags} from './handoff.ts';
 export interface ReferenceBinding {packageSourceHash:string;reference:{id:string;name:string;sha256:string}}
@@ -31,8 +31,8 @@ export async function hashLocalVideo(input:string):Promise<{path:string;name:str
  const after=await stat(path);if(await realpath(input)!==path||before.dev!==after.dev||before.ino!==after.ino||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs)throw new Error('Reference inputs changed while hashing');
  return {path,name:basename(path),sha256:hash.digest('hex')};
 }
-export async function loadReferencedReview(input:string,reference?:string,handoff?:HandoffFlags,cwd?:string,handoffStarts?:readonly string[],originalProducerRoot?:string):Promise<ReviewPackage>{
- const base=await loadReview(input,{handoff,cwd,handoffStarts,originalProducerRoot});if(reference===undefined)return base;
+export async function loadReferencedReview(input:string,reference?:string,handoff?:HandoffFlags,cwd?:string,handoffStarts?:readonly string[],originalProducerRoot?:string,selector?:JobSelector|null):Promise<ReviewPackage>{
+ const base=await loadReview(input,{handoff,cwd,handoffStarts,originalProducerRoot,...(selector!==undefined?{selector}:{})});if(reference===undefined)return base;
  const video=await hashLocalVideo(reference),id='open-reference-'+video.sha256;
  if(base.manifest.references.some(r=>r.id===id))throw new Error('reference: selected reference id collides with package reference');
  const binding:ReferenceBinding={packageSourceHash:base.sourceHash,reference:{id,name:video.name,sha256:video.sha256}};
@@ -42,7 +42,7 @@ export async function loadReferencedReview(input:string,reference?:string,handof
 export async function assertReviewUnchanged(p:ReviewPackage):Promise<void>{
  const assertCurrent=(p as BoundPackage)[sourceAssertion];
  if(assertCurrent)return assertCurrent();
- try{const current=await loadReferencedReview(p.manifestPath,selectedReference(p)?.path,p.handoffInputs,p.cwd,p.handoffStarts,p.originalProducerRoot);if(current.sourceHash!==p.sourceHash||!isDeepStrictEqual(current.reviewedSource,p.reviewedSource)||!isDeepStrictEqual(referenceBinding(current),referenceBinding(p)))throw new Error('source binding differs');}
+ try{const current=await loadReferencedReview(p.manifestPath,selectedReference(p)?.path,p.handoffInputs,p.cwd,p.handoffStarts,p.originalProducerRoot,p.selector);if(current.sourceHash!==p.sourceHash||!isDeepStrictEqual(current.reviewedSource,p.reviewedSource)||!isDeepStrictEqual(referenceBinding(current),referenceBinding(p)))throw new Error('source binding differs');}
  catch(error){if(error instanceof JobError&&error.code==='JOB_PREVIOUS_BUILD_INVALID')throw error;
   throw new Error('Package inputs changed or are unavailable. Restart review to bind feedback to current inputs.');}
 }

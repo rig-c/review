@@ -13,7 +13,7 @@ import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, posix } from 'node:path';
 import { isBuildRoot, parseHandoffDeclaration, resolveHandoff, type Handoff, type HandoffDeclaration, type HandoffFlags, type HandoffRecord } from './handoff.ts';
 import { JOB_PREVIOUS_BUILD_SCHEMA, parsePanelComposition, type JobFileIdentity, type JobPanelComposition,
-  type JobPreviousBuild } from './job-contract.ts';
+  type JobPreviousBuild, type JobSelector } from './job-contract.ts';
 import { exactObject, jobHash, parseFileRow } from './job-api.ts';
 import { readCheckpointEvidenceBytes } from './job-checkpoint-evidence.ts';
 import { JobError, jobPath, jobPathTextLimit } from './job-validation.ts';
@@ -51,6 +51,8 @@ export interface ReviewPackage { scene?:SceneInspection; direction?:DirectionIns
   handoffStarts?: readonly string[];
   /** Launcher-validated original package root when opening a retained pair. */
   originalProducerRoot?: string;
+  /** Live-job publication selector retained for source revalidation. */
+  selector?: JobSelector | null;
   /** #329: the handoff's source painting, served at a fixed route by its pinned hash; absent when the handoff knows none. */
   sourcePainting?: SourcePainting }
 export function reviewProducerStarts(p: ReviewPackage, cwd = process.cwd()): string[] {
@@ -334,6 +336,8 @@ interface ReviewLoadOptions {
   cwd?: string;
   handoffStarts?: readonly string[];
   originalProducerRoot?: string;
+  /** Live-job publication selector, forwarded to direction and scene admission. */
+  selector?: JobSelector | null;
   /** Load only the adapter's build model and its sealed page images. */
   sealedPlayback?: ReadonlyMap<string, string>;
   /** Standalone pairing retains the loader's exact closure and the original manifest fields. */
@@ -438,9 +442,11 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     await resolveHandoff(root,manifest.producer,options.handoff,{starts:options.handoffStarts??[options.cwd??process.cwd()],originalProducerRoot:options.originalProducerRoot});
   // #329: the source painting the handoff knows is the first reference, outside the package's own files.
   const painting=sourcePainting(manifest,handoff,directory);
+  const current=options.selector?.kind==='current';
   let scene:SceneInspection|undefined;
   const sceneBytes=new Map<string,Buffer>();
   if(manifest.scene){
+    if(current)throw new Error('SCENE_SOURCE_MISMATCH: '+manifest.scene);
     const sceneFile=previousOpen?await assetFile(manifest.scene):undefined;
     let bytes:Buffer;try{bytes=await readFile(sceneFile??await safeFile(root,manifest.scene));}catch{throw new Error('SCENE_REQUIRED: '+manifest.scene);}
     if(bytes.length>DIRECTION_MAX_BYTES)throw new Error('SCENE_SOURCE_MISMATCH: '+manifest.scene);
@@ -470,7 +476,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   // #192: the root is `check/` whether the folder or its review.json was opened, so the build root is kept either way.
   const buildRoot=!sealedPlayback&&basename(root)==='check'&&await isBuildRoot(dirname(root))?dirname(root):undefined;
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
-  const direction=manifest.direction?readDirectionInspection(directionInput,{path:manifest.direction,sha256:fileHashes.get(manifest.direction)!},reviewedSource.rig):undefined;
+  const direction=manifest.direction?readDirectionInspection(directionInput,{path:manifest.direction,sha256:fileHashes.get(manifest.direction)!},reviewedSource.rig,current?{current:true}:undefined):undefined;
   const animations=modelAnimations(modelMetadata);
   if(previousOpen&&playback){
     if(manifestBytes&&fileHashes.get(relative(root,manifestPath))!==jobHash(manifestBytes))
@@ -485,7 +491,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     previousOpen.capture({rawManifest:adapterManifest??rawManifest,files:fileHashes,playback});
   }
   const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations,clock:report?.clock??null,clockAnimation:report?.animation??null,...(frames&&animations?{frameClocks:declaredFrameClocks(frames,animations,report)}:{}),...(discoverTurnDials(modelMetadata).length?{turnDials:discoverTurnDials(modelMetadata)}:{})};
-  return {...(scene?{scene}:{}),...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,frames,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{}),...(options.cwd?{cwd:options.cwd}:{}),...(options.handoffStarts?{handoffStarts:options.handoffStarts}:{}),...(options.originalProducerRoot?{originalProducerRoot:options.originalProducerRoot}:{})};
+  return {...(scene?{scene}:{}),...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,frames,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{}),...(options.cwd?{cwd:options.cwd}:{}),...(options.handoffStarts?{handoffStarts:options.handoffStarts}:{}),...(options.originalProducerRoot?{originalProducerRoot:options.originalProducerRoot}:{}),...(options.selector!==undefined?{selector:options.selector}:{})};
 }
 
 /** #329: the reference id and served path of the handoff's source painting; the path is a name, never a package file. */
@@ -507,8 +513,8 @@ function sourcePainting(manifest:ReviewManifest,handoff:Handoff|null,folder:bool
   return {id:reference.id,path:record.path,sha256:record.sha256};
 }
 /** Job lookup is fixed to its designation and this Review install, never the operator's shell. */
-export function loadJobReview(input: string, root: string): Promise<ReviewPackage> {
-  return loadReview(input, {cwd: root, handoffStarts: [root, fileURLToPath(new URL('..', import.meta.url))]});
+export function loadJobReview(input: string, root: string, selector?: JobSelector | null): Promise<ReviewPackage> {
+  return loadReview(input, {cwd: root, handoffStarts: [root, fileURLToPath(new URL('..', import.meta.url))], ...(selector !== undefined ? {selector} : {})});
 }
 
 /**
