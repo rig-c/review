@@ -430,18 +430,24 @@ The number field edits the target, applies that exact value immediately and turn
 frequency, `ω₀ = 20 s⁻¹`; its number accepts 1…100, and switching it off applies
 pointer values immediately. The spring runs in normalized pointer space before
 mapping into each range. A held or restored value is not spring-interpolated.
+An untouched pad lets the clip drive the dials. When the pointer leaves the
+viewport, an unheld pad returns to the clip's current values. Smoothing eases
+that return, and switching smoothing off makes it immediate.
 Camera drags, modal dialogs and rebuilds do not steer the pad.
 
 In **compare**, only axes declared on both loaded models are offered. Their ranges
-are intersected and that common range is displayed. Both panes receive the same
+are intersected and that common range is displayed. An engaged pad sends both panes the same
 numeric value, even when their own ranges or body-dial bone names differ; no
 per-pane normalization or clamp changes the requested angle. An axis absent on
 one side is omitted. If no supported common axis remains, no pad is shown.
+On release, each pane returns to its own clip.
 
-The exact applied values, Hold and smoothing setting are kept in the source-bound
+While the pad is engaged, its exact applied values, Hold and smoothing setting are kept in the source-bound
 view link/local draft. Reload restores them paused and validates the current
 model's supported axes and bounds. Feedback captures those applied values in its
-separately validated `context.turn`; submitted feedback retains the immutable
+separately validated `context.turn`. An untouched pad saves no turn override in
+view links, drafts or comments. Restoring a view without a turn override gives
+control to the clip. Submitted feedback retains the immutable
 package/model/motion identity. It does not record pending pointer travel, author
 keys, write `motion.json` or change source files. The Rig fields `turn` x preview
 remains independent, temporary and unrecorded.

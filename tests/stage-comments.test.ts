@@ -142,6 +142,25 @@ function commentUI(feedback:any[]=[],options:{general?:boolean;generalRows?:{id:
  return {toggle,pane,workspace,side,list,tool,pose,errors,restores:()=>restores,changes:()=>changes,tick:()=>next(),down:()=>{if(!tool.active())toggle.onclick?.();pane.dispatch('pointerdown',event());},up:()=>pane.emit('pointerup',event()),key:(k:string)=>doc.dispatch('keydown',event({key:k})),escape:()=>doc.dispatch('keydown',event({key:'Escape'})),blur:()=>win.dispatch('blur'),cleanup:()=>{tool.dispose();for(const [k,v]of saved)(globalThis as any)[k]=v;if(prevGetComputedStyle===undefined)delete (globalThis as any).getComputedStyle;}};
 }
 test('comment list overlay lives outside the measured workspace stage chrome',()=>{const ui=commentUI();try{expect(ui.workspace.children).toHaveLength(1);expect(ui.workspace.children[0]!.className).toContain('stage-comment-list');}finally{ui.cleanup();}});
+test('#1283 pointed comments only carry a turn snapshot when the pose has an override',async()=>{
+ const engaged={schema:'rig-review-turn/1',values:{yaw:7.25},held:false,smoothing:20};
+ for(const turn of [null,engaged,{...engaged,held:true}]){
+  const rows:any[]=[],ui=commentUI(rows,{canvasFactory:realCanvasNode});
+  const canvas=Object.assign(createCanvas(100,100),{getBoundingClientRect:()=>({left:0,top:0,width:100,height:100})});
+  try{
+   Object.assign(ui.pane,{querySelectorAll:()=>[]});
+   ui.pose.capture={pane:ui.pane,images:true,canvas,backend:'canvas2d'};
+   ui.pose.turn=turn;
+   ui.down();await ui.up();
+   const composer=ui.pane.children.find(node=>node.className.includes('stage-comment-composer'))!;
+   composer.children[0]!.value='Jaw alignment';
+   await composer.onsubmit!({preventDefault(){}});
+   expect(rows).toHaveLength(1);
+   if(turn)expect(rows[0].context.turn).toEqual(turn);
+   else expect(rows[0].context).not.toHaveProperty('turn');
+  }finally{ui.cleanup();}
+ }
+});
 test('#284: open comment list tracks wrapped view bar bottom across widths and languages; planted fixed top:55px covers wrapped rows',()=>{
  const ui=commentUI();
  try{

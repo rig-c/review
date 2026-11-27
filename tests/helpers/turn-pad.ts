@@ -1,13 +1,16 @@
 /** Original synthetic slider control over the existing strip-probe art. No delivered asset is modified. */
 import {readFile,writeFile,mkdir,copyFile} from 'node:fs/promises';
 import {join} from 'node:path';
-export async function turnModel(options:{yaw?:[number,number];body?:string;noDials?:boolean}={}){
+export async function turnModel(options:{yaw?:[number,number];body?:string;noDials?:boolean;keyedYaw?:boolean}={}){
  const model=JSON.parse(await readFile(new URL('../fixtures/strip-probe/build/skeleton.model.json',import.meta.url),'utf8'));
  model.stage={x:-50,y:-32,width:100,height:64};
  const body=options.body??'body_yaw_dial',yaw=options.yaw??[-20,40];
  model.animations=[{name:'inspect',duration:1,bones:[{name:'root',timelines:[{name:'rotate',keys:[{time:0,value:0},{time:1,value:0}]}]}],slots:[],constraints:{ik:[],transform:[],path:[],physics:[],slider:[]},attachments:[],drawOrder:[],events:[]}];
  if(!options.noDials){
   for(const name of ['yaw_dial','pitch_dial',body])model.bones.push({name,parent:'root'});
+  if(options.keyedYaw)model.animations[0].bones.push({name:'yaw_dial',timelines:[{name:'rotate',keys:[
+   {time:0,value:8},{time:.25,value:-8},{time:.5,value:4},{time:1,value:8},
+  ]}]});
   for(const [bone,animation,min,max,target,property,factor] of [['yaw_dial','turn',...yaw,'rigid','translatex',.6],['pitch_dial','tilt',-10,10,'rigid','translatey',.8],[body,'body_turn',-6,12,'mesh','rotate',2.5]] as const){
    model.constraints.push({kind:'slider',name:bone,declaredIn:'rig',animation,bone,property:'rotate',local:true,additive:true,from:min,to:0,scale:1/(max-min),max});
    model.animations.push({name:animation,duration:1,bones:[{name:target,timelines:[{name:property,keys:[{time:0,value:min*factor},{time:1,value:max*factor}]}]}],slots:[],constraints:{ik:[],transform:[],path:[],physics:[],slider:[]},attachments:[],drawOrder:[],events:[]});

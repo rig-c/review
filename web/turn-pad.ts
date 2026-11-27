@@ -1,5 +1,5 @@
 import {TurnState,type TurnDial,type TurnSnapshot,type TurnAxis,pointerPosition,turnDialWidthCh,formatTurnValue} from '../src/turn-pad.ts';
-export interface TurnPad {state:TurnState;snapshot():TurnSnapshot;restore(value:unknown,redraw?:boolean):void;dispose():void}
+export interface TurnPad {state:TurnState;snapshot():TurnSnapshot|undefined;restore(value:unknown,redraw?:boolean):void;dispose():void}
 /** One pad owns the shared values. It never touches the model document or writes animation keys. */
 export function bindTurnPad(options:{host:HTMLElement;stages:HTMLElement[];dials:readonly TurnDial[];draw:(state:TurnState)=>void;save:()=>void;blocked?:()=>boolean;error:(text:string)=>void}):TurnPad|null {
  const {host,stages,dials}=options;if(!dials.length)return null;
@@ -17,10 +17,23 @@ export function bindTurnPad(options:{host:HTMLElement;stages:HTMLElement[];dials
  function commit():void {options.draw(state);render();if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(options.save,150);}
  hold.onclick=()=>{state.hold(!state.held);commit();};reset.onclick=()=>{state.reset();commit();};
  smooth.onchange=()=>{state.smoothing=smooth.checked?Number(omega.value)||20:0;commit();};omega.onchange=()=>{const v=Number(omega.value);if(!Number.isFinite(v)||v<1||v>100){options.error('TURN_SMOOTHING_RANGE: use 1…100 s⁻¹');omega.value=String(state.smoothing||20);return;}state.smoothing=v;commit();};
- const move=(event:PointerEvent)=>{if(event.buttons||options.blocked?.()||state.held)return;const stage=event.currentTarget as HTMLElement;const rect=stage.getBoundingClientRect();const [x,y]=pointerPosition(event.clientX,event.clientY,{left:rect.left,top:rect.top,width:Math.max(1,rect.width-1),height:Math.max(1,rect.height-1)});state.pointer(x,y);if(state.smoothing===0){if(state.step(0))commit();else render();}else render();};
- for(const stage of stages)stage.addEventListener('pointermove',move);
+ const move=(event:PointerEvent)=>{if(event.buttons||options.blocked?.()||state.held)return;const stage=event.currentTarget as HTMLElement;const rect=stage.getBoundingClientRect();const [x,y]=pointerPosition(event.clientX,event.clientY,{left:rect.left,top:rect.top,width:Math.max(1,rect.width-1),height:Math.max(1,rect.height-1)});const entered=state.pointer(x,y);if((state.smoothing===0&&state.step(0))||entered)commit();else render();};
+ const leave=()=>{if(state.leave())commit();};
+ for(const stage of stages){stage.addEventListener('pointermove',move);stage.addEventListener('pointerleave',leave);}
  let disposed=false,last=0,raf=0;
  const step=(now:number)=>{if(disposed)return;if(!document.hidden&&!options.blocked?.()&&state.step(last?Math.min((now-last)/1000,.1):0))commit();last=now;raf=requestAnimationFrame(step);};
  host.append(panel);commit();raf=requestAnimationFrame(step);
- return {state,snapshot:()=>state.snapshot(),restore(value,redraw=true){state.restore(value);if(redraw)commit();else{render();options.save();}},dispose(){disposed=true;if(saveTimer)clearTimeout(saveTimer);cancelAnimationFrame(raf);for(const stage of stages)stage.removeEventListener('pointermove',move);panel.remove();}};
+ return {
+  state,
+  snapshot:()=>state.engaged?state.snapshot():undefined,
+  restore(value,redraw=true){
+   if(value===undefined)state.clear();else state.restore(value);
+   if(redraw)commit();else{render();options.save();}
+  },
+  dispose(){
+   disposed=true;if(saveTimer)clearTimeout(saveTimer);cancelAnimationFrame(raf);
+   for(const stage of stages){stage.removeEventListener('pointermove',move);stage.removeEventListener('pointerleave',leave);}
+   panel.remove();
+  },
+ };
 }
