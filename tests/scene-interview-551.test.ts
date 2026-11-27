@@ -258,7 +258,7 @@ test('history SYNTHETIC shared set does not deduplicate away a later stale recor
  });const r=opened(root);expect(diagnostics(r)).toContain('INTERVIEW_OPTIONS_STALE');expect(diagnostics(r)).toContain('second historical answer');
 });
 
-// #555 carries scene history, legacy warnings, and historical diagnostics through standing publications while active stale sets still refuse.
+// Standing packages retain scene history and its diagnostics. Pending context is evaluated by the standalone reader.
 for (const kind of ['historical', 'legacy', 'diagnostics'] as const) test(`standing ${kind} actual prepareJobSource and JobSession carry interview diagnostics and retained sets (#555)`, async () => {
  const {setSystemTime} = await import('bun:test');
  const root = fixture(kind === 'historical' ? 'writer-history' : kind === 'diagnostics' ? 'writer-chain' : 'writer-current');
@@ -327,12 +327,15 @@ for (const kind of ['historical', 'legacy', 'diagnostics'] as const) test(`stand
     at: iso(NOW),
     original: null,
    });
-   expect(interview!.diagnostics).toEqual([{
+   expect(inspected.interview.diagnostics).toEqual([{
     code: 'INTERVIEW_OPTIONS_SCENE_LEGACY',
     severity: 'warning',
     record: 'interview.post.items[2].pending_options',
     at: iso(NOW),
    }]);
+   expect(interview!.diagnostics).toEqual([]);
+   const pendingScenePath = active(root).set.context.scene.path;
+   expect(prepared.seals.some(seal => seal.path === pendingScenePath)).toBe(false);
   } else {
    expect(interview!.diagnostics.length).toBeGreaterThan(0);
    expect(interview!.diagnostics.every(d => d.code === 'INTERVIEW_OPTIONS_STALE' && d.severity === 'error')).toBe(true);
@@ -376,8 +379,12 @@ for (const kind of ['historical', 'legacy', 'diagnostics'] as const) test(`stand
     const revBody = await revRes!.json();
     expect(revBody.capabilities.interview).toBe(true);
     const intRes = await front.fetch(new Request(origin + display.value.routes.apiBase + 'interview'));
+    expect(intRes?.status).toBe(200);
     const intBody = await intRes!.json();
     expect(intBody.interview).toEqual(interview);
+    expect(intBody.questions.map(({set}: {set: unknown}) => set)).toEqual(
+     inspected.questions.map(({set}) => Object.fromEntries(Object.entries(set).filter(([key]) => key !== 'context'))),
+    );
    }
   } finally {
    session.dispose();
@@ -387,25 +394,23 @@ for (const kind of ['historical', 'legacy', 'diagnostics'] as const) test(`stand
  }
 });
 
-test('standing active stale scene option set still refuses before publication or snapshot (#555)', async () => {
+test('standing package with stale pending scene context reaches the publication reader', async () => {
  const root = fixture('writer-later-scene');
  const before = sealTree(root);
+ stale(root);
  const request = {result: {path: 'derived/review/v1/out', selector: null}, freeze: {kind: 'producer-held', holdId: 'synthetic-test-held',
   record: {path: 'project.json', sha256: digest(readFileSync(join(root, 'project.json')))}}} as JobPublishRequest;
  const state = join(runtime, 'standing-active-stale');
  mkdirSync(state, {recursive: true}); roots.push(state);
  writeFileSync(join(state, 'existing-state.txt'), 'retained state');
  const stateBefore = sealTree(state);
- let publicationReads = 0, snapshots = 0, error: unknown;
- try {
-  await prepareJobSource({root: captureJobRoot(root), stateRoot: state, fingerprint: 'f'.repeat(64), request,
-   readPublished: async () => {publicationReads++; throw new Error('Synthetic publication reader must not be reached');},
-   afterSnapshot: () => {snapshots++;},
-  });
- } catch (caught) {error = caught;}
- expect((error as {code: string}).code).toBe('JOB_RECORD_INCOMPLETE');
- expect((error as Error).message).toBe('JOB_RECORD_INCOMPLETE');
- expect(publicationReads).toBe(0); expect(snapshots).toBe(0);
+ const sentinel = new Error('Synthetic publication reader reached for stale pending scene');
+ let publicationReads = 0, snapshots = 0;
+ await expect(prepareJobSource({root: captureJobRoot(root), stateRoot: state, fingerprint: 'f'.repeat(64), request,
+  readPublished: async () => {publicationReads++; throw sentinel;},
+  afterSnapshot: () => {snapshots++;},
+ })).rejects.toBe(sentinel);
+ expect(publicationReads).toBe(1); expect(snapshots).toBe(0);
  expect(sealTree(root)).toEqual(before); expect(sealTree(state)).toEqual(stateBefore);
  expect(readdirSync(state)).toEqual(['existing-state.txt']);
 });

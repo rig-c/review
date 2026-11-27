@@ -19,6 +19,11 @@ export interface InterviewSet {
   id: string; question: string; stage: string; drafted_by: string; drafted_at: string;
   asks: Ask[]; assembly: {rule: 'single' | 'concat' | 'merge'}; constraints?: Constraint[];
 }
+export function interviewSetWithoutContext(set: InterviewSet): InterviewSet {
+  const projected: InterviewSet & {context?: unknown} = {...set};
+  delete projected.context;
+  return projected;
+}
 interface Image {ref: SetRef; name: string; type: string}
 export interface HistoricalInterview {
   question: string; verbatim: string; by?: string; at?: string;
@@ -276,7 +281,7 @@ function observeRetainedSet(root: string, ref: SetRef): SetRef | null {
   }
 }
 
-export function readProject(root: string, now = Date.now()) {
+export function readProject(root: string, now = Date.now(), mode: 'standalone' | 'package' = 'standalone') {
   if (!Number.isFinite(now)) return invalid('Evaluation instant must be finite');
   const evaluatedAt = new Date(now).toISOString();
   try {
@@ -399,13 +404,16 @@ export function readProject(root: string, now = Date.now()) {
           }
           continue;
         }
-        if (editable && (set.stage === 'interview' || set.stage === 'rigging-interview') &&
-            (object(interview.order).spec !== 'rig-create/stage-order@2' || !Number.isFinite(date(object(interview.order).choices_adopted_at)))) {
-          throw new Error('INTERVIEW_CHOICE_REQUIRED: Adopt create choices before selecting');
+        const packagePending = editable && mode === 'package';
+        // Adoption and approval determine whether an interview can be answered.
+        if (editable && !packagePending) {
+          if ((set.stage === 'interview' || set.stage === 'rigging-interview') &&
+              (object(interview.order).spec !== 'rig-create/stage-order@2' || !Number.isFinite(date(object(interview.order).choices_adopted_at)))) {
+            throw new Error('INTERVIEW_CHOICE_REQUIRED: Adopt create choices before selecting');
+          }
+          if (approval(project, set.stage === 'interview' ? 'plan-approved' : set.stage, now)) return invalid('Question approval is still live');
         }
-        if (editable && approval(project, set.stage === 'interview' ? 'plan-approved' : set.stage, now)) return invalid('Question approval is still live');
-        const sceneKind = object(raw.context).kind === 'scene';
-        if (!editable && sceneKind) sceneAnswers++;
+        if (!editable && object(raw.context).kind === 'scene') sceneAnswers++;
         const observedSet: SetRef = { path: ref.path, sha256: ref.sha256 };
         const evaluate = (at: number, record: string, recordAt: string | null) => {
           try {
@@ -445,7 +453,8 @@ export function readProject(root: string, now = Date.now()) {
           at: recordAt,
           original: editable ? null : cloneJsonObject(entry.answer!),
         });
-        const context = evaluate(editable ? now : date(entry.answer?.at), entry.record, recordAt);
+        const context = packagePending ? {images: [], hasParts: false} :
+          evaluate(editable ? now : date(entry.answer?.at), entry.record, recordAt);
         const rawDecision = entry.answer?.agent_decision;
         if (!editable && rawDecision !== null && typeof rawDecision === 'object' && !Array.isArray(rawDecision)) {
           const decision = rawDecision as RecordData;
@@ -476,7 +485,8 @@ export function readProject(root: string, now = Date.now()) {
             });
           }
         }
-        questions.push({ref, set, editable, answer: entry.answer, ...context});
+        questions.push({ref, set: packagePending ? interviewSetWithoutContext(set) : set,
+          editable, answer: entry.answer, ...context});
         seen.set(ref.sha256, ref.path);
       }
     }

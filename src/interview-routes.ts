@@ -1,6 +1,6 @@
 import { lstatSync } from 'node:fs';
 import { accessGate } from './open-protocol.ts';
-import { boundBytes, invalid, object, readProject } from './interview-project.ts';
+import { boundBytes, interviewSetWithoutContext, invalid, object, readProject } from './interview-project.ts';
 import { outputDirectory, picksLimit, readPicks, savePicks } from './interview-picks.ts';
 
 export const interviewHeaders = {
@@ -71,7 +71,7 @@ export function interviewRoutes(root: string, output: string, capability: string
         const validated = await current();
         const dir = destination();
         return json({...(joined && (joined.version!==undefined||joined.draftId!==undefined) ? {binding:{projectHash:opened.hash, sourceHash:joined.sourceHash,  ...(joined.draftId===undefined?{version:joined.version}:{draftId:joined.draftId})}} : {}), historical:validated.historical, diagnostics:validated.diagnostics, questions:validated.questions.map(question => ({
-          ...question, saved:question.editable ? readPicks(dir, question) : null,
+          ...question, set:interviewSetWithoutContext(question.set), saved:question.editable ? readPicks(dir, question) : null,
           images:question.images.map(({name}, index) => ({name, url:'/api/interview/image/' + question.ref.sha256 + '/' + index})),
         }))});
       }

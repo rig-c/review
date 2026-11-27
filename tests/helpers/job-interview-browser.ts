@@ -215,12 +215,6 @@ export async function verifyInterviewDiagnosticsFixtureDryRun(): Promise<void> {
       publication.interview.diagnostics,
       [
         {
-          record: 'interview.post.items[2].pending_options',
-          at: publication.interview.evaluatedAt,
-          code: 'INTERVIEW_OPTIONS_SCENE_LEGACY',
-          severity: 'warning',
-        },
-        {
           record: 'interview.post.items[2].history[0]',
           at: STALE_ANSWER_AT,
           code: 'INTERVIEW_OPTIONS_STALE',
@@ -235,7 +229,7 @@ export async function verifyInterviewDiagnosticsFixtureDryRun(): Promise<void> {
       ],
     );
 
-    // #1230: the current scene question is published and shown, but a fresh picks ask refuses by name.
+    // #1230: the current scene question remains in the publication and a fresh picks ask refuses by name.
     await assert.rejects(fixture.ask(publication, {
       kind: 'interview-picks',
       questionId: probe.editableSceneQuestion.set.question,
