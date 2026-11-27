@@ -135,7 +135,11 @@ export class PartExplorer extends PartInspection {
  select(value:ControlPart|null):void {const previous=this.value();super.select(value);this.renderSelection();this.renderDetail();this.changed(previous);}
  setVisibleSide(side:ControlPart['side']|null):void {if(this.visibleSide===side)return;this.visibleSide=side;this.renderList();this.renderDetail();}
  setStatusHint(text:string|null):void {if(this.statusHint===text)return;this.statusHint=text;this.detailKey='';this.renderDetail();}
- private shownSides():[ControlPart['side'],SideState][] {return [...this.sides].filter(([side])=>this.visibleSide===null||side===this.visibleSide);}
+ /** Compare lists A before B regardless of which catalog registers first. */
+ private shownSides():[ControlPart['side'],SideState][] {
+  return [...this.sides].filter(([side])=>this.visibleSide===null||side===this.visibleSide)
+   .sort(([left],[right])=>left<right?-1:left>right?1:0);
+ }
  /** Runs on every drawn frame. The held copy and Solo draw are per frame; the list is rewritten only when what it shows changed. */
  present(side:ControlPart['side']):void {const state=this.sides.get(side);if(!state)return;let held;try{held=this.capture(state);}catch(error){this.refuseIdentity(side,state,error);}if(held)this.commit(side,state,held);if(this.viewKey()!==this.selectionKey){this.reorder();this.renderSelection();}this.renderDetail();}
  /** Everything the rows and Solo control display: selection, per-side drawn slots in order, and identity. Generation is excluded. */
