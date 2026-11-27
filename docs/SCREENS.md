@@ -22,8 +22,10 @@ merge (R0). This documentation update adds no UI or public contract.
   owner, language and capability URLs. Routing does not widen grants or
   change API contracts. See [public stability](STABILITY.md).
 - **E3** Record publications are hosted over the existing inspection screen
-  (#754). Their checkpoint, signoff and interview forms sit in the right communication
-  panel (#1041).
+  (#754), with Comments in the right communication panel (#1041) and
+  **Send comments** in `#workspace-act-row` (#1239, #1247). Until 5.0.0, record
+  checkpoint, signoff and interview answer forms also sat in the right
+  communication panel (removed in #1246, #1251 and #1252).
   A record without a picture does not manufacture a model or package.
 - **Shipped:** #756 and hub/owner single-entry adoption F (#734) shipped in
   [2.13.0](../CHANGELOG.md#2130). The remaining job window and hub were removed in
@@ -157,9 +159,12 @@ act bar, not another mode switch.
 - It is collapsed while nothing is pending; **Comment · C** and a pending ask open
   it without changing the bottom panel. Below the stage minimum it is a
   right-side drawer, non-modal for a question.
-- Record asks (checkpoint, signoff, plan approval) sit in their own section
-  between the question and Comments (#1041). The act row's **Review…** or
-  **Approve…** brings it into view; the act fields are unchanged.
+- **Historical (until 5.0.0):** record asks (checkpoint, signoff, plan approval)
+  sat in their own section between the question and Comments (#1041), opened by
+  the act row's **Review…** or **Approve…** buttons (signoff and **Approve…**
+  removed in #1246, interview answer forms in #1251, checkpoint Pass/Fail in
+  #1252). Comments and **Send comments** remain the live feedback surface
+  (#1247, #1314).
 - Use the existing left Checkpoints list and main-view Difference for inspection.
 
 **Historical:** the old parts sidebar, producer flags and mesh-numbers panel
@@ -172,10 +177,13 @@ instrument is not the removed parts numbers panel.
 - **MUST** keep comments as the only feedback-input feature (R2), allowing any
   number of general or pointed comments per submission. Preserve source-bound
   capture, pins and crops in `stage-comments.ts` and `parts-comment-crops.ts`.
-- **Shipped:** rig feedback lives in Comments with its existing frame range,
-  category, typed target, correction request, provenance, downloads and warnings.
-  Parts verdicts are comments-based (#751): no issues approves; issues request
-  changes. The act remains beside the content row, not inside a separate page.
+- **Shipped:** rig feedback lives in Comments with its pinned-comment frame range,
+  category, typed target (#1257), correction request, provenance, downloads and warnings,
+  and **Send comments** in `#workspace-act-row` sends live `rig-review/act@10`
+  comments or saves standalone local sends (#1239, #1314). Until 5.0.0 (#1314,
+  #1321), parts submitted a comments-based verdict (#751: no issues approved;
+  issues requested changes). The act row remains above the workspace, not inside
+  a separate page.
 - **Remaining:** record forms still retain their existing memo inputs. C (#715)
   owns their move to Comments; the legacy job-window owner surfaces are removed
   by #756. Do not claim either cleanup has shipped.
@@ -196,16 +204,22 @@ inline Other text and per-question notes through the existing answer contract.
 
 ### C10 Act bar
 
-- **Shipped:** `mountActBar` places the pending ask headline,
-  decision/submit controls and save state in the shared `#workspace-act-row`
-  directly beneath the top bar as their single home (#845, #1040, superseding the #741 bottom-row placement;
-  the row hides when no ask or early refusal is shown). The act
-  follows the subject, not the chosen mode. A tab change never submits it.
-- Parts submit the comments-based verdict; rig review retains its decision and
-  submit action. Failed saves and drafts remain explicit.
-- **Shipped:** record checkpoint, signoff and interview asks open the
-  existing forms in the right communication panel (#1041), through the existing
-  act button. No-picture records use an explicitly empty inspection workspace.
+- **Shipped:** `mountActBar` places the headline, **Send comments** control and
+  save state in the shared `#workspace-act-row` directly beneath the top bar as
+  their single home (#845, #1040, #1239, #1314, superseding the #741 bottom-row
+  placement; the row hides when early refusal or closed state suppresses it). The
+  act row follows the subject, not the chosen mode. A tab change never submits it.
+- **Send comments** submits unsent comments (and pending Edit Mesh or chest
+  landmark carriers on a live model publication, #1243) as `rig-review/act@10`
+  in a live job (#1239, #1247) or saves `rig-review/local-comments@1` on a
+  standalone package or parts folder (#1314). Until 5.0.0 (#1314, #1321), parts
+  submitted a comments-based verdict and rig review retained a verdict decision
+  and submit action. Failed saves and drafts remain explicit.
+- **Historical (until 5.0.0):** record checkpoint, signoff and interview asks
+  opened forms in the right communication panel (#754, #1041; removed in #1246,
+  #1251 and #1252). Records still use the shared inspection screen — including
+  an explicitly empty workspace when no picture is supplied — and send comments
+  from `#workspace-act-row` (#1247).
 - **Planned:** C (#715) completes record-modal feedback cleanup; #756 removes
   the remaining job-window owner surfaces. Hosting a form on this screen is not
   proof those follow-ups are complete.
@@ -237,9 +251,9 @@ These are subjects and hosts of the existing tool, not designs for new screens.
 | Subject or host | State at `22d824f` | View and decision home |
 | --- | --- | --- |
 | Rig package, including hosted rig | Shipped | Header Setup/Animate; shared rig/reference view; mode blocks + Comments; act bar |
-| Parts package, including hosted parts | Shipped (#745, #749, #751) | Same Setup workspace and parts list; original follows selection; comments verdict |
+| Parts package, including hosted parts | Shipped (#745, #749; comment-only #1314, #1321, superseding #751 comments verdict) | Same Setup workspace and parts list; original follows selection; **Send comments** in act row |
 | Two builds and a reference | Shipped, unchanged | Header Compare; existing A/B host and controls; card D PARKED |
-| Record checkpoint, signoff, interview | Shipped hosting (#754) | Existing screen with the forms in the right panel; no model fabricated for a record without a picture |
+| Record publications (plan, option-set, checkpoint evidence) | Shipped hosting (#754; checkpoint, signoff and interview forms removed before 5.0.0 in #1246, #1251, #1252) | Existing screen with Comments in the right panel and **Send comments** in the act row; no model fabricated for a record without a picture |
 | Remaining interview-modal work | Planned B (#722) | Extend existing interview component |
 | Remaining record-modal feedback cleanup | Planned C (#715) | Move existing memo feedback to Comments without changing contracts |
 | Legacy job-window owner surfaces | #756 shipped in [2.13.0](../CHANGELOG.md#2130); remainder removed in [4.0.0](../CHANGELOG.md#400) | Existing shared inspection and record-dialog homes |

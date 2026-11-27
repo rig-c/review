@@ -33,7 +33,8 @@ and `--port <n>`. The foreground server uses a 3-second grace period after the l
 The left parts list controls selection and visibility. Use the shared viewport for
 inspection and the secondary toolbar for Images, Mesh edges and painting Overlay.
 
-## The sign-off
+<a id="the-sign-off"></a>
+## Sending comments
 
 Use **Send comments** to save general or pointed comments from a standalone
 parts view. Agents read the saves through `rig-review parts <dir> --format json|issue`.
