@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import { cropWorldMapping } from '../src/chest-regions.ts';
+import { tuningRows } from '../src/physics-tuning.ts';
 import { readingSeekTime } from '../src/readings.ts';
 import { chestField } from '../web/chest-editor.ts';
 import { chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from '../web/chest-regions-tool.ts';
@@ -309,4 +310,70 @@ test('#1304: Compare populateChestBones keeps selected and disabled-seeded row b
     if (prevInput) Object.defineProperty(globalThis, 'HTMLInputElement', prevInput);
     else Reflect.deleteProperty(globalThis, 'HTMLInputElement');
   }
+});
+
+test('#1305: Compare refreshPhysics tells the Idle panel why a side without a producer handoff is unavailable', () => {
+  const physicsCode = transpiler.transformSync(
+    sliceBetween(comparePickedSource, '  function refreshPhysics()', '  function renderHandoff('),
+  );
+  const makeFns = new Function('scope', `with (scope) { ${physicsCode}; return { refreshPhysics, refreshIdle }; }`);
+
+  let state: any;
+  const physicsLoads: unknown[] = [];
+  const idleLoads: Array<{ idle: unknown; reason: string | null }> = [];
+  const texts = new Map<string, string>();
+
+  const { refreshPhysics } = makeFns({
+    physicsPanel: { load: (rows: unknown) => physicsLoads.push(rows) },
+    idlePanel: {
+      load: (idle: unknown, reason: string | null) => idleLoads.push({ idle, reason }),
+      model: () => {},
+    },
+    currentState: () => state,
+    text: (id: string, val: string) => texts.set(id, val),
+    tuningRows,
+    boneSetup: () => ({ names: [], get: () => undefined }),
+  }) as { refreshPhysics: () => void };
+
+  // Side A has a valid handoff and idle tracks.
+  const idleTrackStatus = { source: { available: true, source: { duration: 2, tracks: [] } }, keying: { keys: 'direct', source: 'motion' } };
+  state = {
+    inspectedDocument: { bones: [{ name: 'root' }, { name: 'mesh', parent: 'root' }] },
+    inspectedDocumentReason: null,
+    rebuildStatus: {
+      available: true,
+      inputs: { config: 'rig/config.json', parts: 'rig/out', rig: 'rig/out/rig', configHash: 'h' },
+      producer: { package: '@rig-c/parts', version: '1.42.0' },
+      constraints: [],
+      idle: idleTrackStatus,
+      reason: null,
+    },
+  };
+  refreshPhysics();
+  expect(idleLoads).toEqual([{ idle: idleTrackStatus, reason: null }]);
+
+  // Switching to Side B without a producer handoff clears Side A's tracks and passes Side B's refusal reason.
+  const missingConfigReason = 'MODELING_INPUT_UNAVAILABLE: config.json — looked at config.json, rig/config.json';
+  state = {
+    inspectedDocument: { bones: [{ name: 'root' }, { name: 'mesh', parent: 'root' }] },
+    inspectedDocumentReason: null,
+    rebuildStatus: {
+      available: false,
+      inputs: null,
+      producer: null,
+      constraints: null,
+      idle: null,
+      reason: missingConfigReason,
+    },
+  };
+  refreshPhysics();
+  expect(idleLoads.at(-1)).toEqual({ idle: null, reason: missingConfigReason });
+
+  // Fallback when reason is null on a handoff-less status uses the existing IDLE_TRACKS_UNAVAILABLE refusal.
+  state = {
+    ...state,
+    rebuildStatus: { ...state.rebuildStatus, reason: null },
+  };
+  refreshPhysics();
+  expect(idleLoads.at(-1)).toEqual({ idle: null, reason: 'IDLE_TRACKS_UNAVAILABLE: no producer handoff' });
 });

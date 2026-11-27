@@ -709,11 +709,12 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   function refreshPhysics(): void {
     if (!physicsPanel) return;
     const state = currentState();
-    if (state.inspectedDocumentReason) { physicsPanel.load({ available: false, reason: state.inspectedDocumentReason }, []); return; }
+    if (state.inspectedDocumentReason) { physicsPanel.load({ available: false, reason: state.inspectedDocumentReason }, []); refreshIdle(); return; }
     if (!state.inspectedDocument) return;
     if (!state.rebuildStatus) { text('physics-panel-state', 'Reading the producer handoff…'); text('idle-tracks-state', 'Reading the producer handoff…'); return; }
     if (!state.rebuildStatus.inputs || !state.rebuildStatus.producer) {
       physicsPanel.load({ available: false, reason: state.rebuildStatus.reason ?? 'PHYSICS_TUNING_UNAVAILABLE: no producer handoff' }, []);
+      refreshIdle();
       return;
     }
     const bones = (state.inspectedDocument as { bones?: unknown }).bones;
