@@ -82,7 +82,7 @@ interface PartsPose extends CommentUiPose {item:Item;sourceHash:string;view:Part
 export function bindPartsSubject(host:{
  data:PartsSubjectData;canvas:HTMLCanvasElement;referenceCanvas:HTMLCanvasElement;viewport:ViewportController;
  el:ViewportProvider['el'];toolbar:HTMLElement;commentsHost:HTMLElement;openComments?:()=>void;hasPicture?:()=>boolean;issues:PartsIssue[];recordComments?:CommentRow[];
- generalComments?:{rows:CommentRow[];available:()=>boolean};submitting?:()=>boolean;
+ generalComments?:{rows:CommentRow[]};submitting?:()=>boolean;
  request:(path:string,init?:RequestInit)=>Promise<Response>;base:string;paintingPath:string;
  mesh:()=>boolean;restoreMesh:(on:boolean)=>void;images:()=>boolean;changed:()=>void|Promise<void>;selectionChanged:()=>void;locked:(id:string)=>boolean;refusal:()=>string|null;drawn:(input:{state:'loaded'}|{state:'failed';reason:string})=>void;message:ViewportProvider['message'];
 }) {

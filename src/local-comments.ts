@@ -49,7 +49,8 @@ const partsSource = (p: PartsViewPackage): LocalCommentSource =>
   ({kind: 'parts', mode: p.mode, sourceHash: verdictSource(p).sha256});
 const packageFile = (source: ReturnType<typeof packageSource>, stateDir?: string) =>
   sessionFile({...source, manifest: source}, stateDir).replace(/\.json$/, '.comments.json');
-const partsFile = (p: PartsViewPackage) => join(dirname(p.verdictPath), 'review-comments.json');
+export const partsCommentsPath = (p: Pick<PartsViewPackage, 'verdictPath'>) => join(dirname(p.verdictPath), 'review-comments.json');
+const partsFile = partsCommentsPath;
 
 function parseSource(raw: unknown): LocalCommentSource {
   const value = raw as Partial<LocalCommentSource> | null;

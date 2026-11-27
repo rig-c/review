@@ -39,7 +39,7 @@ interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=Commen
  bookmark:()=>unknown;restore:(bookmark:unknown,timeOnly?:boolean,row?:Row)=>Promise<void>;
  feedback:()=>Row[];locked:(id:string)=>boolean;
  add:(feedback:Row,side?:'a'|'b')=>void;changed:()=>void|Promise<void>;draftChanged?:()=>void;error:(message:string)=>void;
- general?:{create:(summary:string)=>Row;matches:(row:Row)=>boolean;rows?:Row[];available?:()=>boolean;refusal?:()=>string|null};
+ general?:{create:(summary:string)=>Row;matches:(row:Row)=>boolean;rows?:Row[];refusal?:()=>string|null};
  answeredDirectionFeedback?:readonly JobAnsweredDirectionFeedback[];
  rigAnchor?:RigAnchor;
  renderRow?:(row:Row,element:HTMLElement)=>void;
@@ -235,7 +235,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const assertCapture=()=>{const reason=updateRefusal();if(reason){cancel();setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
  const generalRefusal=()=>host.general?.refusal?.()??null;
  const assertWritable=(reason:string|null)=>{if(reason){setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
- const assertEdit=(general=false)=>assertWritable(general?(generalRefusal()??(host.general?.available?.()===false?t('JOB_ACT_NOTHING_TO_SUBMIT'):null)):updateRefusal());
+ const assertEdit=(general=false)=>assertWritable(general?generalRefusal():updateRefusal());
  let jumpGeneration = 0;
  let hiddenPanes: {pane: HTMLElement; visibility: string}[] | null = null;
  const jump = async (row: Row): Promise<boolean> => {
@@ -302,7 +302,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    Object.assign(note.style,{display:'block',marginTop:'4px',maxWidth:'100%',whiteSpace:inline?'normal':'nowrap',overflow:'hidden',textOverflow:'ellipsis'});
    append(note);
   }
-  if(host.general&&host.general.available?.()!==false){
+  if(host.general){
    const add=document.createElement('button');add.type='button';add.textContent=t('Add general comment');add.dataset.commentGeneral='';
    add.onclick=()=>openComposer(null,{x:0,y:0,width:0,height:0});
    append(add);
@@ -351,14 +351,13 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const openComposer=(view:StageComment['viewport']|null,screen:MarkRegion,existing?:Row,placementMode=view?poseFor(view)?.mode:undefined)=>{
   if(view&&!available(view))return;
   const general=view===null;
-  const generalAvailable=!general||host.general?.available?.()!==false;
-  if(general&&(!host.general||(!existing&&!generalAvailable)))return;
+  if(general&&!host.general)return;
   if(!existing){try{general?assertEdit(true):assertCapture();}catch{return;}}
   const currentMode=view?poseFor(view)?.mode:undefined;
   if(!general&&(!placementMode||currentMode&&currentMode!==placementMode)){cancel();return;}
   const locked=!!existing&&host.locked(existing.id),initialRefusal=existing?(general?generalRefusal():updateRefusal()):null;
   if(existing&&!initialRefusal&&host.blocked()){host.error(t('COMMENT_BUSY: wait for inspection'));return;}
-  geometryEdit=null;composer?.remove();composerReadOnly=locked||!!initialRefusal||!generalAvailable;composerGeneral=general;draftMark=view?{view,mode:placementMode!,screen}:null;const generation=interaction;const pane=view?host.viewports[view]!:list,form=composer=document.createElement('form');form.className='stage-comment-composer stage-comment-ui';form.setAttribute('aria-label',t('Comment composer'));if(general)form.style.position='relative';
+  geometryEdit=null;composer?.remove();composerReadOnly=locked||!!initialRefusal;composerGeneral=general;draftMark=view?{view,mode:placementMode!,screen}:null;const generation=interaction;const pane=view?host.viewports[view]!:list,form=composer=document.createElement('form');form.className='stage-comment-composer stage-comment-ui';form.setAttribute('aria-label',t('Comment composer'));if(general)form.style.position='relative';
   const field=composerField=document.createElement('input');field.type='text';field.maxLength=1000;field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');field.value=existing?.summary??'';field.oninput=()=>host.draftChanged?.();
   if(composerReadOnly){field.readOnly=true;field.setAttribute('aria-readonly','true');}
   const hint=document.createElement('small');hint.textContent=composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels';hint.textContent=t(hint.textContent);const error=document.createElement('p');error.setAttribute('role','alert');form.append(field,hint,error);

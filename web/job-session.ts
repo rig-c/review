@@ -43,7 +43,7 @@ export function jobWindowRefusal(error: unknown, fallback = 'JOB_WINDOW_FAILED')
 export function jobSubmissionRefusal(error: unknown): {code: string; text: string; title: string} {
     const message = error instanceof Error ? error.message : error;
     const code = typeof message === 'string' && /^JOB_[A-Z_]+$/.test(message) ? message : 'JOB_ACT_INVALID';
-    const key = 'job.submit.' + code;
+    const key = code === 'JOB_ACT_NOTHING_TO_SUBMIT' ? 'No comments yet.' : 'job.submit.' + code;
     const reason = Object.hasOwn(enCatalog, key) && Object.hasOwn(koCatalog, key) ? key : 'job.submit.refused';
     const origin = error instanceof Error && typeof error.cause === 'string' ? error.cause : 'client: submission';
     const title = code + ' · ' + origin;

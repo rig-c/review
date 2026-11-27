@@ -179,5 +179,7 @@ test('#748: parts help names the refusal and keeps read-only atlas verdict expor
   expect(result.stderr).toBe('');
   expect(result.stdout).toContain('Atlas-only inputs refuse PARTS_ATLAS_NOT_CARRIED');
   expect(result.stdout).toContain('--format json|issue still reads saved parts or atlas verdicts');
+  expect(result.stdout).toContain('Sent comments are written to review-comments.json beside parts.json; --format json|issue also reads a saved verdict there or at --verdict.');
+  expect(result.stdout).not.toContain('The sign-off is written');
   expect(result.stdout).not.toContain('opens its atlas');
 });

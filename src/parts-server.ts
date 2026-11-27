@@ -83,7 +83,7 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
           finally { commentSaves.delete(sending); }
         }
         if(url.pathname==='/api/parts/comment'&&req.method==='POST'){if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);await assertPartsUnchanged(pkg);return json({comment:await preparePartsComment(pkg,await bodyJson(req))});}
-        if(url.pathname==='/api/parts/export'&&req.method==='GET'){await assertPartsUnchanged(pkg);const saved=await readVerdict(pkg);if(!saved.verdict)return json({error:'PARTS_VERDICT_UNAVAILABLE: save a verdict first'},409);return new Response(exportPartsVerdict(saved.verdict,url.searchParams.get('format')==='issue'?'issue':'json'),{headers:{...headers,'Content-Type':url.searchParams.get('format')==='issue'?'text/markdown':'application/json'}});}
+        if(url.pathname==='/api/parts/export'&&req.method==='GET'){await assertPartsUnchanged(pkg);const saved=await readVerdict(pkg);if(!saved.verdict)return json({error:'PARTS_VERDICT_UNAVAILABLE: no saved verdict to read'},409);return new Response(exportPartsVerdict(saved.verdict,url.searchParams.get('format')==='issue'?'issue':'json'),{headers:{...headers,'Content-Type':url.searchParams.get('format')==='issue'?'text/markdown':'application/json'}});}
         if(url.pathname==='/api/parts/painting'&&req.method==='GET'){if(!pkg.painting)return json({error:'PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting'},404);return serveReference(req,pkg.painting.abs,pkg.painting.sha256,headers);}
         const difference=/^\/api\/parts\/difference\/(\d+)$/.exec(url.pathname);
         if(difference&&req.method==='GET'){

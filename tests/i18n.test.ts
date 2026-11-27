@@ -1,5 +1,5 @@
 import {setSourceText} from '../web/i18n.ts';
-import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup,legacyCompareHeaderContent} from '../src/compare-html.ts';
 import {entryHtml} from '../src/build.ts';
 import {compareWorkspaceMarkup} from '../web/compare-markup.ts';
 import {expect,test} from 'bun:test';
@@ -49,11 +49,15 @@ test('#839 Korean saved readback aliases use the requested conversational ending
 });
 
 test('#788 Setup and historical still refusals retain paired EN/KO messages without exemptions',()=>{
- for(const code of ['JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED'])for(const catalog of [enCatalog,koCatalog]) {
+ for(const code of ['JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED','JOB_STILL_BINDING_MISMATCH','JOB_ACT_NOTHING_TO_SUBMIT','PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.'])for(const catalog of [enCatalog,koCatalog]) {
   expect(catalog[code]).toBeUndefined();
  }
+ for(const code of ['job.submit.JOB_STILL_BINDING_MISMATCH','job.submit.JOB_ACT_NOTHING_TO_SUBMIT'])for(const catalog of [enCatalog,koCatalog]) {
+  expect(catalog[code]).toBeUndefined();
+ }
+ expect(legacyCompareHeaderContent.actions).toContain('<button id="submit" class="primary" disabled>Send comments</button>');
  for(const code of ['JOB_STILL_CAPTURE_FAILED',
-  'JOB_STILL_BINDING_MISMATCH','JOB_STILL_UNAVAILABLE','JOB_STILL_OUTPUT_FAILED']) {
+  'JOB_STILL_UNAVAILABLE','JOB_STILL_OUTPUT_FAILED']) {
   expect(enCatalog[code]).toBeDefined();expect(koCatalog[code]).toBeDefined();
   expect(enCatalog[code]!.startsWith(code+' · ')).toBe(true);
   expect(koCatalog[code]!.startsWith(code+' · ')).toBe(true);
@@ -72,6 +76,10 @@ for(const [language,catalog] of [['en',enCatalog],['ko',koCatalog]] as const){
    const codes=['JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED'];
    expect(codes.map(code=>jobSubmissionRefusal(new Error(code)).text)).toEqual(codes.map(code=>
     catalog['Review was not submitted: {0}']!.replace('{0}',catalog['job.submit.'+code]??code)));
+   expect(jobSubmissionRefusal(new Error('JOB_ACT_NOTHING_TO_SUBMIT'))).toMatchObject({
+    code:'JOB_ACT_NOTHING_TO_SUBMIT',
+    text:catalog['Review was not submitted: {0}']!.replace('{0}',catalog['No comments yet.']!),
+   });
   }finally{setLanguagePreference(previous);}
  });
 }
