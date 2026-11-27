@@ -9,7 +9,6 @@ import {JobError} from './job-store.ts';
 
 const sessionUsage = `Usage: rig-review session open <root>
        rig-review session publish <job-url> --generation <n> --key <id> --result <relative-path> --freeze-hold <id> [--selector <JSON>] [--record <path> --record-hash <sha256>]
-       rig-review session ask <job-url> --generation <n> --key <id> --publication <id> --subject <JSON>
        rig-review session next <job-url> [--after <cursor>] [--wait-ms <n>]
        rig-review session close <job-url> --generation <n> --key <id> --reason <words>
         rig-review session fetch-act <job-url> --act <actId> --consumer-capability-stdin [--still-out <existing-directory>]

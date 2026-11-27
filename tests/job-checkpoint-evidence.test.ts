@@ -170,7 +170,7 @@ test('package checkpoint aliases follow admitted subject mapping on historical a
   const refusedAsk = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
     idempotencyKey: 'alias-ask', publicationId: publication.publicationId,
     subject: {kind: 'checkpoint', checkpointId: 'motion-card', planStepId: 'step-one'}})).json();
-  expect(refusedAsk).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  expect(refusedAsk).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
   const page = await f.display(publication);
   const replayGen = f.session.status().generation;
   const stored = seedHistoricalCheckpointAct(f.session, {...page, expectedGeneration: replayGen, submissionId: 'alias',
@@ -271,9 +271,11 @@ test('record two-phase evidence mismatch refuses and fresh mutations detect meta
   const retained = f.session.retainedSourceV3(publication.publicationId);
   if (!('kind' in retained)) throw new Error('record expected');
   f.setContext({...f.context(), checkpointEvidence: [{...f.packet.packet, recommendationText: 'changed live metadata'}]});
-  await expect(verifyJobRecordSourceFresh({retained, readRecordPublished: f.reader, phase: 'finalize'})).rejects.toThrow('JOB_ACT_SOURCE_STALE');
-  await expect(f.session.execute({...f.request, verb: 'ask', requestId: 'ask', idempotencyKey: 'ask', expectedGeneration: 1,
-    publicationId: publication.publicationId, subject: {kind: 'checkpoint', checkpointId: 'step_layout'}}, new AbortController().signal)).rejects.toThrow();
+  for (const phase of ['ask', 'finalize'] as const) {
+    await expect(verifyJobRecordSourceFresh({retained, readRecordPublished: f.reader, phase,
+      subject: {kind: 'checkpoint', checkpointId: 'step_layout'}})).rejects.toThrow(
+        phase === 'ask' ? 'JOB_SOURCE_MISMATCH' : 'JOB_ACT_SOURCE_STALE');
+  }
 });
 
 // #1229: historical record act@4 checkpoint acts reopen and retry byte-for-byte after live output drift while fresh submissions refuse.
@@ -429,7 +431,7 @@ test('tile and table declarations retain closed required and optional key semant
   expect(() => checkpointEvidenceFields({checkpointEvidence: [{...packet, tiles: [{...packet.tiles[0], frame0: 'duplicate'}]}]}, plan, subjects, files)).toThrow();
 });
 
-test('fresh package ask and finalization refuse corrupted retained evidence while historical act retry stays pinned', async () => {
+test('fresh package finalization refuses corrupted retained evidence while historical act retry stays pinned', async () => {
   const f = await packageFixture(); contextWithEvidence(f);
   const request = await f.publishRequest('publication-retry'), first: any = await (await f.call(request)).json();
   expect(first.ok).toBe(true); const publication = first.value;
@@ -443,10 +445,9 @@ test('fresh package ask and finalization refuse corrupted retained evidence whil
   writeFileSync(join(retained.snapshotRoot, 'evidence/table.json'), '{}');
   expect(await f.session.commitUIAct(submission)).toEqual(act);
   expect((await (await f.call(request)).json()).value).toEqual(publication);
-  // #1229: test corrupted retained evidence on a live review-verdict ask and comment submission.
   const result = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
     idempotencyKey: 'fresh-ask', publicationId: publication.publicationId, subject: {kind: 'review-verdict', stage: 'rig-review'}})).json();
-  expect(result.ok).toBe(false);
+  expect(result).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
   await expect(f.session.commitUIAct({...page, expectedGeneration: f.session.status().generation,
     submissionId: 'fresh-act', kind: 'comments', value: {comments: [{text: 'corrupt'}]}})).rejects.toThrow();
 });

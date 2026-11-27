@@ -297,7 +297,8 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
     if(timing==='first-publication'){
       await screen('just-published',publication);
       const subject=stage==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'} as const:{kind:'review-verdict',stage:'rig-review'} as const;
-      await assert.rejects(fixture.ask(publication,subject),/JOB_ASK_INVALID/);
+      assert.deepEqual(await fixture.requestRemovedAsk(publication,subject),
+        {code:'JOB_REQUEST_INVALID', message:'Unknown job verb: ask'});
       await screen('after-refused-verdict-ask',publication);
       await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
       const pendingFrame=await page.evaluate<{sameNodes:boolean;rects:unknown[];originalRects:unknown[];prompt:string}>(`(()=>({
@@ -445,7 +446,7 @@ async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'option-set',alreadyP
  }finally{await page?.close();await fixture.close();await rm(profile,{recursive:true,force:true});}
 }
 
-/** #1225 owner verification: if a producer still sends a picks ask, the server refuses by name (JOB_ASK_INVALID), an
+/** #1225 owner verification: if a producer still sends a picks ask, the server refuses by name (JOB_REQUEST_INVALID), an
  * option-set record page keeps its picture and comments working without mounting a form, and a package page carrying a
  * legacy pending picks ask shows JOB_ASK_UNSUPPORTED while keeping the rig picture and comments working. */
 async function legacyPicksAskRefusal(lang:'en'|'ko'){
@@ -463,19 +464,21 @@ async function legacyPicksAskRefusal(lang:'en'|'ko'){
     expectedGeneration:recordFixture.session.status().generation,idempotencyKey:'legacy-picks-ask',
     publicationId:recordFixture.display.publication.publicationId,subject:{kind:'interview-picks',questionId:'rig_type',setId:'set_rig_type_01'}}),
   });
-  const askBody=await askRes.json() as {ok:boolean;error?:{code:string}};
-  assert.equal(askRes.status,409);
+  const askBody=await askRes.json() as {ok:boolean;error?:{code:string;message:string}};
+  assert.equal(askRes.status,400);
   assert.equal(askBody.ok,false);
-  assert.equal(askBody.error?.code,'JOB_ASK_INVALID');
+  assert.equal(askBody.error?.code,'JOB_REQUEST_INVALID');
+  assert.equal(askBody.error?.message, 'Unknown job verb: ask');
 
   const publication=await pkgFixture.publish('rig','1225-legacy-picks');
   const frozenPkg=await jobInputHashes(pkgFixture.input.root);
   const pkgAskRes=await pkgFixture.call({schema:JOB_API_SCHEMA,jobId:pkgFixture.host.session.jobId,requestId:'legacy-pkg-picks',verb:'ask',
    expectedGeneration:pkgFixture.host.session.status().generation,idempotencyKey:'legacy-pkg-picks',
    publicationId:publication.publicationId,subject:{kind:'interview-picks',questionId:'rig_type',setId:'set_rig_type_01'}});
-  const pkgAskBody=await pkgAskRes.json() as {ok:boolean;error?:{code:string}};
-  assert.equal(pkgAskRes.status,409);
-  assert.equal(pkgAskBody.error?.code,'JOB_ASK_INVALID');
+  const pkgAskBody=await pkgAskRes.json() as {ok:boolean;error?:{code:string;message:string}};
+  assert.equal(pkgAskRes.status,400);
+  assert.equal(pkgAskBody.error?.code,'JOB_REQUEST_INVALID');
+  assert.equal(pkgAskBody.error?.message, 'Unknown job verb: ask');
   // Seed a pre-refusal pending picks ask on the package publication so the browser exercises the unsupported-ask screen path too.
   const internal=pkgFixture.host.session as unknown as {store:{update(id:string,rev:null,op:(c:{data:any})=>{data:any}):void};event(d:unknown,v:unknown):void;notify():void};
   internal.store.update(pkgFixture.host.session.jobId,null,current=>{

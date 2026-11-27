@@ -73,7 +73,7 @@ function worker(input: ReplayRaceInput) {
 }
 
 type Fixture = Awaited<ReturnType<typeof jobFixture>>;
-type Operation = 'publish' | 'ask' | 'ui';
+type Operation = 'publish' | 'ui';
 
 async function inputFor(f: Fixture, operation: Operation): Promise<ReplayRaceInput> {
   const common = {
@@ -87,14 +87,6 @@ async function inputFor(f: Fixture, operation: Operation): Promise<ReplayRaceInp
     return { ...common, kind: 'agent', request };
   }
   const publication = await f.publish();
-  if (operation === 'ask') {
-    return { ...common, kind: 'agent', request: {
-      ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
-      idempotencyKey: 'same-key-ask', publicationId: publication.publicationId,
-      // The gated caller runs a real ask against a receipt that arrives after its first read.
-      subject: { kind: 'review-verdict', stage: 'rig-review' },
-    } };
-  }
   // #1235: the UI sample act is the comment-only act@10; it answers no ask.
   const page = await f.display(publication);
   return { ...common, kind: 'ui', request: {
@@ -105,11 +97,7 @@ async function inputFor(f: Fixture, operation: Operation): Promise<ReplayRaceInp
 }
 
 async function commit(input: ReplayRaceInput) {
-  // Publish and UI winners still commit through their production paths. The
-  // independent ask winner imports a receipt written before fresh asks retired.
-  const child = worker(input.kind === 'agent' && input.request.verb === 'ask'
-    ? { ...input, gated: false, historicalAsk: true }
-    : { ...input, gated: false });
+  const child = worker({...input, gated: false});
   try {
     const result = await child.result();
     expect(result.result.outcome).toHaveProperty('value');
@@ -152,9 +140,7 @@ function changed(input: ReplayRaceInput, scenario: 'conflict' | 'different-key')
     return { ...input, request: { ...input.request, value: { comments: [{ text: 'changed payload' }] } } };
   }
   if (scenario === 'different-key') return { ...input, request: { ...input.request, idempotencyKey: 'different-agent' } };
-  return input.request.verb === 'publish'
-    ? { ...input, request: { ...input.request, freeze: { ...input.request.freeze, holdId: 'changed-hold' } } }
-    : { ...input, request: { ...input.request, subject: { kind: 'review-verdict', stage: 'direction-review' } } };
+  return {...input, request: {...input.request, freeze: {...input.request.freeze, holdId: 'changed-hold'}}};
 }
 
 function installDecisionReceipt(f: Fixture, fixture: typeof historicalRig | typeof historicalDirection |
@@ -247,7 +233,7 @@ test('#1233 fresh verdict miss refuses without a durable write', async () => {
   } finally {db.close(); await f.close();}
 });
 
-for (const operation of ['publish', 'ask', 'ui'] as const) {
+for (const operation of ['publish', 'ui'] as const) {
   for (const scenario of ['same-key', 'conflict', 'different-key'] as const) {
     test(`${operation} ${scenario} race resolves durable replay before CAS and preserves the committed row`, async () => {
       const f = await jobFixture();
@@ -261,9 +247,10 @@ for (const operation of ['publish', 'ask', 'ui'] as const) {
         expect(sealed.generation).toBe(before.generation + 1);
         expect(sealed.events).toHaveLength(before.events.length + 1);
         expect(Object.keys(sealed.replays)).toHaveLength(Object.keys(before.replays).length + 1);
-        for (const [field, changedOperation] of [['publications', 'publish'], ['asks', 'ask'], ['acts', 'ui']] as const) {
+        for (const [field, changedOperation] of [['publications', 'publish'], ['acts', 'ui']] as const) {
           expect(Object.keys(sealed[field])).toHaveLength(Object.keys(before[field]).length + Number(operation === changedOperation));
         }
+        expect(sealed.asks).toEqual(before.asks);
         expect(committed.result.updateCalls).toBe(1);
         expect(committed.result.readPublishedCalls).toBe(operation === 'publish' ? 1 : 0);
         expect(committed.result.snapshotCalls).toBe(operation === 'publish' ? 1 : 0);
@@ -314,16 +301,6 @@ for (const operation of ['publish', 'ask', 'ui'] as const) {
     } finally { await f.close(); }
   });
 }
-
-test('#1232 an ask reaching the locked row without a historical receipt refuses without committing', async () => {
-  const f = await jobFixture();
-  try {
-    const input = await inputFor(f, 'ask');
-    const result = await race(f, input, 'REVIEW1232_FRESH_ASK', async () => {});
-    expect(result.caller.result.outcome).toEqual({code: 'JOB_ASK_INVALID'});
-    expect(result.after).toEqual(result.before);
-  } finally { await f.close(); }
-});
 
 for (const scenario of ['older-generation', 'future-generation', 'rotated-nonce', 'changed-source',
   'changed-head', 'closed'] as const) {

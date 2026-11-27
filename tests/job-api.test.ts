@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from 'bun:test';
-import { createJobHostPorts, jobBodyLimit, parseJobRequest } from '../src/job-api.ts';
+import { createJobHostPorts, jobBodyLimit, parseJobRequest, parseJobSubject } from '../src/job-api.ts';
 import { JOB_ACT_SCHEMA, JOB_API_SCHEMA, jobActDeliveryLimit, jobRawActMediaType, jobResponseBodyLimit, type JobLegacyAct } from '../src/job-contract.ts';
 import { parseJobCLI, jobCommand } from '../src/job-cli.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
@@ -32,12 +32,16 @@ test('#1104 stored act@2 image-review exports and replays the historical writer 
   const ask = {...askRequest, jobId: f.session.jobId};
   const store = new JobStore<{
     asks: Record<string, unknown>; acts: Record<string, unknown>;
+    generation: number;
+    events: {type: string; cursor: string; generation: number; jobId: string; act: JobLegacyAct}[];
     replays: Record<string, {digest: string; value: unknown}>;
   }>(f.state);
   try {
     store.update(f.session.jobId, null, ({data}) => ({data: {
       ...data,
+      generation: data.generation + 1,
       acts: {...data.acts, [act.actId]: act},
+      events: [...data.events, {type: 'act', cursor: 'historical-image-act', generation: data.generation + 1, jobId: f.session.jobId, act}],
       asks: {...data.asks, [act.askId]: {...askReceipt.value, status: 'answered'}},
       replays: {...data.replays,
         ['agent:' + ask.idempotencyKey]: {digest: requestDigest(ask), value: askReceipt.value},
@@ -47,9 +51,12 @@ test('#1104 stored act@2 image-review exports and replays the historical writer 
     store.close();
   }
 
-  const replayedAsk = await (await f.call({...f.base(), ...ask})).json();
-  expect(replayedAsk.ok).toBe(true);
-  expect(JSON.stringify(replayedAsk.value)).toBe(JSON.stringify(askReceipt.value));
+  const refusedReplay = await f.call({...f.base(), ...ask});
+  expect(refusedReplay.status).toBe(400);
+  expect(await refusedReplay.json()).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
+  const next = await (await f.call({...f.base(), verb: 'next', after: null, waitMs: 0})).json();
+  expect(next.ok).toBe(true);
+  expect(JSON.stringify(next.value.events.find((event: {type: string}) => event.type === 'act')?.act)).toBe(actBytes);
   const replayedAct = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submission));
   if (!replayedAct.ok) throw new Error(replayedAct.error.code);
   expect(JSON.stringify(replayedAct.value)).toBe(actBytes);
@@ -57,8 +64,8 @@ test('#1104 stored act@2 image-review exports and replays the historical writer 
   const publication = await f.publish();
   const refusedAsk = await f.call({...f.base(), ...ask, publicationId: publication.publicationId,
     idempotencyKey: 'fresh-image-ask', expectedGeneration: f.session.status().generation});
-  expect(refusedAsk.status).toBe(409);
-  expect(await refusedAsk.json()).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  expect(refusedAsk.status).toBe(400);
+  expect(await refusedAsk.json()).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
   const refusedAct = await f.ports.commitUIAct(f.session.jobId,
     f.uiRequest({...submission, submissionId: 'fresh-image-act'}));
   expect(refusedAct).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
@@ -251,7 +258,7 @@ test('#900 an already waiting subscription sees an independent attachment publis
     const asked = await call({...f.base(), verb: 'ask', expectedGeneration: generation,
       idempotencyKey: '900-attached-ask', publicationId: published.value.publicationId,
       subject});
-    expect(asked).toMatchObject({ok: false, generation, error: {code: 'JOB_ASK_INVALID'}});
+    expect(asked).toMatchObject({ok: false, generation, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
     expect(attached.status().cursor).toBe(first.value?.cursor);
     const historical = seedHistoricalVerdictAsk(attached, published.value.publicationId, subject);
     const second = await subscriptionDeadline(pending);
@@ -354,8 +361,7 @@ test('semantic requests are closed, require explicit null fields and reserve dis
   expect(() => parseJobRequest({ ...request, internalSession: {} })).toThrow('JOB_REQUEST_INVALID');
   expect(() => parseJobRequest({ ...request, result: { path: 'out' } })).toThrow('JOB_REQUEST_INVALID');
   for (const kind of ['mesh-edit', 'described-correction']) {
-    expect(() => parseJobRequest({ ...f.base(), verb: 'ask', expectedGeneration: 0, idempotencyKey: 'reserved',
-      publicationId: 'publication', subject: { kind } })).toThrow('JOB_ACT_KIND_DISABLED');
+    expect(() => parseJobSubject({kind})).toThrow('JOB_ACT_KIND_DISABLED');
   }
 });
 
@@ -401,8 +407,11 @@ test('CLI constructs semantic vocabulary without a storage file and exposes no h
   const locator = f.origin + '/jobs/' + f.session.jobId;
   const parsed = parseJobCLI(['publish', locator, '--generation', '0', '--key', 'first', '--result', 'out', '--freeze-hold', 'held']);
   expect(parsed.request.verb).toBe('publish');
-  expect(() => parseJobCLI(['fetch-act', locator])).toThrow('JOB_REQUEST_INVALID');
-  expect(() => parseJobCLI(['signoff', locator])).toThrow('JOB_REQUEST_INVALID');
+  for (const verb of ['fetch-act', 'signoff', 'ask', 'ask-batch']) {
+    expect(() => parseJobCLI([verb, locator])).toThrow(expect.objectContaining({
+      code: 'JOB_REQUEST_INVALID', message: 'Unknown session subcommand: ' + verb,
+    }));
+  }
   expect(() => parseJobCLI(['next', locator + '?state=/private/file'])).toThrow('JOB_LOOPBACK_REQUIRED');
   const output: string[] = [];
   await jobCommand(['next', locator, '--wait-ms', '0'], {
