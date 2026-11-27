@@ -22,6 +22,12 @@ import {JobSession} from '../src/job-session.ts';
 import {attachmentHashText} from '../src/mesh-edit.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
+import {directionSummary} from '../web/direction-panel.ts';
+import {createJobRigScreen, jobRigScreenRefusal, jobRigScreenRoute, jobRigScreenSubject} from '../web/job-rig-screen.ts';
+import {jobPublicationRoutes, jobSourceDraftId} from '../web/job-session.ts';
+import type {DisplayPublicationV3, SourceV3} from '../src/job-contract.ts';
+import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {writeComparisonPackage} from './helpers/parts-comparison-package.ts';
 import model from './fixtures/viewport-387/package/skeleton.model.json';
 import {jobFixture, syntheticJobParts} from './helpers/job-api-fixture.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
@@ -576,4 +582,283 @@ test('#1267 §5a: current parts and direction also ignore project.json rewrites 
     value: {comments: [{text: 'parts comment after image drift'}]},
   }));
   expect(partsStale).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
+});
+
+test('Part B (#1267 §3, §7): jobRigScreenSubject, jobRigScreenRoute, jobSourceDraftId and direction version omission for current outputs, with numbered rows unchanged', async () => {
+  const record = 'ab'.repeat(32);
+  const modelId = {path: 'out/skeleton.model.json', sha256: '1'.repeat(64)};
+  const directionId = {path: 'out/direction.json', sha256: '2'.repeat(64)};
+  const partsId = {
+    enumeratorVersion: '2.25.1',
+    manifest: {path: 'out/parts.json' as const, sha256: '3'.repeat(64)},
+    images: [{path: 'parts/base.png', role: 'part', sha256: '4'.repeat(64)}],
+  };
+  const baseModelSource = {
+    sourceHash: '5'.repeat(64),
+    projectHash: record,
+    package: {id: 'create', revision: record.slice(0, 12)},
+    model: modelId,
+    direction: null,
+    optionSet: null,
+    appliedResult: null,
+    plan: null,
+    parts: null,
+  };
+  const displayFor = (source: SourceV3, rigDraftVerdict = false): DisplayPublicationV3 => ({
+    publication: {
+      publicationId: 'pub-1',
+      instanceKey: '6'.repeat(64),
+      generation: 1,
+      source,
+      label: 'Create current check',
+      previousPublicationId: null,
+      visual: {status: 'available'},
+    },
+    ...(rigDraftVerdict ? {rigDraftVerdict: true} : {}),
+  } as unknown as DisplayPublicationV3);
+
+  // Screen subject and route rows: current vs numbered counterparts
+  const rows: {
+    name: string;
+    source: SourceV3;
+    rigDraftVerdict?: boolean;
+    subject: boolean;
+    route: boolean;
+    refusal: string | null;
+  }[] = [
+    // current outputs
+    {
+      name: 'current/parts',
+      source: {...baseModelSource, selector: {kind: 'current', output: 'parts', record}, model: null, parts: partsId} as SourceV3,
+      subject: true,
+      route: true,
+      refusal: null,
+    },
+    {
+      name: 'current/parts ignores rigDraftVerdict',
+      source: {...baseModelSource, selector: {kind: 'current', output: 'parts', record}, model: null, parts: partsId} as SourceV3,
+      rigDraftVerdict: true,
+      subject: true,
+      route: true,
+      refusal: null,
+    },
+    {
+      name: 'current/parts without parts does not fall into rig',
+      source: {...baseModelSource, selector: {kind: 'current', output: 'parts', record}, model: modelId, parts: null} as SourceV3,
+      rigDraftVerdict: true,
+      subject: false,
+      route: false,
+      refusal: 'JOB_ASK_UNSUPPORTED',
+    },
+    {
+      name: 'current/rig',
+      source: {...baseModelSource, selector: {kind: 'current', output: 'rig', record}} as SourceV3,
+      subject: true,
+      route: true,
+      refusal: null,
+    },
+    {
+      name: 'current/rig rejects direction-bearing source',
+      source: {...baseModelSource, selector: {kind: 'current', output: 'rig', record}, direction: directionId} as SourceV3,
+      subject: false,
+      route: false,
+      refusal: 'JOB_ASK_UNSUPPORTED',
+    },
+    {
+      name: 'current/direction',
+      source: {...baseModelSource, selector: {kind: 'current', output: 'direction', record}, direction: directionId} as SourceV3,
+      subject: true,
+      route: true,
+      refusal: null,
+    },
+    {
+      name: 'current/direction without direction does not fire JOB_DIRECTION_MISSING',
+      source: {...baseModelSource, selector: {kind: 'current', output: 'direction', record}, direction: null} as SourceV3,
+      subject: false,
+      route: false,
+      refusal: 'JOB_ASK_UNSUPPORTED',
+    },
+    // numbered counterparts (unchanged)
+    {
+      name: 'numbered draft with parts',
+      source: {...baseModelSource, selector: {kind: 'draft', id: 'draft-1'}, model: null, parts: partsId} as SourceV3,
+      subject: true,
+      route: true,
+      refusal: null,
+    },
+    {
+      name: 'numbered draft without parts (no rigDraftVerdict)',
+      source: {...baseModelSource, selector: {kind: 'draft', id: 'draft-1'}, model: modelId, parts: null} as SourceV3,
+      subject: false,
+      route: false,
+      refusal: 'JOB_PARTS_MISSING',
+    },
+    {
+      name: 'numbered draft with rigDraftVerdict',
+      source: {...baseModelSource, selector: {kind: 'draft', id: 'draft-1'}, model: modelId, parts: null} as SourceV3,
+      rigDraftVerdict: true,
+      subject: true,
+      route: true,
+      refusal: null,
+    },
+    {
+      name: 'numbered rig{version}',
+      source: {...baseModelSource, selector: {kind: 'rig', version: 2}} as SourceV3,
+      subject: true,
+      route: true,
+      refusal: null,
+    },
+    {
+      name: 'numbered post',
+      source: {...baseModelSource, selector: {kind: 'post', version: 3, rigVersion: 2}, direction: directionId} as SourceV3,
+      subject: true,
+      route: true,
+      refusal: null,
+    },
+    {
+      name: 'numbered post without direction',
+      source: {...baseModelSource, selector: {kind: 'post', version: 3, rigVersion: 2}, direction: null} as SourceV3,
+      subject: false,
+      route: false,
+      refusal: 'JOB_DIRECTION_MISSING',
+    },
+    {
+      name: 'standalone null selector',
+      source: {...baseModelSource, selector: null} as SourceV3,
+      subject: true,
+      route: true,
+      refusal: null,
+    },
+    {
+      name: 'record plan',
+      source: {
+        record: {path: 'project.json', sha256: record},
+        sourceHash: '7'.repeat(64),
+        projectHash: record,
+        subject: 'plan',
+        plan: {steps: [{id: 'step-1', hash: '8'.repeat(64)}]},
+        subjects: [],
+        files: [],
+      } as unknown as SourceV3,
+      subject: false,
+      route: false,
+      refusal: null,
+    },
+  ];
+
+  for (const row of rows) {
+    expect(jobRigScreenSubject(row.source, row.rigDraftVerdict)).toBe(row.subject);
+    const display = displayFor(row.source, row.rigDraftVerdict);
+    expect(jobRigScreenRoute(display, [], new Set())).toBe(row.route);
+    expect(jobRigScreenRefusal(display, [], new Set())).toBe(row.refusal);
+  }
+
+  // Storage keys (§7): each current output and distinct keys for two outputs of one record, with numbered rows unchanged
+  const keyParts = jobSourceDraftId({...baseModelSource, selector: {kind: 'current', output: 'parts', record}, model: null, parts: partsId} as SourceV3);
+  const keyRig = jobSourceDraftId({...baseModelSource, selector: {kind: 'current', output: 'rig', record}} as SourceV3);
+  const keyDir = jobSourceDraftId({...baseModelSource, selector: {kind: 'current', output: 'direction', record}, direction: directionId} as SourceV3);
+  expect(keyParts).toBe(`create:current:parts:${record}`);
+  expect(keyRig).toBe(`create:current:rig:${record}`);
+  expect(keyDir).toBe(`create:current:direction:${record}`);
+  expect(new Set([keyParts, keyRig, keyDir]).size).toBe(3);
+
+  expect(jobSourceDraftId({...baseModelSource, selector: {kind: 'draft', id: 'draft-1'}} as SourceV3)).toBe('draft-1');
+  expect(jobSourceDraftId({...baseModelSource, selector: {kind: 'rig', version: 2}} as SourceV3)).toBe('create:rig:2');
+  expect(jobSourceDraftId({...baseModelSource, selector: {kind: 'post', version: 3, rigVersion: 2}} as SourceV3)).toBe('create:post:3:2');
+  expect(jobSourceDraftId({...baseModelSource, selector: null} as SourceV3)).toBe('create');
+  expect(jobSourceDraftId({
+    record: {path: 'project.json', sha256: record},
+    subject: 'option-set',
+    selection: {questionId: 'q1', setId: 's1'},
+  } as unknown as SourceV3)).toBe('q1:s1');
+
+  // Version label omission on current direction vs numbered post
+  const baseDirectionView = {
+    model: {...modelId, inspected: true},
+    revision: '1',
+    sourceHash: '5'.repeat(64),
+    runtime: '1.27.0',
+    dials: [],
+    sets: [],
+    authored: {
+      file: directionId,
+      model: modelId,
+      rigVersion: 2,
+      camera: {space: 'rig-world-y-up' as const, keys: [{time: 0, easing: 'hold', box: {x: 0, y: 0, width: 80, height: 64}}]},
+      take: {duration: 1, loop: true},
+      timing: [{time: 0, source_time: 0, easing: 'linear'}, {time: 1, source_time: 1, easing: 'linear'}],
+    },
+  };
+  expect(directionSummary({...baseDirectionView, authored: {...baseDirectionView.authored, postVersion: 3}}, 'en'))
+    .toBe('Direction v3 · 1 s · loop · fixed camera');
+  expect(directionSummary(baseDirectionView, 'en'))
+    .toBe('Direction · 1 s · loop · fixed camera');
+  expect(directionSummary({...baseDirectionView, authored: {...baseDirectionView.authored, postVersion: 3}}, 'ko'))
+    .toBe('연출 v3 · 1초 · 반복 · 카메라 고정');
+  expect(directionSummary(baseDirectionView, 'ko'))
+    .toBe('연출 · 1초 · 반복 · 카메라 고정');
+
+  // Live prepare() for current/parts loads /api/stage-parts into prepared.parts just like draft with parts
+  const live = await realJobWindowFixture();
+  try {
+    const projectText = '{"schema":"rig-create/project@0","interview":{}}\n';
+    await writeFile(join(live.input.root, 'project.json'), projectText);
+    live.input.setRecordPath('project.json');
+    const liveRecord = api.jobHash(projectText);
+    const pkgRoot = join(live.input.root, 'out');
+    await writeComparisonPackage(pkgRoot, true);
+    await writeFile(join(pkgRoot, 'config.json'), JSON.stringify({key: 'synthetic-current-parts'}));
+    await unlink(join(pkgRoot, 'skeleton.model.json'));
+    const manifestPath = join(pkgRoot, 'review.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    manifest.id = 'create';
+    manifest.title = 'Create 1267 parts';
+    manifest.revision = liveRecord.slice(0, 12);
+    delete manifest.model;
+    manifest.animations = [];
+    manifest.checkpoints = [];
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    const refs = [
+      {path: 'painting.png', role: 'painting'},
+      {path: 'parts/body.png', role: 'part'},
+      {path: 'parts/front.png', role: 'part'},
+    ];
+    const images = await Promise.all(refs.map(async r => ({...r, sha256: api.jobHash(await readFile(join(pkgRoot, r.path)))})));
+    live.input.setPartsReferences(refs);
+    live.input.setContext({
+      selector: {kind: 'current', output: 'parts', record: liveRecord},
+      plan: null,
+      parts: {
+        enumeratorVersion: live.input.partsEnumerator.version,
+        manifest: {path: 'out/parts.json', sha256: api.jobHash(await readFile(join(pkgRoot, 'parts.json')))},
+        images,
+      },
+      subjects: [],
+      partIds: ['body', 'front'],
+      files: [{path: 'out/rig.json', sha256: api.jobHash(await readFile(join(pkgRoot, 'rig.json')))}],
+    });
+    const pub = await live.publish();
+    const readRes = await live.host.ports.readPublication(live.host.session.jobId, pub.publicationId);
+    expect(readRes.ok).toBe(true);
+    if (!readRes.ok) throw new Error(readRes.error.code);
+    const screen = createJobRigScreen({
+      host: {replaceChildren() {}} as unknown as HTMLElement,
+      pageId: 'page-current-parts',
+      access: {capability: live.credentials.ui, headers: init => new Headers(init)},
+      window: {
+        state: () => ({pending: [], receipt: null, generation: pub.generation, preparing: false, closed: false}),
+        submit: async () => { throw new Error('unused'); },
+      },
+      routes: d => jobPublicationRoutes(d, live.host.origin),
+      refusal: String,
+      translate: String,
+      load: async () => ({}),
+    });
+    const prepared = await screen.prepare(readRes.value, new AbortController().signal);
+    expect(prepared?.parts?.mode).toBe('parts');
+    expect(prepared?.parts?.sourceHash).toBe(pub.source.sourceHash);
+    expect(prepared?.parts?.items.map(item => item.name)).toEqual(['body', 'front']);
+  } finally {
+    await live.close();
+  }
 });
