@@ -14,7 +14,7 @@ import type {JobRigMeshHost,JobRigMeshScreen} from './job-rig-screen.ts';
 import {bindWorkspaceDrawer,settleAnimationFrames} from './workspace-layout.ts';
 import {captureRigRestStill,rigRestCanvas} from './job-rig-capture.ts';
 import {createPartsViewportProvider,bindPartsSubject,paintRigDifference,loadViewportImage,type PartsSubjectEntry,type PartsSubjectSession} from './parts-viewport-provider.ts';
-import {rigWorkspaceMarkup,rigFeedbackMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
+import {rigWorkspaceMarkup,rigFeedbackMarkup,sharedViewToolsMarkup,sharedCommentMarkup,renderCompareHtml} from '../src/compare-html.ts';
 import {bindDirectionPanel} from './direction-panel.ts';
 import {bindWorkspaceVisibility} from './workspace-visibility.ts';
 import type {DirectionInspection} from '../src/direction-inspection.ts';
@@ -4263,7 +4263,10 @@ return {dispose:disposeScreen};
 // Package entries mount directly; the live host invokes the rig composition for each publication.
 if (!rigHost()) {
   const root = document.getElementById('app');
-  if (!root && document.querySelector('template[data-workspace-header]')) mountCompareScreen();
+  if (root?.dataset.reviewScreen === 'compare') {
+    root.innerHTML = renderCompareHtml();
+    mountCompareScreen();
+  }
   else if (root?.dataset.reviewScreen === 'workspace') mountOwnerWorkspace(root);
   else if (/^\/jobs\/[^/]+\/$/.test(location.pathname)) void mountJobScreen(document.body);
   else mountRigScreen();

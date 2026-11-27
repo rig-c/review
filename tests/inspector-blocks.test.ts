@@ -70,7 +70,7 @@ test('each block row is a WAI-ARIA tablist: role=tab buttons control role=tabpan
 });
 
 test('the comparison page renders the same tablists, and its own Part block is a tabpanel too',async()=>{
- const html=renderCompareHtml(await webFile('compare.html'),await indexHtml());
+ const html=renderCompareHtml(undefined,await indexHtml());
  for(const container of Object.keys(expected)){const {nav,tabs}=rowTabs(html,container);expect(attr(nav,'role')).toBe('tablist');for(const tab of tabs){const panel=openTag(html,tab.target);expect({panel:tab.target,role:attr(panel,'role'),labelledby:attr(panel,'aria-labelledby')}).toEqual({panel:tab.target,role:'tabpanel',labelledby:`block-tab-${tab.target}`});}}
 });
 
