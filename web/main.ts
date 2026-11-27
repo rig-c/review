@@ -579,15 +579,9 @@ function renderCheckpoint(): void {
   el('checkpoint-detail').hidden=!checkpoint;
   text('checkpoint-title', checkpoint?.title ?? 'Review entire package');
   text('detail-title', checkpoint?.title ?? 'No checkpoint supplied');
-  const detailNote = checkpoint?.note ?? '';
-  el('detail-note').hidden = !detailNote;
-  text('detail-note', detailNote);
+  text('detail-note', checkpoint?.note ?? 'Record checkpoint notes and outcomes.');
   const entry = checkpoint ? session.checkpoints[checkpoint.id] : undefined;
-  const reviewNote = entry?.note ?? '';
-  const noteNode = el('checkpoint-note');
-  noteNode.hidden = !reviewNote;
-  if (noteNode.previousElementSibling instanceof HTMLElement) noteNode.previousElementSibling.hidden = !reviewNote;
-  noteNode.textContent = reviewNote;
+  el('checkpoint-note').textContent = entry?.note ?? '';
 }
 
 function setView(value: typeof view): void {leavePreviousBuild();view=value;renderLayout();}
