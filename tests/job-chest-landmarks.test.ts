@@ -1,18 +1,14 @@
-import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
 import {readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {canonicalJson} from '../src/canonical-json.ts';
-import {finalizeJobAct, prepareJobStill} from '../src/job-act.ts';
 import * as api from '../src/job-api.ts';
-import {jobCommand} from '../src/job-cli.ts';
-import type {JobChestLandmarkValue, JobMeshEditValue, JobRigReviewAct, JobUISubmission} from '../src/job-contract.ts';
+import type {JobChestLandmarkValue, JobMeshEditValue, JobRigReviewAct} from '../src/job-contract.ts';
 import {attachmentHashText} from '../src/mesh-edit.ts';
 import legacy from './fixtures/comments-contract-legacy.json';
 import model from './fixtures/viewport-387/package/skeleton.model.json';
 import {jobFixture, jobInputHashes} from './helpers/job-api-fixture.ts';
-import {rigStillCapture} from './helpers/job-rig-still.ts';
 
 const schema = 'rig-review/act@9';
 const meshSchema = 'rig-review/act@8';
@@ -154,86 +150,89 @@ test('#990 retained publication refuses corrupt seed copies', async () => {
   } finally { await f.close(); }
 });
 
-async function pendingRigReview(f: Awaited<ReturnType<typeof jobFixture>>) {
+async function chestComment(f: Awaited<ReturnType<typeof jobFixture>>) {
   const publication = await f.publish();
-  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
   const page = await f.display(publication);
   const retained = f.session.retainedSource(publication.publicationId);
-  const submission = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation, submissionId: 'chest-990',
-    kind: 'review-verdict', capture: rigStillCapture(publication, ask, page).capture,
-    value: {stage: 'rig-review', verdict: 'changes-requested', words: '', chestLandmarks: [bind(edit)]}} as const;
-  const options = {jobId: f.session.jobId, retained, ask, reviewer: {id: 'owner', role: 'owner'} as const,
-    still: prepareJobStill(submission, ask, retained).still};
-  const finalize = (value: JobUISubmission['value'], source = retained) =>
-    finalizeJobAct({...options, retained: source, submission: {...submission, value} as JobUISubmission});
-  return {retained, submission, finalize};
+  const file = publication.source.model!;
+  const chest = {kind: 'chest-landmarks', file, chestLandmarks: [bind(edit)]} as const;
+  const mesh = {kind: 'mesh-edits', file, meshEdits: [bind(meshEdit)]} as const;
+  const submission = {...page, expectedGeneration: f.session.status().generation, submissionId: 'chest-990',
+    kind: 'comments', value: {comments: [], carriers: [chest]}} as const;
+  const commit = (input: object) => f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  return {retained, chest, mesh, submission, commit};
 }
 
-test('#990 writer commits, replays, and fetches the same act@9 without changing producer inputs', async () => {
+test('#990 a comment-only act with chest and mesh edits replays and exports without changing producer inputs', async () => {
   const f = await jobFixture();
   try {
     await seedChest(f);
     const original = await jobInputHashes(f.root);
-    const {submission, finalize} = await pendingRigReview(f);
-    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submission));
-    expect(saved).toMatchObject({ok: true, value: {schema}});
+    const {submission, commit, chest, mesh} = await chestComment(f);
+    const input = {...submission, value: {comments: [], carriers: [chest, mesh]}};
+    const saved = await commit(input);
     if (!saved.ok) throw new Error(saved.error.code);
-    const act = api.parseChestLandmarksAct(saved.value);
-    expect(act.value.comments).toEqual([]);
-    expect(act.value.chestLandmarks).toEqual(submission.value.chestLandmarks);
-    expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submission))).toEqual(saved);
+    const act = api.parseCommentOnlyAct(saved.value);
+    expect(act.value).toEqual(input.value);
+    expect(await commit(input)).toEqual(saved);
     const expected = JSON.stringify(act);
     expect(f.session.readActExport(act.actId, false).toString()).toBe(expected);
-    const chunks: Buffer[] = [];
-    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId, '--still-out', f.scratch], {
-      consumerCapability: f.session.writerGrant().fetchCapability,
-      fetch: (async (input, init) => f.ports.handleJobApi(new Request(input, init))) as typeof fetch,
-      writeBytes: chunk => {chunks.push(Buffer.from(chunk)); return chunk.length;},
-    });
-    expect(Buffer.concat(chunks).toString()).toBe(expected);
-    expect(api.jobHash(await readFile(join(f.scratch, act.still.path)))).toBe(act.still.sha256);
-    const combined = finalize({...submission.value, meshEdits: [bind(meshEdit)]});
-    expect(api.parseChestLandmarksAct(combined).value.meshEdits).toEqual([bind(meshEdit)]);
+    const fetched = await (await f.call({...f.base(), verb: 'fetch-act', actId: act.actId},
+      f.session.writerGrant().fetchCapability)).json();
+    expect(JSON.stringify(fetched.value)).toBe(expected);
     expect(await jobInputHashes(f.root)).toEqual(original);
   } finally { await f.close(); }
 });
 
-test('#990 writer refuses unseeded, stale, invalid-frame, and failed-clearance submissions', async () => {
+test('#990 the comment writer refuses unseeded, stale, invalid-frame and failed-clearance edits', async () => {
   const f = await jobFixture();
   try {
-    const unseeded = await pendingRigReview(f);
-    expect(() => unseeded.finalize(unseeded.submission.value)).toThrow('JOB_ACT_INVALID');
+    const unseeded = await chestComment(f);
+    expect(await unseeded.commit(unseeded.submission)).toMatchObject({ok: false, error: {code: 'JOB_ACT_INVALID'}});
     await seedChest(f);
-    const {retained, submission, finalize} = await pendingRigReview(f);
-    const changed = (patch: Partial<JobChestLandmarkValue>) => ({...submission.value, chestLandmarks: [bind({...edit, ...patch})]});
-    expect(() => finalize(changed({source: {...edit.source, frame: {...frame, height: 1 + frame.height}}}))).toThrow('JOB_ACT_INVALID');
-    expect(() => finalize(changed({source: {...edit.source, hash: '1'.repeat(64)}}))).toThrow('JOB_ACT_SOURCE_STALE');
-    expect(() => finalize(changed({bust: {...edit.bust, cleavage: [36, 20], clearance: 0}}))).toThrow('CONFIG_BUST_CLEARANCE');
-    expect(api.parseChestLandmarksAct(finalize(changed({bust: {...edit.bust, cleavage: [36, 20]}}))).value.chestLandmarks)
-      .toEqual(changed({bust: {...edit.bust, cleavage: [36, 20]}}).chestLandmarks);
+    const {retained, submission, commit, chest} = await chestComment(f);
+    const changed = (patch: Partial<JobChestLandmarkValue>) => ({comments: [],
+      carriers: [{...chest, chestLandmarks: [bind({...edit, ...patch})]}]});
+    const before = f.session.status();
+    const invalid = [
+      ['frame', {source: {...edit.source, frame: {...frame, height: 1 + frame.height}}}, 'JOB_ACT_INVALID'],
+      ['hash', {source: {...edit.source, hash: '1'.repeat(64)}}, 'JOB_ACT_SOURCE_STALE'],
+      ['clearance', {bust: {...edit.bust, cleavage: [36, 20], clearance: 0}}, 'JOB_ACT_INVALID'],
+    ] as const satisfies readonly (readonly [string, Partial<JobChestLandmarkValue>, string])[];
+    for (const [submissionId, patch, code] of invalid) {
+      const result = await commit({...submission, submissionId, value: changed(patch)});
+      expect(result).toMatchObject({ok: false, error: {code}});
+      if (submissionId === 'clearance' && !result.ok) expect(result.error.message).toContain('CONFIG_BUST_CLEARANCE');
+      expect(f.session.status()).toEqual(before);
+    }
+    const accepted = changed({bust: {...edit.bust, cleavage: [36, 20]}});
+    const saved = await commit({...submission, submissionId: 'valid-cleavage', value: accepted});
+    if (!saved.ok) throw new Error(saved.error.code);
+    expect(api.parseCommentOnlyAct(saved.value).value).toEqual(accepted);
     const modelPath = join(retained.snapshotRoot, retained.source.model!.path);
     await writeFile(modelPath, (await readFile(modelPath, 'utf8')) + '\n');
-    expect(() => finalize(submission.value)).toThrow('JOB_ACT_SOURCE_STALE');
+    expect(await commit(submission)).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
   } finally { await f.close(); }
 });
 
-test('#990 a changed retained config refuses finalization without consuming the ask or submission', async () => {
+test('#990 a changed retained config refuses a comment act without consuming its submission', async () => {
   const f = await jobFixture();
   try {
     const {config} = await seedChest(f);
-    const {retained, submission} = await pendingRigReview(f);
+    const {retained, submission, commit} = await chestComment(f);
     const path = join(retained.snapshotRoot, config.path);
     const bytes = await readFile(path);
+    const before = f.session.status();
     await writeFile(path, Buffer.concat([bytes, Buffer.from('\n')]));
-    const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submission));
-    expect(result).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
-    expect(f.session.status().pending.some(row => row.askId === submission.askId)).toBe(true);
-    await writeFile(path, bytes);
-    expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submission))).toMatchObject({ok: true, value: {schema}});
+    try {
+      expect(await commit(submission)).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
+      expect(f.session.status()).toEqual(before);
+    } finally { await writeFile(path, bytes); }
+    expect(await commit(submission)).toMatchObject({ok: true, value: {schema: 'rig-review/act@10'}});
   } finally { await f.close(); }
 });
 
-test('#990 retains @8 linked-mesh refusal and hash precedence', async () => {
+test('#990 comment carriers keep linked-mesh refusal and hash precedence', async () => {
   const f = await jobFixture();
   try {
     const path = 'out/skeleton.model.json';
@@ -243,10 +242,11 @@ test('#990 retains @8 linked-mesh refusal and hash precedence', async () => {
     entries['mesh-source'] = entries.mesh;
     entries.mesh = linked;
     await writeFile(join(f.root, path), JSON.stringify(linkedModel));
-    const {finalize} = await pendingRigReview(f);
-    const meshRequest = {stage: 'rig-review', verdict: 'changes-requested', words: ''} as const;
-    expect(() => finalize({...meshRequest, meshEdits: [bind(meshEdit)]})).toThrow('JOB_ACT_SOURCE_STALE');
+    const {submission, commit, mesh} = await chestComment(f);
+    expect(await commit({...submission, value: {comments: [], carriers: [mesh]}}))
+      .toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
     const linkedEdit = {...meshEdit, source: {...meshEdit.source, hash: api.jobHash(attachmentHashText(linked))}};
-    expect(() => finalize({...meshRequest, meshEdits: [bind(linkedEdit)]})).toThrow('JOB_ACT_INVALID');
+    expect(await commit({...submission, value: {comments: [], carriers: [{...mesh, meshEdits: [bind(linkedEdit)]}]}}))
+      .toMatchObject({ok: false, error: {code: 'JOB_ACT_INVALID'}});
   } finally { await f.close(); }
 });

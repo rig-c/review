@@ -3,18 +3,16 @@ import {formFor, isPendingOwnerAsk, jobJson, jobPublicationRoutes, jobSourceDraf
 import {commentPartsIssues,partsIssueComments,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
- * window. The job stays the transport: same asks, act kinds, still, displayed-ack and submission idempotency.
- * Rig verdicts use the act bar, interviews use the Question tab, and text approvals use the shared ask dialog. */
-import {JOB_COMMENT_ONLY_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobComment,type JobCommentCarrier,type JobContextComment,type JobProgressV3,type JobPublishedChestLandmark,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
+ * window. The job keeps the transport, display acknowledgement and submission idempotency. */
+import {JOB_COMMENT_ONLY_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobCommentCarrier,type JobContextComment,type JobProgressV3,type JobPublishedChestLandmark,type JobResult,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
 import {canonicalJson} from '../src/canonical-json.ts';
 import {draftKey} from '../src/mesh-edit.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
-import {feedbackContextComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
-import {createJobRigSubmission, freezeJobRigStage} from './job-rig-capture.ts';
+import {feedbackContextComments} from '../src/stage-comment.ts';
 import {sha256Hex,type JobMeshDraftSubmission} from './mesh-editor.ts';
 import type {JobChestDraftSubmission} from './chest-editor.ts';
-import {setRigHost, rigHost, type RigHost, type RigHostScreen, type RigHostCommit, type RigHostNavigation, type CheckpointPairView} from './rig-host.ts';
+import {setRigHost, rigHost, type RigHost, type RigHostScreen, type RigHostNavigation, type CheckpointPairView} from './rig-host.ts';
 import {setSourceAttribute, setSourceText, sourceAttribute, sourceTextContent} from './i18n.ts';
 import type {InstanceAccess} from './instance-access.ts';
 
@@ -26,7 +24,7 @@ export function jobRigScreenSubject(source: SourceV3, rigDraftVerdict = false): 
     ? source.selector?.kind === 'post' || (source.selector?.kind === 'current' && source.selector.output === 'direction')
     : source.selector === null || source.selector.kind === 'rig' || (source.selector.kind === 'current' && source.selector.output === 'rig') || (source.selector.kind === 'draft' && rigDraftVerdict));
 }
-/** The asks the rig screen's act bar answers: the rig or direction verdict. A checkpoint is no longer an ask (#1229). */
+/** Rig and direction verdict subjects still identify which pending asks can accompany the screen. */
 export function jobRigScreenAnswers(ask: Pick<PendingAskV3, 'subject'>, _checkpoints: ReadonlySet<string>): boolean {
   const subject = ask.subject;
   return subject.kind === 'review-verdict' && (subject.stage === 'rig-review' || subject.stage === 'direction-review');
@@ -75,28 +73,6 @@ export function jobRigScreenRefusal(display:DisplayPublicationV3,pending:readonl
   return jobRigScreenRoute(display,pending,checkpoints)?null:'JOB_ASK_UNSUPPORTED';
 }
 
-export type JobRigScreenDecision =
-  | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review' | 'direction-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]; general?: readonly string[]}};
-/** The act bar's decisions as the pending asks' values. `words` is the comments' projection (act@6's), or empty;
- * a decision still pending is not sent, so a pending ask is never answered with "pending". */
-export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'checkpoints' | 'feedback'>,
-  pending: readonly PendingAskV3[], publicationId: string, general?: readonly string[]): JobRigScreenDecision[] {
-  const open = pending.filter(ask => ask.publicationId === publicationId && ask.status === 'pending');
-  const decisions: JobRigScreenDecision[] = [];
-  if (session.status === 'pending') return decisions;
-  for (const verdict of open) {
-    if (verdict.subject.kind !== 'review-verdict') continue;
-    const {stage} = verdict.subject;
-    if (stage !== 'rig-review' && stage !== 'direction-review') continue;
-    decisions.push({ask: verdict, kind: 'review-verdict', value: {stage, verdict: session.status,
-      words: session.feedback.length ? projectComments(feedbackItemComments(session.feedback)) : '',
-      ...(stage === 'rig-review' && session.feedback.length ? {feedback: structuredClone(session.feedback)} : {}),
-      ...(stage === 'rig-review' && general?.length ? {general: [...general]} : {})}});
-    break;
-  }
-  return decisions;
-}
-
 interface ReviewJson {manifest: ReviewManifest; reviewedSource: ReviewedSource; sourceHash: string}
 export interface JobRigMeshScreen extends RigHostScreen {
   hasMeshEdits?(): boolean;
@@ -126,11 +102,10 @@ export function createJobRigScreen(options: {
   formDependencies?:JobFormDependencies;
   refusal(error: unknown, fallback?: string): string;
   translate(key: string,values?:readonly (string|number)[]): string;
-  confirm?(text: string): boolean;
   /** Imports the rig composition once the host is set. */
   load(): Promise<unknown>;
 }) {
-  let mounted: JobRigScreenPrepared | null = null, screen: JobRigMeshScreen | null = null, drawGeneration = 0;
+  let mounted: JobRigScreenPrepared | null = null, screen: JobRigMeshScreen | null = null;
   let latestProgress: JobProgressV3 | null = null;
   const showProgress=()=>{
     if(!screen?.progress)return;
@@ -143,7 +118,6 @@ export function createJobRigScreen(options: {
   const say=(text:string,error?:boolean,diagnostic?:string,title?:string)=>{
     streamReport=null;lastMessage=[text,error,title??diagnostic];screen?.message(...lastMessage);
   };
-  const attempts = new Map<string, {key: string; submissionId: string; rig: ReturnType<typeof createJobRigSubmission>; commit: Omit<RigHostCommit, 'at'>}>();
   async function prepare(display: DisplayPublicationV3, signal: AbortSignal, backdropOnly=false): Promise<JobRigScreenPrepared | null> {
     if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
     const source = display.publication.source;
@@ -227,72 +201,6 @@ export function createJobRigScreen(options: {
     }
     if(!backdropOnly&&!modals&&source.checkpointEvidence?.some(packet=>Object.hasOwn(packet,'pair')))evidence=await prepareJobInspection(display,signal,true,false);
     return {jobRigScreen: true, display, entry: routes.entry, review, checkpoints,...evidence?{evidence}:{},...refusal?{refusal}:{},...parts?{parts}:{},...modals?{modals}:{}};
-  }
-  function still(ask: PendingAskV3, prepared: JobRigScreenPrepared) {
-    const stage = screen?.stage();
-    if (!stage) throw new Error('JOB_STILL_CAPTURE_FAILED');
-    const publication = prepared.display.publication;
-    const source = {pageId: options.pageId, publicationId: publication.publicationId, instanceKey: publication.instanceKey,
-      sourceHash: publication.source.sourceHash};
-    return freezeJobRigStage({...stage,source},ask.askId,++drawGeneration);
-  }
-
-  async function submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionComments?: readonly JobComment[], general?:readonly string[], alreadySent?:(row:Feedback)=>boolean): Promise<string> {
-    const prepared = mounted, state = options.window.state();
-    if (!prepared || !state.receipt || state.preparing) throw new Error('JOB_ACT_SOURCE_STALE');
-    if (state.closed) throw new Error('JOB_CLOSED');
-    const refusal=jobRigScreenRefusal(prepared.display,state.pending,prepared.checkpoints);if(refusal)throw new Error(options.translate('job.refusal.'+refusal));
-    if (!options.access.capability) throw new Error('JOB_CAPABILITY_REQUIRED');
-    // #1226: the verdict carries only rows not already sent on their own; the committed baseline keeps every row.
-    const sendable=alreadySent?{...session,feedback:session.feedback.filter(row=>!alreadySent(row))}:session;
-    const decisions=jobRigScreenDecisions(sendable, state.pending.filter(ask=>!prepared.modals?.forms.has(ask.askId)), prepared.display.publication.publicationId, general);
-    if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
-    const rigChanges=decisions.find(decision=>decision.kind==='review-verdict'&&decision.value.stage==='rig-review'&&decision.value.verdict==='changes-requested');
-    // #1231: Edit Mesh and chest drafts no longer ride the verdict. Request changes sends them first as an act@10.
-    const drafts=rigChanges?await draftCarriers(prepared):null;
-    if(drafts?.carriers.length){
-      const latest=options.window.state();
-      if(mounted!==prepared||latest.preparing||latest.receipt?.displayedNonce!==state.receipt.displayedNonce)throw new Error('JOB_ACT_SOURCE_STALE');
-      const meshEdits=drafts.carriers.find(carrier=>carrier.kind==='mesh-edits')?.meshEdits.length;
-      if(meshEdits&&options.confirm&&!options.confirm(options.translate('Send this Request changes with {0} mesh edit(s) to the producer?',[meshEdits])))return '';
-      await sendCommentAct(prepared,state.receipt.displayedNonce,[],drafts);
-    }
-    for (const decision of decisions) {
-      const value = directionComments !== undefined && decision.kind === 'review-verdict' && decision.value.stage === 'direction-review'
-        ? {stage: decision.value.stage, verdict: decision.value.verdict, comments: directionComments}
-        : decision.value;
-      const key = JSON.stringify(value);
-      let attempt = attempts.get(decision.ask.askId);
-      if (!attempt || attempt.key !== key) attempts.set(decision.ask.askId, attempt = {key, submissionId: crypto.randomUUID(), rig: createJobRigSubmission(),
-        commit: {review: {status: decision.value.verdict, feedback: structuredClone(session.feedback)}}});
-      const latest = options.window.state();
-      if (!latest.receipt) throw new Error('JOB_ACT_SOURCE_STALE');
-      const input = {kind: decision.kind, publicationId: decision.ask.publicationId, askId: decision.ask.askId, pageId: options.pageId,
-        displayedNonce: latest.receipt.displayedNonce, expectedGeneration: latest.generation, submissionId: attempt.submissionId,
-        value} as JobUISubmission;
-      const ask = decision.ask, current = attempt;
-      const frozen = decision.kind === 'review-verdict' && decision.value.stage === 'rig-review' ? await current.rig.prepare(input, () => still(ask, prepared)) : input;
-      const result = await options.window.submit(frozen);
-      if (!result.ok) throw new Error(result.error.code, {cause: (result.error as {cause?: unknown}).cause});
-      attempts.delete(ask.askId);
-      await committed({...current.commit, at: result.value.at});
-    }
-    return options.translate('job.saved');
-  }
-  const partsAttempts=new Map<string,{key:string;submissionId:string}>();
-  /** One parts verdict act. */
-  async function submitParts(issues:readonly PartsIssue[], general?:readonly string[]):Promise<string>{
-    const prepared=mounted,state=options.window.state();
-    if(!prepared?.parts||!state.receipt||state.preparing)throw new Error('JOB_ACT_SOURCE_STALE');
-    if(state.closed)throw new Error('JOB_CLOSED');
-    const ask=state.pending.find(ask=>ask.publicationId===prepared.display.publication.publicationId&&ask.status==='pending'&&ask.subject.kind==='parts-verdict');
-    if(!ask)throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
-    const value={verdict:issues.length?'changes-requested' as const:'approved' as const,issues:structuredClone(issues),words:'',
-      ...(general?.length?{general:[...general]}:{})},key=JSON.stringify(value);
-    let attempt=partsAttempts.get(ask.askId);if(!attempt||attempt.key!==key){attempt={key,submissionId:crypto.randomUUID()};partsAttempts.set(ask.askId,attempt);}
-    const result=await options.window.submit({kind:'parts-verdict',publicationId:ask.publicationId,askId:ask.askId,pageId:options.pageId,displayedNonce:state.receipt.displayedNonce,expectedGeneration:state.generation,submissionId:attempt.submissionId,value});
-    if(!result.ok)throw new Error(result.error.code,{cause:(result.error as {cause?:unknown}).cause});
-    partsAttempts.delete(ask.askId);return options.translate('job.saved');
   }
   // The daemon's idempotency digest covers the whole submission, so a retry after a lost response replays the cached request unchanged.
   let commentAttempt:{key:string;request:Extract<UISubmissionV3,{kind:'comments'}>}|null=null;
@@ -399,8 +307,6 @@ export function createJobRigScreen(options: {
         ownerActAccess:{capability:options.access.capability},recordSubmission,
         record:{...(jobId?{jobId}:{}),draftId,publicationId:prepared.display.publication.publicationId,previousPublicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,...record.inspection.planPicture?{planPicture:record.inspection.planPicture}:{},...questionPictures(questions,instance),missingPicture:question?.missingPicture,questionPicture:question?.scenePicture || (question?.missingPicture && question.images.length ? true : undefined)},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
-        submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
-        submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         // #1242: the record's comments go out as the rig screen's comment-only act.
         submitComments,jobClosed:()=>options.window.state().closed,
         attach:value=>{screen=value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());screen.progress?.(latestProgress);refreshRecordForms();},
@@ -409,25 +315,11 @@ export function createJobRigScreen(options: {
     if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
     const {publicationId,source,answeredDirectionFeedback}=prepared.display.publication;
     const binding={...(jobId?{jobId}:{}),draftId,publicationId,previousPublicationId,sourceHash:source.sourceHash};
-    /** The verdict this page's latest rig/direction or parts verdict ask was answered with, or null. */
-    const answeredVerdict=()=>{
-      const kind=prepared.parts?'parts-verdict':'review-verdict';
-      const ask=options.window.state().pending.filter(ask=>ask.publicationId===prepared.display.publication.publicationId&&
-        ask.subject.kind===kind&&(ask.subject.kind!=='review-verdict'||(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review'))).at(-1);
-      const act=ask?.status==='answered'?ask.act:undefined;
-      return act?.kind===kind&&(act.kind==='parts-verdict'||act.kind==='review-verdict')?act.value.verdict:null;
-    };
     return {...evidencePair,access,pendingSubjects,recordSubmission,navigation,jobClosed:()=>options.window.state().closed,...prepared.refusal?{unavailable:prepared.refusal}:{},
       chestLandmarks:prepared.display.publication.chestLandmarks,
       ...(source.direction?{direction:{...binding,answeredDirectionFeedback}}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{
         verdictComments:{...binding,rows:[],available:()=>true}}:{}),
-      reviewState(issues,sending) {
-        if(sending)return options.translate('job.parts.sending');
-        const verdict=answeredVerdict();
-        return verdict==='changes-requested'?options.translate('job.parts.sent'):verdict==='approved'?options.translate('job.review.approved'):
-          options.translate('job.parts.reviewing',[issues]);
-      },
-      verdictAnswered:()=>answeredVerdict()!==null,...prepared.parts?{subject:'parts' as const,submitParts}: {},
+      ...prepared.parts?{subject:'parts' as const}: {},
       read(path, method) {
         if (method !== 'GET') return prepared.parts?undefined:Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
         if(prepared.parts){
@@ -443,7 +335,7 @@ export function createJobRigScreen(options: {
           feedbackWarnings: [], updatedAt: null} satisfies ReviewSession);
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },
-      submit,submitComments,
+      submitComments,
       canSubmitMeshEdits:()=>!!(screen?.hasMeshEdits?.()||screen?.chestLandmarks?.()?.edits.length),
       attach: value => {screen = value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());screen.progress?.(latestProgress);refreshRecordForms();},
       displayed: () => ready.resolve(),
@@ -473,7 +365,6 @@ export function createJobRigScreen(options: {
       setRigHost({waiting:true,access:{base:location.pathname,key:options.pageId,capability:options.access.capability,
         route:()=>{throw new Error('JOB_DISPLAY_MISMATCH');},headers:init=>options.access.headers(init)},
         read:()=>Promise.reject(new Error('JOB_DISPLAY_MISMATCH')),
-        submit:async()=>{throw new Error('JOB_ACT_SOURCE_STALE');},
         attach:value=>{screen=value;showProgress();attached();},displayed:()=>{},failed});
       await options.load();await ready;
   }

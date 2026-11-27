@@ -1,0 +1,60 @@
+{
+  "schema": "rig-review/act@6",
+  "actId": "84e8259d-3f05-4b77-9b39-63dfd91ce387",
+  "jobId": "b4230bc1-d6af-44bb-8e3a-491c4b324cc4",
+  "askId": "595d4bdf-64b6-4522-ae90-337308f5489c",
+  "publicationId": "103f6cf5-8476-46dc-a5bf-0ed46c699171",
+  "authority": {
+    "actor": "human",
+    "channel": "review-ui",
+    "reviewer": {
+      "id": "declared-owner",
+      "role": "owner"
+    }
+  },
+  "at": "2026-11-27T11:50:39.759Z",
+  "kind": "review-verdict",
+  "source": {
+    "sourceHash": "1e9ac4acf8a7990f836961be5f8820d614b4d3c0ada13b66bd2d821d6e4fba42",
+    "projectHash": null,
+    "package": {
+      "id": "viewport-387-public",
+      "revision": "1"
+    },
+    "selector": {
+      "kind": "rig",
+      "version": 1
+    },
+    "model": {
+      "path": "out/skeleton.model.json",
+      "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+    },
+    "direction": null,
+    "optionSet": null,
+    "appliedResult": null,
+    "plan": {
+      "steps": [
+        {
+          "id": "step-one",
+          "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ]
+    },
+    "parts": null
+  },
+  "value": {
+    "stage": "rig-review",
+    "verdict": "changes-requested",
+    "comments": [
+      {
+        "text": "  \"Rig 검수 완료?\" 아니오: 호흡(idle) 전환 시 목 회전 각도 +3.5° 조정 필요 🛠️\n\t다음 패스에서 다시 확인!  "
+      }
+    ]
+  },
+  "still": {
+    "path": "eeecc8f4f15bba615ce6caffdf149ec3e78ffb7fee377074f443ee10a9691f59.png",
+    "sha256": "eeecc8f4f15bba615ce6caffdf149ec3e78ffb7fee377074f443ee10a9691f59",
+    "camera": "fixed",
+    "frame": "setup"
+  }
+}

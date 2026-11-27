@@ -3,10 +3,11 @@ import { chmod, copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { createJobHostPorts, jobHash } from '../src/job-api.ts';
-import type { JobPendingAsk, JobPublication } from '../src/job-contract.ts';
+import type { JobPendingAsk } from '../src/job-contract.ts';
 import { JobError } from '../src/job-store.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
-import { rigStillCapture } from './helpers/job-rig-still.ts';
+import {seedHistoricalDecisionAct} from './helpers/historical-decision-act.ts';
+import historicalRig from './fixtures/job-decision-1233/rig.json';
 import { seedHistoricalVerdictAsk } from './helpers/historical-verdict-ask.ts';
 
 function isolationHole(detail: string): never {
@@ -103,12 +104,19 @@ async function runFlow(ownUid: boolean) {
       }));
       expect(displayed.ok).toBe(true);
       if (!displayed.ok) throw new Error(displayed.error.code);
-      const { capture } = rigStillCapture(source as JobPublication, outcome.ask as JobPendingAsk, displayed.value);
-      // The isolated agent can read a verdict finalized from the imported ask through the semantic API.
-      const saved = await ports.commitUIAct(f.session.jobId, ui('acts', { ...displayed.value,
-        askId: outcome.ask.askId, submissionId: 'isolated-ui', expectedGeneration: f.session.status().generation,
-        kind: 'review-verdict', value: { stage: 'rig-review', verdict: 'approved', words: 'isolated exact words' }, capture }));
-      expect(saved.ok).toBe(true);
+      const ask = outcome.ask as JobPendingAsk;
+      const before = f.session.status();
+      const refused = await ports.commitUIAct(f.session.jobId, ui('acts', {...displayed.value,
+        askId: ask.askId, submissionId: 'isolated-ui', expectedGeneration: before.generation,
+        kind: 'review-verdict', value: historicalRig.request.value}));
+      expect(refused).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+      expect(f.session.status()).toEqual(before);
+      // The isolated client reads the historical finalized act through semantic next.
+      seedHistoricalDecisionAct(f.session, ask, historicalRig.receipt.value, {
+        stage: 'rig-review', verdict: 'approved', comments: [{text: 'isolated exact words'}],
+      });
+      // The imported event can arrive while the live session is already serving a long poll.
+      (f.session as unknown as {notify(): void}).notify();
     }
     const [exit, stdout, stderr] = await Promise.all([child.exited, output, errors]);
     console.log(JSON.stringify({ ownUid, exitCode: exit }));

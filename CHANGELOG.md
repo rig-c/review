@@ -15,6 +15,11 @@
 * Compare keeps the selected chest-row bones when Apply, Undo or Reset reloads the picked build (#1304).
 * Compare shows the Idle refusal instead of the other side's tracks when the picked side has no producer handoff (#1305).
 
+### Removed
+
+* Fresh `parts-verdict` and `review-verdict` job submissions refuse with `JOB_ACT_KIND_DISABLED`. A committed submission still replays its stored act (#1233).
+* Retired standalone parts verdict and package session writes, including the parts CLI's durable save notifications. Send comments saves feedback locally, and existing verdicts and sessions remain readable (#1233).
+
 ## 4.24.0
 
 The turn pad now leaves the animation alone until you use it. While you have not touched the pad, the clip drives the dials. When the pointer leaves the viewport, an unheld pad eases back to the clip. Hold still keeps the angle you steered to. A `current` direction publication now takes Create's `rig-create/direction@4`. Compare in the owner workspace uses the same shell as the other owner screens.

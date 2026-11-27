@@ -1,3 +1,6 @@
+import {seedHistoricalDecisionAct} from './helpers/historical-decision-act.ts';
+import verbatimRig from './fixtures/job-decision-1233/verbatim-rig.json';
+import verbatimParts from './fixtures/job-decision-1233/verbatim-parts.json';
 import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import { afterEach, expect, test } from 'bun:test';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -201,20 +204,7 @@ test('real semantic next preserves verbatim reviewer words across checkpoint and
   const verdictAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'review-verdict', stage: 'rig-review' });
   const rigCapture = rigStillCapture(publication, verdictAsk, page);
 
-  const committedVerdict = await f.ports.commitUIAct(
-    f.session.jobId,
-    f.uiRequest({
-      ...page,
-      askId: verdictAsk.askId,
-      expectedGeneration: f.session.status().generation,
-      submissionId: 'verbatim-rig-verdict',
-      kind: 'review-verdict',
-      value: { stage: 'rig-review', verdict: 'changes-requested', words: rigVerdictWords },
-      capture: rigCapture.capture,
-    }),
-  );
-  expect(committedVerdict.ok).toBe(true);
-  if (!committedVerdict.ok) throw new Error(committedVerdict.error.code);
+  const committedVerdict = seedHistoricalDecisionAct(f.session,verdictAsk,verbatimRig);
 
   const expectedActs: ExpectedActOracleInput[] = [
     {
@@ -228,7 +218,7 @@ test('real semantic next preserves verbatim reviewer words across checkpoint and
       value: { checkpointId: 'step-one', planStepId: 'step-one', outcome: 'fail', words: checkpointWords },
     },
     {
-      actId: committedVerdict.value.actId,
+      actId: committedVerdict.actId,
       jobId: f.session.jobId,
       askId: verdictAsk.askId,
       publicationId: publication.publicationId,
@@ -319,7 +309,6 @@ test('real semantic next preserves verbatim issue summaries in act@6 parts-verdi
   const retained = partsFixture.session.retainedSource(partsPublication.publicationId);
   const pkg = await loadPartsView(join(retained.snapshotRoot, 'out'));
   const partsAsk = seedHistoricalVerdictAsk(partsFixture.session, partsPublication.publicationId, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
-  const partsPage = await partsFixture.display(partsPublication);
 
   const bodyPartNote = '  [몸통/Body] 외곽선 브릿지 1px 여백 확인 필요! 🔍\n\t(좌측 겨드랑이 라인)  ';
   const bodyMeshNote = '  [메쉬/Mesh] 삼각형 분할 밀도 부족 — add 2 edge loops 🔺\n';
@@ -352,23 +341,11 @@ test('real semantic next preserves verbatim issue summaries in act@6 parts-verdi
     words: partsSummaryWords,
   };
 
-  const committedParts = await partsFixture.ports.commitUIAct(
-    partsFixture.session.jobId,
-    partsFixture.uiRequest({
-      ...partsPage,
-      askId: partsAsk.askId,
-      expectedGeneration: partsFixture.session.status().generation,
-      submissionId: 'verbatim-parts-verdict',
-      kind: 'parts-verdict',
-      value: partsValue,
-    }),
-  );
-  expect(committedParts.ok).toBe(true);
-  if (!committedParts.ok) throw new Error(committedParts.error.code);
+  const committedParts = seedHistoricalDecisionAct(partsFixture.session,partsAsk,verbatimParts);
 
   const expectedPartsActs: ExpectedActOracleInput<'parts-verdict'>[] = [
     {
-      actId: committedParts.value.actId,
+      actId: committedParts.actId,
       jobId: partsFixture.session.jobId,
       askId: partsAsk.askId,
       publicationId: partsPublication.publicationId,

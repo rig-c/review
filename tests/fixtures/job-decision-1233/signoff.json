@@ -1,0 +1,192 @@
+{
+  "writer": "a23001f2963ed878a5153ba23a5be212441b7eec",
+  "key": "ui:page-record:synthetic-record-signoff",
+  "request": {
+    "publicationId": "1e3be170-ac23-4007-8944-6550f12a41aa",
+    "pageId": "page-record",
+    "displayedNonce": "f53a3d17b16f4a4ab76608e92889d73489425301db0c7a7ec7176e81e0c36f6d",
+    "askId": "a57388b0-efa1-4a44-821d-069d4c9096ae",
+    "expectedGeneration": 2,
+    "submissionId": "synthetic-record-signoff",
+    "kind": "signoff",
+    "value": {
+      "stage": "plan-approved",
+      "decision": "approved",
+      "words": "synthetic"
+    }
+  },
+  "receipt": {
+    "digest": "a2c7c548bb49e05221f2253efb4d20830d7f4de959af85a790200db0f5881913",
+    "value": {
+      "schema": "rig-review/act@4",
+      "actId": "c29482a2-dd1e-4f81-98fc-115887919617",
+      "jobId": "ff221e93-1dae-43ef-95b2-953004ef1eea",
+      "askId": "a57388b0-efa1-4a44-821d-069d4c9096ae",
+      "publicationId": "1e3be170-ac23-4007-8944-6550f12a41aa",
+      "kind": "signoff",
+      "authority": {
+        "actor": "human",
+        "channel": "review-ui",
+        "reviewer": {
+          "id": "declared-owner",
+          "role": "owner"
+        }
+      },
+      "at": "2026-11-27T11:48:37.659Z",
+      "source": {
+        "sourceHash": "a829f05f71c95febdd224a8230c4dd4ff532c42b92ecf0dba8fad32a6205586d",
+        "projectHash": "d1e58b0ea47eae41f7db4d88efd10949ec7d4c0061b367e53a984a2e7b80b86d",
+        "record": {
+          "path": "project.json",
+          "sha256": "d1e58b0ea47eae41f7db4d88efd10949ec7d4c0061b367e53a984a2e7b80b86d"
+        },
+        "inputs": [
+          {
+            "path": "inputs/reference.png",
+            "sha256": "3521306987ffe39409d60ad1be5c754bad7ba778d10542603afb071ff0a4bce6"
+          },
+          {
+            "path": "inputs/spec.json",
+            "sha256": "af8533d3a15c4f04463063a5044d001fbc5339043e0ea1dbcfdae98254fcfb00"
+          }
+        ],
+        "files": [
+          {
+            "path": "inputs/reference.png",
+            "sha256": "3521306987ffe39409d60ad1be5c754bad7ba778d10542603afb071ff0a4bce6"
+          },
+          {
+            "path": "inputs/spec.json",
+            "sha256": "af8533d3a15c4f04463063a5044d001fbc5339043e0ea1dbcfdae98254fcfb00"
+          },
+          {
+            "path": "plan/context-evidence.json",
+            "sha256": "65f537c4c38b1ca3577737004a082ca518051cf9b37a96f7bfc255402a366669"
+          },
+          {
+            "path": "project.json",
+            "sha256": "d1e58b0ea47eae41f7db4d88efd10949ec7d4c0061b367e53a984a2e7b80b86d"
+          }
+        ],
+        "subject": "plan",
+        "selection": {
+          "kind": "plan"
+        },
+        "optionSet": null,
+        "optionSetFile": null,
+        "plan": {
+          "steps": [
+            {
+              "id": "step_layout",
+              "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            {
+              "id": "step_weights",
+              "hash": "2222222222222222222222222222222222222222222222222222222222222222"
+            }
+          ]
+        },
+        "subjects": [
+          {
+            "kind": "checkpoint",
+            "checkpointId": "step_layout"
+          },
+          {
+            "kind": "signoff",
+            "stage": "plan-approved"
+          },
+          {
+            "kind": "reopen",
+            "stage": "plan-approved"
+          }
+        ]
+      },
+      "value": {
+        "stage": "plan-approved",
+        "decision": "approved",
+        "words": "synthetic"
+      }
+    }
+  },
+  "sha256": "c5b43722e26c96eab52cc415ba37fcc6b9eefbe306cb443f6397860a6ba9a7d6",
+  "bytes": "{\"schema\":\"rig-review/act@4\",\"actId\":\"c29482a2-dd1e-4f81-98fc-115887919617\",\"jobId\":\"ff221e93-1dae-43ef-95b2-953004ef1eea\",\"askId\":\"a57388b0-efa1-4a44-821d-069d4c9096ae\",\"publicationId\":\"1e3be170-ac23-4007-8944-6550f12a41aa\",\"kind\":\"signoff\",\"authority\":{\"actor\":\"human\",\"channel\":\"review-ui\",\"reviewer\":{\"id\":\"declared-owner\",\"role\":\"owner\"}},\"at\":\"2026-11-27T11:48:37.659Z\",\"source\":{\"sourceHash\":\"a829f05f71c95febdd224a8230c4dd4ff532c42b92ecf0dba8fad32a6205586d\",\"projectHash\":\"d1e58b0ea47eae41f7db4d88efd10949ec7d4c0061b367e53a984a2e7b80b86d\",\"record\":{\"path\":\"project.json\",\"sha256\":\"d1e58b0ea47eae41f7db4d88efd10949ec7d4c0061b367e53a984a2e7b80b86d\"},\"inputs\":[{\"path\":\"inputs/reference.png\",\"sha256\":\"3521306987ffe39409d60ad1be5c754bad7ba778d10542603afb071ff0a4bce6\"},{\"path\":\"inputs/spec.json\",\"sha256\":\"af8533d3a15c4f04463063a5044d001fbc5339043e0ea1dbcfdae98254fcfb00\"}],\"files\":[{\"path\":\"inputs/reference.png\",\"sha256\":\"3521306987ffe39409d60ad1be5c754bad7ba778d10542603afb071ff0a4bce6\"},{\"path\":\"inputs/spec.json\",\"sha256\":\"af8533d3a15c4f04463063a5044d001fbc5339043e0ea1dbcfdae98254fcfb00\"},{\"path\":\"plan/context-evidence.json\",\"sha256\":\"65f537c4c38b1ca3577737004a082ca518051cf9b37a96f7bfc255402a366669\"},{\"path\":\"project.json\",\"sha256\":\"d1e58b0ea47eae41f7db4d88efd10949ec7d4c0061b367e53a984a2e7b80b86d\"}],\"subject\":\"plan\",\"selection\":{\"kind\":\"plan\"},\"optionSet\":null,\"optionSetFile\":null,\"plan\":{\"steps\":[{\"id\":\"step_layout\",\"hash\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"step_weights\",\"hash\":\"2222222222222222222222222222222222222222222222222222222222222222\"}]},\"subjects\":[{\"kind\":\"checkpoint\",\"checkpointId\":\"step_layout\"},{\"kind\":\"signoff\",\"stage\":\"plan-approved\"},{\"kind\":\"reopen\",\"stage\":\"plan-approved\"}]},\"value\":{\"stage\":\"plan-approved\",\"decision\":\"approved\",\"words\":\"synthetic\"}}",
+  "publication": {
+    "publicationId": "1e3be170-ac23-4007-8944-6550f12a41aa",
+    "instanceKey": "14cbd3d7e9cfcdc4996146ba2f1c54057b5d65cb43ba4843311409a3c9e1ca30",
+    "generation": 1,
+    "source": {
+      "sourceHash": "a829f05f71c95febdd224a8230c4dd4ff532c42b92ecf0dba8fad32a6205586d",
+      "projectHash": "d1e58b0ea47eae41f7db4d88efd10949ec7d4c0061b367e53a984a2e7b80b86d",
+      "record": {
+        "path": "project.json",
+        "sha256": "d1e58b0ea47eae41f7db4d88efd10949ec7d4c0061b367e53a984a2e7b80b86d"
+      },
+      "inputs": [
+        {
+          "path": "inputs/reference.png",
+          "sha256": "3521306987ffe39409d60ad1be5c754bad7ba778d10542603afb071ff0a4bce6"
+        },
+        {
+          "path": "inputs/spec.json",
+          "sha256": "af8533d3a15c4f04463063a5044d001fbc5339043e0ea1dbcfdae98254fcfb00"
+        }
+      ],
+      "files": [
+        {
+          "path": "inputs/reference.png",
+          "sha256": "3521306987ffe39409d60ad1be5c754bad7ba778d10542603afb071ff0a4bce6"
+        },
+        {
+          "path": "inputs/spec.json",
+          "sha256": "af8533d3a15c4f04463063a5044d001fbc5339043e0ea1dbcfdae98254fcfb00"
+        },
+        {
+          "path": "plan/context-evidence.json",
+          "sha256": "65f537c4c38b1ca3577737004a082ca518051cf9b37a96f7bfc255402a366669"
+        },
+        {
+          "path": "project.json",
+          "sha256": "d1e58b0ea47eae41f7db4d88efd10949ec7d4c0061b367e53a984a2e7b80b86d"
+        }
+      ],
+      "subject": "plan",
+      "selection": {
+        "kind": "plan"
+      },
+      "optionSet": null,
+      "optionSetFile": null,
+      "plan": {
+        "steps": [
+          {
+            "id": "step_layout",
+            "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "step_weights",
+            "hash": "2222222222222222222222222222222222222222222222222222222222222222"
+          }
+        ]
+      },
+      "subjects": [
+        {
+          "kind": "checkpoint",
+          "checkpointId": "step_layout"
+        },
+        {
+          "kind": "signoff",
+          "stage": "plan-approved"
+        },
+        {
+          "kind": "reopen",
+          "stage": "plan-approved"
+        }
+      ]
+    },
+    "label": "Synthetic Plan Project",
+    "previousPublicationId": null,
+    "visual": {
+      "status": "unavailable",
+      "code": "MODEL_UNAVAILABLE"
+    }
+  }
+}

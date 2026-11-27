@@ -6,7 +6,8 @@ import {fixturePublication,fixtureAct} from './helpers/job-window-fixture.ts';
 import {parseManifest} from '../src/manifest.ts';
 import {createJobWindow} from '../web/job-session.ts';
 import {enCatalog} from '../web/catalog-en.ts';
-import type {PendingAskV3,ActV3} from '../src/job-contract.ts';
+import type {PendingAskV3,ActV3,JobPartsVerdictAct,JobCommentsAct} from '../src/job-contract.ts';
+import type {PartsIssue} from '../src/parts-comment.ts';
 
 const originalLocation=Object.getOwnPropertyDescriptor(globalThis,'location');
 const originalDocument=Object.getOwnPropertyDescriptor(globalThis,'document');
@@ -30,7 +31,7 @@ function harness(onResume?:()=>void|Promise<void>){
   translate:(key,values)=>{let text=enCatalog[key]??key;values?.forEach((v,i)=>text=text.replace('{'+i+'}',String(v)));return text;},
   async load(){
    const host=rigHost()!;hosts.push(host);const name=String(hosts.length);
-   const screen:RigHostScreen={stage:()=>null,redraw(){},message:text=>events.push(text),pendingSubjects(){},
+   const screen:RigHostScreen={message:text=>events.push(text),pendingSubjects(){},
     navigation:()=>({subject:'rig',bookmark:structuredClone(bookmark) as never}),incompatible:()=>incompatible,
     suspend:()=>events.push('suspend '+name),resume:()=>{events.push('resume '+name);return onResume?.();},dispose:()=>events.push('dispose '+name)};
    if(fail){host.failed(new Error('candidate load failed'));return {dispose:()=>events.push('dispose candidate')};}
@@ -64,15 +65,33 @@ test('#743 successful swap disposes only prior screen and shows A to B plus miss
  expect(h.events).toContain('dispose 1');expect(h.events).not.toContain('dispose 2');
  expect(h.events.at(-1)).toBe('Updated from Rig 1 to Rig 2. · '+enCatalog['job.incompatible']);
 });
-for(const parts of [true,false])test(`#743 all status phases follow ${parts?'parts':'rig'} verdict, independent of mode and other subject acts`,async()=>{
- const h=harness(),p=prepared(1,parts);h.view.commit(p);await h.view.painted(p,new AbortController().signal);const host=rigHost()!;
- const kind=parts?'parts-verdict':'review-verdict',other=parts?'review-verdict':'parts-verdict';
- const ask=(act:ActV3)=>({askId:'a',publicationId:p.display.publication.publicationId,subject:act.kind==='parts-verdict'?{kind:act.kind}:{kind:act.kind,stage:'rig-review'},status:'answered',act}) as never;
- h.pending.push(ask(fixtureAct(other)));expect(host.reviewState!(3,false)).toBe('Reviewing · 3 issues');expect(host.reviewState!(3,true)).toBe('Sending');
- const act=fixtureAct(kind) as any;act.value.verdict='changes-requested';h.pending.push(ask(act));expect(host.reviewState!(3,false)).toBe(enCatalog['job.parts.sent']!);
- act.value.verdict='approved';h.pending.splice(1,1,ask(act));expect(host.reviewState!(0,false)).toBe(enCatalog['job.review.approved']!);
- h.pending.push({...h.pending[1],status:'pending',act:undefined} as never);expect(host.reviewState!(2,false)).toBe('Reviewing · 2 issues');
- h.pending.splice(0,h.pending.length, {...ask(act) as any,publicationId:'other'});expect(host.reviewState!(1,false)).toBe('Reviewing · 1 issues');
+test('#743 historical parts issues stay publication-bound on swap and rollback',async()=>{
+ const h=harness(),a=prepared(1,true),b=prepared(2,true);
+ const legacy=fixtureAct('parts-verdict');
+ if(legacy.kind!=='parts-verdict')throw new Error('Expected a Parts verdict fixture');
+ const region={x:0,y:0,width:2,height:2},sha256='a'.repeat(64);
+ const first:PartsIssue={id:'first',schema:'rig-review-parts-comment/2',summary:'Earlier source seam',
+  parts:[{name:'body',imageHash:sha256}],sourceHash:a.display.publication.source.sourceHash,rigRegion:region,imageRegion:region,
+  view:{mode:'item',camera:{zoom:1,center:{x:1,y:1},viewport:{width:2,height:2}},cameraSync:false,referenceCamera:null,
+   background:'checker',alpha:false,footprints:false,mesh:false},
+  crop:{path:'comment-crops/'+sha256+'.png',sha256,width:2,height:2},nativeCrop:null};
+ const second:PartsIssue={...first,id:'second',summary:'Current source seam',sourceHash:b.display.publication.source.sourceHash};
+ const {summary,...anchor}=second;
+ const saved=(p:JobRigScreenPrepared,act:ActV3):PendingAskV3&{act:ActV3}=>{
+  const {publicationId,source}=p.display.publication;
+  return {askId:act.askId!,publicationId,source,status:'answered',subject:{kind:'parts-verdict',draftId:'draft-one'},act};
+ };
+ const oldAct:JobPartsVerdictAct={...legacy,schema:'rig-review/act@5',value:{verdict:'changes-requested',words:'',issues:[first]}};
+ const newAct:JobCommentsAct={...legacy,schema:'rig-review/act@6',askId:'later-verdict',value:{verdict:'changes-requested',
+  comments:[{text:'General comment'},{text:summary,anchor}]}};
+ h.pending.push(saved(a,oldAct),saved(b,newAct));
+ const initial=h.view.commit(a);await h.view.painted(a,new AbortController().signal);initial.finalize();
+ const read=()=>rigHost()!.read('/api/session','GET');
+ expect(await read()).toEqual({subject:'parts',issues:[first]});
+ const swap=h.view.commit(b);await h.view.painted(b,new AbortController().signal);
+ expect(await read()).toEqual({subject:'parts',issues:[second]});
+ await swap.rollback();
+ expect(await read()).toEqual({subject:'parts',issues:[first]});
 });
 
 test('#743 main caller rebinds only navigation; missing selection clears Solo and preserves camera/reference/time',async()=>{
@@ -222,9 +241,9 @@ test('#784 record comment restoration does not arm the unrelated package beforeu
  const main=await Bun.file(new URL('../web/main.ts',import.meta.url)).text(),start=main.indexOf('function setupComments():void {');
  const prefix=main.slice(start+'function setupComments():void {'.length,main.indexOf(' comments=bindStageComments',start));
  for(const kind of ['record','direction'] as const){
-  const rows:unknown[]=[],scope={host:{[kind]:{}},recordComments:rows,dirty:false,liveIssueCount:null as null|(()=>number),restoreRecordComments(){rows.push({summary:'retained point'});}};
+  const rows:unknown[]=[],scope={host:{[kind]:{}},recordComments:rows,dirty:false,restoreRecordComments(){rows.push({summary:'retained point'});}};
   new Function('scope',`with(scope){${prefix}}`)(scope);
-  expect(scope.liveIssueCount!()).toBe(1);expect(scope.dirty).toBe(kind==='direction');
+  expect(rows).toEqual([{summary:'retained point'}]);expect(scope.dirty).toBe(kind==='direction');
  }
 });
 
@@ -250,9 +269,9 @@ for(const failure of ['prepare','paint','ack'] as const)test('#904 first '+failu
   async load(){
    loads++;const host=rigHost()!;expect(host.waiting).toBe(true);let consumed=false,disposed=false;
    const dispose=()=>{if(!disposed){disposed=true;disposals++;}};
-   host.attach({stage:()=>null,redraw(){},message(){},dispose,publish(next){
+   host.attach({message(){},dispose,publish(next){
     if(consumed)throw Error('waiting continuation already consumed');consumed=true;
-    next.attach({stage:()=>null,redraw(){},message(){},dispose});
+    next.attach({message(){},dispose});
     if(fail&&failure==='paint')next.failed(Error('planted first paint failure'));else next.displayed();
    }});
   }});

@@ -1,0 +1,207 @@
+{
+  "schema": "rig-review/act@6",
+  "actId": "f3dcab30-0c25-4f6f-b0ac-02b805634a5b",
+  "jobId": "c89fa015-6d30-4eef-896c-e56ba2e48872",
+  "askId": "c9ef6431-b7c0-4175-9786-86a7d8159192",
+  "publicationId": "d88d5003-33fc-4ef6-83fe-1bd0f5454b78",
+  "authority": {
+    "actor": "human",
+    "channel": "review-ui",
+    "reviewer": {
+      "id": "declared-owner",
+      "role": "owner"
+    }
+  },
+  "at": "2026-11-27T11:50:39.891Z",
+  "kind": "parts-verdict",
+  "source": {
+    "sourceHash": "2bbfcd1e52fc1e3d40b3ce7d38e9d4870fd8310eb26061d5cac5a783262d7477",
+    "projectHash": "e4a114a3d47f211279e08819aaf9dcb506fecc3c87462833b825011e2f2d6008",
+    "package": {
+      "id": "viewport-387-public",
+      "revision": "1"
+    },
+    "selector": {
+      "kind": "draft",
+      "id": "synthetic-draft"
+    },
+    "model": {
+      "path": "out/skeleton.model.json",
+      "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+    },
+    "direction": null,
+    "optionSet": null,
+    "appliedResult": null,
+    "plan": {
+      "steps": [
+        {
+          "id": "step-one",
+          "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ]
+    },
+    "parts": {
+      "enumeratorVersion": "2.25.1",
+      "manifest": {
+        "path": "out/parts.json",
+        "sha256": "2f36c65fa63d979d41d46f5bc5e048806d96a2b2d7850f9104203abbd7fa51fe"
+      },
+      "images": [
+        {
+          "path": "painting_in_rig.png",
+          "role": "painting",
+          "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+        },
+        {
+          "path": "parts/alternate.png",
+          "role": "alternate",
+          "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+        },
+        {
+          "path": "parts/base.png",
+          "role": "part",
+          "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+        },
+        {
+          "path": "parts/body.png",
+          "role": "part",
+          "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+        },
+        {
+          "path": "parts/depth.png",
+          "role": "depth",
+          "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+        },
+        {
+          "path": "parts/head.png",
+          "role": "part",
+          "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+        }
+      ]
+    }
+  },
+  "value": {
+    "verdict": "changes-requested",
+    "comments": [
+      {
+        "text": "  [몸통/Body] 외곽선 브릿지 1px 여백 확인 필요! 🔍\n\t(좌측 겨드랑이 라인)  ",
+        "anchor": {
+          "schema": "rig-review-parts-comment/2",
+          "id": "body-edge",
+          "parts": [
+            {
+              "name": "body",
+              "imageHash": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            }
+          ],
+          "sourceHash": "2bbfcd1e52fc1e3d40b3ce7d38e9d4870fd8310eb26061d5cac5a783262d7477",
+          "imageRegion": {
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 1
+          },
+          "rigRegion": {
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 1
+          },
+          "view": {
+            "mode": "item",
+            "camera": {
+              "zoom": 1,
+              "center": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "viewport": {
+                "width": 32,
+                "height": 32
+              }
+            },
+            "cameraSync": false,
+            "referenceCamera": null,
+            "background": "checker",
+            "alpha": false,
+            "footprints": false,
+            "mesh": false
+          },
+          "crop": {
+            "path": "comment-crops/70384ec474c821fcb0f163c854a8138838e1db7c87d1028e1898eefc2dc63cd5.png",
+            "sha256": "70384ec474c821fcb0f163c854a8138838e1db7c87d1028e1898eefc2dc63cd5",
+            "width": 1,
+            "height": 1
+          },
+          "nativeCrop": {
+            "path": "comment-crops/70384ec474c821fcb0f163c854a8138838e1db7c87d1028e1898eefc2dc63cd5.png",
+            "sha256": "70384ec474c821fcb0f163c854a8138838e1db7c87d1028e1898eefc2dc63cd5",
+            "width": 1,
+            "height": 1
+          }
+        }
+      },
+      {
+        "text": "  [메쉬/Mesh] 삼각형 분할 밀도 부족 — add 2 edge loops 🔺\n",
+        "anchor": {
+          "schema": "rig-review-parts-comment/2",
+          "id": "body-mesh",
+          "parts": [
+            {
+              "name": "body",
+              "imageHash": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            }
+          ],
+          "sourceHash": "2bbfcd1e52fc1e3d40b3ce7d38e9d4870fd8310eb26061d5cac5a783262d7477",
+          "imageRegion": {
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 1
+          },
+          "rigRegion": {
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 1
+          },
+          "view": {
+            "mode": "item",
+            "camera": {
+              "zoom": 1,
+              "center": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "viewport": {
+                "width": 32,
+                "height": 32
+              }
+            },
+            "cameraSync": false,
+            "referenceCamera": null,
+            "background": "checker",
+            "alpha": false,
+            "footprints": false,
+            "mesh": false
+          },
+          "crop": {
+            "path": "comment-crops/70384ec474c821fcb0f163c854a8138838e1db7c87d1028e1898eefc2dc63cd5.png",
+            "sha256": "70384ec474c821fcb0f163c854a8138838e1db7c87d1028e1898eefc2dc63cd5",
+            "width": 1,
+            "height": 1
+          },
+          "nativeCrop": {
+            "path": "comment-crops/70384ec474c821fcb0f163c854a8138838e1db7c87d1028e1898eefc2dc63cd5.png",
+            "sha256": "70384ec474c821fcb0f163c854a8138838e1db7c87d1028e1898eefc2dc63cd5",
+            "width": 1,
+            "height": 1
+          }
+        }
+      },
+      {
+        "text": "  부품 & 메쉬 종합 의견: body 수정 후 재검수 요청합니다. 🚀\n  "
+      }
+    ]
+  }
+}

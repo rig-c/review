@@ -1,3 +1,4 @@
+import {postLocalPackageFeedback} from './helpers/local-package-feedback.ts';
 import {expect,test} from 'bun:test';
 import {createHash} from 'node:crypto';
 import {mkdir,mkdtemp,readFile,realpath,rm,writeFile} from 'node:fs/promises';
@@ -7,7 +8,7 @@ import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
 import {assertOpNames,parseConfigPatch,patchSha256,CONFIG_PATCH_SCHEMA,type ConfigPatch} from '../src/config-patch.ts';
 import {appliedCheckRefusal,checkSummary} from '../src/applied-context.ts';
-import {freshSession,validatePackageFeedback} from '../src/session.ts';
+import {type Feedback,validatePackageFeedback} from '../src/session.ts';
 import {createWindModel} from '../src/environment.ts';
 import {applyRamp,barLine,componentValue,draftEdits,draftText,editFor,nearestChain,patchOps,physicsChains,rampValues,rowControls,setEdit,tuningRows,type PendingEdit,type TuningRow} from '../src/physics-tuning.ts';
 import {makePatch,patchOutcomeLine,stageModel,type PatchJobView} from '../web/rebuild-client.ts';
@@ -194,15 +195,15 @@ test('submit refuses a review whose applied state failed check: EDIT_SUBMIT_UNCH
  expect(appliedCheckRefusal(applied({...fail,line:null}))).toBe('EDIT_SUBMIT_UNCHECKED: applied build failed check — TEXTURE_STRETCH: FAIL');
  expect(appliedCheckRefusal(applied({...fail,pass:true,bars:{TEXTURE_STRETCH:'PASS'},line:'check: PASS'}))).toBeNull();
  expect(appliedCheckRefusal(null)).toBeNull();
- // Through the server: PUT /api/session with that note is refused by name; the same note on a passing build saves.
+ // Through the server: POST /api/local-comments with that note is refused by name; the same note on a passing build saves.
  const {root,pkg,state}=await fixture();
  const p=await loadReview(pkg),server=await startServer(p,{port:0,stateDir:state,cwd:root}),base=`http://127.0.0.1:${server.port}`;
  try{
-  const note=(context:Record<string,unknown>)=>({id:'n1',frameStart:0,frameEnd:0,target:{kind:'rig',name:p.feedbackCatalog.rig},category:'quality',summary:'fringe settles',context});
+  const note=(context:Record<string,unknown>):Feedback=>({id:'n1',frameStart:0,frameEnd:0,target:{kind:'rig',name:p.feedbackCatalog.rig},category:'quality',summary:'fringe settles',context:JSON.parse(JSON.stringify(context))});
   expect(()=>validatePackageFeedback(note({applied:applied(fail)}) as never,p)).toThrow(line);
-  const put=(feedback:unknown[])=>fetch(base+'/api/session',{method:'PUT',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({...freshSession(p),feedback})});
-  const refused=await put([note({applied:applied(fail)})]);expect(refused.ok).toBe(false);expect(await refused.text()).toContain(line);
+  const send=(feedback:Feedback[])=>postLocalPackageFeedback(base,p.sourceHash,feedback);
+  const refused=await send([note({applied:applied(fail)})]);expect(refused.ok).toBe(false);expect(await refused.text()).toContain(line);
   const passing={...fail,pass:true,bars:{TEXTURE_STRETCH:'PASS'},line:'check: PASS; 1 of 1 bar(s) measured',exitCode:0};
-  const saved=await put([note({applied:applied(passing)})]);expect(saved.ok).toBe(true);
+  const saved=await send([note({applied:applied(passing)})]);expect(saved.ok).toBe(true);
  }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
 });

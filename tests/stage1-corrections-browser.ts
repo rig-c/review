@@ -8,7 +8,8 @@ import {createHash} from 'node:crypto';
 import {writeStage1LivePackage} from './helpers/stage1-live-package.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {loadReview} from '../src/manifest.ts';
-import {freshSession} from '../src/session.ts';
+import type {Feedback} from '../src/session.ts';
+import {postLocalPackageFeedback} from './helpers/local-package-feedback.ts';
 import {rebuildDir} from '../src/rebuild.ts';
 import {startServer} from '../src/server.ts';
 import { PRODUCER_APPLY_DEADLINE_MS, WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
@@ -265,13 +266,16 @@ try{
   if(await page.evaluate(`document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot`)!=='torso')throw Error('DELTA_SELECTION_LOST');
   if(delta.check?.pass!==true)throw Error('DELTA_UNCHECKED');receipts.push({lang,instrument:'delta',applied:delta});
   await writeFile(join(artifacts,lang+'-delta.png'),await page.screenshot());
-  // Historical sealed evidence saves; changed scratch still cannot be read as the current revision.
-  const session=freshSession(p);session.feedback=[{id:'mesh-note',frameStart:0,frameEnd:0,target:{kind:'rig',name:p.feedbackCatalog.rig},category:'quality',summary:'Generated structure check',context:{applied:delta}} as any];
-  const submit=()=>fetch(base+'/api/session',{method:'PUT',headers:{Origin:base,'Content-Type':'application/json','X-Review-Capability':'a'.repeat(64)},body:JSON.stringify(session)});
-  let response=await submit();if(!response.ok)throw Error('CHECKED_SUBMIT_REFUSED '+await response.text());
+  // Historical sealed evidence can accompany a comment after its scratch build becomes stale.
+  const submit=(phase:string)=>{
+   const feedback:Feedback={id:lang+'-mesh-note-'+phase,frameStart:0,frameEnd:0,target:{kind:'rig',name:p.feedbackCatalog.rig},
+    category:'quality',summary:'Generated structure check',context:{applied:delta}};
+   return postLocalPackageFeedback(base,p.sourceHash,[feedback],{'X-Review-Capability':'a'.repeat(64)});
+  };
+  let response=await submit('checked');if(!response.ok)throw Error('CHECKED_SUBMIT_REFUSED '+await response.text());
   const path=join(rebuildDir(join(root,'state'),p.sourceHash,delta.buildId),'mesh-edit.json'),beforeInput=await readFile(path);
   await writeFile(path,Buffer.concat([beforeInput,Buffer.from(' ')]));response=await fetch(base+'/api/stage-parts',{headers:{'X-Review-Stage-Build':delta.buildId}});const stale=await response.text();if(response.ok||!stale.includes('STAGE_DRAFT_CHANGED'))throw Error('CHANGED_SCRATCH_DRAWN '+stale);
-  response=await submit();if(!response.ok)throw Error('HISTORICAL_SEALED_SUBMIT_REFUSED '+await response.text());await writeFile(path,beforeInput);
+  response=await submit('historical');if(!response.ok)throw Error('HISTORICAL_SEALED_SUBMIT_REFUSED '+await response.text());await writeFile(path,beforeInput);
   if(!beforeInput.equals(await readFile(path)))throw Error('SCRATCH_RESTORE_FAILED');
   receipts.push({lang,submit:'historical sealed evidence saved; changed current scratch refused; input restored',inputSha256:createHash('sha256').update(beforeInput).digest('hex')});
   await page.evaluate(`window.rigReviewEditor.reset()`);

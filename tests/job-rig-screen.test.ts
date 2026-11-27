@@ -4,8 +4,7 @@ useTemporaryReviewState();
 import {afterEach, expect, test} from 'bun:test';
 import {jobFixture} from './helpers/job-api-fixture.ts';
 import {seedHistoricalCheckpointAct, seedHistoricalCheckpointAsk} from './helpers/historical-checkpoint-act.ts';
-import {rigStillCapture} from './helpers/job-rig-still.ts';
-import {jobRigScreenDecisions, jobRigScreenRoute, jobRigScreenSubject, jobRigScreenAsk, jobRigScreenRefusal} from '../web/job-rig-screen.ts';
+import {jobRigScreenRoute, jobRigScreenSubject, jobRigScreenAsk, jobRigScreenRefusal} from '../web/job-rig-screen.ts';
 import {checkpointNoteComments, feedbackItemComments} from '../src/stage-comment.ts';
 import {assertPartsIssueBinding, parsePartsIssue, snapImageRegion} from '../src/parts-comment.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -14,23 +13,15 @@ import {tr} from '../web/i18n.ts';
 // The projector Create applies to act@6 comments: the public job-host export (Create c8382ba5 pins @rig-c/review 2.12.0).
 import {parseCommentsAct, projectComments} from '../src/job-host.ts';
 import legacy from './fixtures/comments-contract-legacy.json';
-import type {DisplayPublicationV3, JobUISubmission, PendingAskV3} from '../src/job-contract.ts';
-import type {Feedback, ReviewSession} from '../src/session.ts';
+import historicalDirection from './fixtures/job-verdict-1232/direction-act.json';
+import type {DisplayPublicationV3, PendingAskV3} from '../src/job-contract.ts';
+import type {Feedback} from '../src/session.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
 async function fixture() { const f = await jobFixture(); fixtures.push(f); return f; }
 const feedback: Feedback = {id: 'one', frameStart: 3, frameEnd: 5, target: {kind: 'slot', name: 'sleeve'}, category: 'defect',
   summary: 'Sleeve tears at the elbow\nduring the swing'};
-function session(value: Partial<Pick<ReviewSession, 'status' | 'checkpoints' | 'feedback'>>) {
-  return {status: 'pending' as const, checkpoints: {}, feedback: [], ...value};
-}
-/** What the act carries apart from its own identity and time: the bytes a consumer reads. */
-function actBytes(act: {actId: string; askId: string; at: string}): string {
-  const {actId: _actId, askId: _askId, at: _at, ...rest} = act;
-  return JSON.stringify(rest);
-}
-
 test('#715 and #1229 mixed rig verdict, supported modal asks and legacy pending checkpoint asks stay on the shared screen without mounting a checkpoint form', async () => {
   const f = await fixture(), publication = await f.publish();
   const display = {publication} as unknown as DisplayPublicationV3, ids = new Set(['step-one']);
@@ -66,72 +57,40 @@ test('#715 and #1229 mixed rig verdict, supported modal asks and legacy pending 
   expect(jobRigScreenRoute({publication: draft} as unknown as DisplayPublicationV3, [], ids)).toBe(false);
 });
 
-test('#709 and #1229 pending decisions and retired checkpoint outcomes are never sent; only the verdict decision is emitted', async () => {
-  const f = await fixture(), publication = await f.publish();
-  const verdict = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
-  const checkpoint = seedHistoricalCheckpointAsk(f.session, publication.publicationId, {kind: 'checkpoint', checkpointId: 'step-one'});
-  const asks = [verdict, checkpoint] as unknown as PendingAskV3[];
-  expect(jobRigScreenDecisions(session({}), asks, publication.publicationId)).toEqual([]);
-  expect(jobRigScreenDecisions(session({checkpoints: {'step-one': {outcome: 'pending', note: 'x'}}}), asks, publication.publicationId)).toEqual([]);
-  expect(jobRigScreenDecisions(session({checkpoints: {'step-one': {outcome: 'fail', note: 'x'}}}), asks, publication.publicationId)).toEqual([]);
-  const decided = jobRigScreenDecisions(session({status: 'changes-requested', feedback: [feedback],
-    checkpoints: {'step-one': {outcome: 'fail', note: ' '}}}), asks, publication.publicationId);
-  expect(decided.map(item => item.kind)).toEqual(['review-verdict']);
-  expect(decided[0]!.value).toEqual({stage: 'rig-review', verdict: 'changes-requested',
-    words: '[["slot","sleeve",3,5,null]]\nSleeve tears at the elbow\nduring the swing', feedback: [feedback]});
-  expect(jobRigScreenDecisions(session({status: 'approved'}), asks, 'other-publication')).toEqual([]);
-});
-
-test('#746 the rig screen keeps act@6 and structured feedback instead of a general words projection', async () => {
-  const f = await fixture(), publication = await f.publish();
-  const rows = [{...feedback, summary: 'Sleeve tears at the elbow'}];
-  const note = projectComments(feedbackItemComments(rows));
-  async function commit(askId: string, value: unknown, submissionId: string) {
-    const ask = f.session.status().pending.find(item => item.askId === askId)!, page = await f.display(publication);
-    const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId, expectedGeneration: f.session.status().generation,
-      submissionId, kind: 'review-verdict', value, capture: rigStillCapture(publication, ask as never, page).capture}));
-    if (!result.ok) throw new Error(result.error.code);
-    return result.value as unknown as {actId: string; askId: string; at: string};
-  }
-  const today = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
-  // The job window's value shape `{stage, verdict, words}`, carrying the same words.
-  const before = await commit(today.askId, {stage: 'rig-review', verdict: 'approved', words: note}, 'today');
-  const after = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
-  const [decision] = jobRigScreenDecisions(session({status: 'approved', feedback: rows}),
-    f.session.status().pending as unknown as PendingAskV3[], publication.publicationId);
-  expect(decision!.ask.askId).toBe(after.askId);
-  expect(decision!.value.words).toBe(note);
-  const screen = await commit(after.askId, decision!.value, 'screen');
-  expect(parseCommentsAct(screen)).toMatchObject({schema: 'rig-review/act@6', kind: 'review-verdict',
-    value: {comments: feedbackItemComments(rows)}});
-  expect(projectComments(parseCommentsAct(screen).value.comments)).toBe(note);
-  expect(parseCommentsAct(before).value.comments).toEqual([{text: note}]);
-  expect(actBytes(screen)).not.toBe(actBytes(before));
-});
-
-// #1229: checkpoint decisions are retired from jobRigScreenDecisions; historical act@6 checkpoint acts still preserve projected words.
 test('#709 and #1229 historical act@6 checkpoint acts preserve projected words while fresh submissions refuse', async () => {
   const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
   const note = projectComments(checkpointNoteComments({checkpointId: 'step-one', planStepId: 'step-one', note: 'Elbow seam opens'}));
   expect(note).toBe('[["checkpoint","step-one"]]\nElbow seam opens');
+  for (const text of ['', ' \n\t', '  keep\nspacing  ']) {
+    const comments = text.trim() ? checkpointNoteComments({checkpointId: 'step-one', planStepId: 'step-one', note: text}) : [];
+    expect(projectComments(comments)).toBe(text.trim() ? `[["checkpoint","step-one"]]\n${text}` : '');
+  }
   const stored = seedHistoricalCheckpointAct(f.session, {...page, expectedGeneration: f.session.status().generation,
     submissionId: 'historical-709', checkpointId: 'step-one', value: {checkpointId: 'step-one', outcome: 'pass', words: note}});
   expect(parseCommentsAct(stored)).toMatchObject({schema: 'rig-review/act@6', kind: 'checkpoint',
     value: {checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass'}});
 });
 
-test('#709 for the same comments[], words equal the job-host projectComments byte for byte; zero comments write empty words', () => {
-  const ask = (askId: string, subject: unknown) => ({askId, publicationId: 'p', status: 'pending', subject, source: {}}) as unknown as PendingAskV3;
-  const item = (id: string, summary: string): Feedback => ({...feedback, id, summary});
-  for (const rows of [[], [item('a', 'one line')], [item('a', '  lead and trail  \n'), item('b', '원문 그대로\t둘째 줄')]]) {
-    const [decision] = jobRigScreenDecisions(session({status: 'approved', feedback: rows}), [ask('v', {kind: 'review-verdict', stage: 'rig-review'})], 'p');
-    expect(decision!.value.words).toBe(projectComments(feedbackItemComments(rows)));
-  }
-  for (const note of ['', ' \n\t', 'Elbow seam opens', '  keep\nspacing  ']) {
-    const comments = note.trim() ? checkpointNoteComments({checkpointId: 'step-one', planStepId: 'step-one', note}) : [];
-    expect(projectComments(comments)).toBe(note.trim() ? `[["checkpoint","step-one"]]\n${note}` : '');
-  }
-  expect(projectComments([])).toBe('');
+test('#746 historical rig verdict comments retain their anchor and exact human text in the reader', () => {
+  const recorded = JSON.parse(legacy.records['@3'].raw);
+  const rows = [feedback, {...feedback, id: 'two', summary: '  원문 그대로\n둘째 줄  '}];
+  const comments = feedbackItemComments(rows);
+  const act = parseCommentsAct({...recorded, schema: 'rig-review/act@6', value: {
+    stage: 'rig-review', verdict: 'changes-requested', comments,
+  }});
+  expect(act.value.comments).toEqual(comments);
+  expect(projectComments(act.value.comments)).toBe(
+    '[["slot","sleeve",3,5,null]]\nSleeve tears at the elbow\nduring the swing\n\n[["slot","sleeve",3,5,null]]\n  원문 그대로\n둘째 줄  ',
+  );
+});
+
+test('#1136 historical direction verdict preserves ordered comments, including whitespace', () => {
+  const act = parseCommentsAct(historicalDirection);
+  expect<unknown>(act).toEqual(historicalDirection);
+  expect(act.value.comments).toEqual([
+    {text: '  원문 그대로\r\nKeep the camera still.  \n'},
+    {text: 'A second comment'},
+  ]);
 });
 
 test('#709 act@6 accepts comments [] for a rig verdict and a checkpoint, and refuses a whitespace-only comment as JOB_ACT_INVALID', () => {
@@ -144,17 +103,7 @@ test('#709 act@6 accepts comments [] for a rig verdict and a checkpoint, and ref
   }
 });
 
-test('#709 the rig screen still does not depend on the mesh or bone overlay toggles', async () => {
-  // The still is rendered from the posed model with tool overlays excluded (docs/REVIEW_PACKAGE.md, "Rig verdict
-  // still backend"); mesh edges and bone points are overlays, so they no longer make the whole rig ineligible.
-  const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
-  const stage = main.slice(main.indexOf('function hostStage():RigHostStage|null {'), main.indexOf('/** Old feedback bookmarks keep'));
-  expect(stage).toContain('wholeRig:!rigDifference&&!parts?.value()&&player.slots===null&&layers.images,');
-  expect(stage).not.toContain('layers.mesh');
-  expect(stage).not.toContain('layers.bones');
-});
-
-// Model verdicts belong to the shared screen; the job window owns neither form.
+// Historical verdict subjects can select the shared screen without restoring retired forms.
 test('#709 job-window rig verdict mount and capture path are deleted, not hidden by a test override', async () => {
   const source = await Bun.file(new URL('../web/job-session.ts', import.meta.url)).text();
   const form = source.slice(source.indexOf('    function formFor('), source.indexOf('    function updateForms('));
@@ -174,6 +123,9 @@ test('#709 job-window rig verdict mount and capture path are deleted, not hidden
   expect(source).not.toContain('job.reopen');
   const rigScreenSource = await Bun.file(new URL('../web/job-rig-screen.ts', import.meta.url)).text();
   expect(rigScreenSource).not.toContain('reopen');
+  expect(rigScreenSource).not.toContain('jobRigScreenDecisions');
+  expect(rigScreenSource).not.toContain('submitParts');
+  expect(rigScreenSource).not.toContain('freezeJobRigStage');
   const mainSource = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
   expect(mainSource).not.toContain('Review the reopened stage.');
   const actSource = await Bun.file(new URL('../src/job-act.ts', import.meta.url)).text();
@@ -225,7 +177,7 @@ test('#756 and #1229 package legacy checkpoint ask requires the same-source plan
 });
 
 
-test('#773 direction publications use the shared rig screen and act bar with ordered comment projection', async () => {
+test('#773 direction publications use the shared rig screen with matching historical asks', async () => {
   const f = await fixture(), publication = await f.publish();
   const source = {...publication.source, selector: {kind: 'post', version: 2, rigVersion: 1},
     direction: {path: 'direction.json', sha256: 'd'.repeat(64)}};
@@ -237,12 +189,6 @@ test('#773 direction publications use the shared rig screen and act bar with ord
   expect(jobRigScreenSubject({...source,direction:null} as unknown as DisplayPublicationV3['publication']['source'])).toBe(false);
   expect(jobRigScreenRoute(display, [ask], new Set())).toBe(true);
   expect(jobRigScreenRoute(display, [{...ask, subject: {kind:'review-verdict',stage:'rig-review'}}], new Set())).toBe(false);
-  const rows = [feedback, {...feedback, id: 'two', summary: 'Keep original framing'}];
-  expect(jobRigScreenDecisions(session({status:'changes-requested',feedback:rows}), [ask], publication.publicationId)[0]?.value)
-    .toEqual({stage:'direction-review',verdict:'changes-requested',words:projectComments(feedbackItemComments(rows))});
-  expect(jobRigScreenDecisions(session({status:'approved'}), [ask], publication.publicationId)[0]?.value)
-    .toEqual({stage:'direction-review',verdict:'approved',words:''});
-  expect(jobRigScreenDecisions(session({}), [ask], publication.publicationId)).toEqual([]);
   const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
   expect(main).toContain('directionPanel.show(!!data.direction)');
 });
@@ -260,56 +206,6 @@ test('#784 and #1229 model-less package opens cleanly without asks while checkpo
  expect(jobRigScreenAsk(display,invalid,new Set(['photo-check']))).toBe(false);
  expect(jobRigScreenRoute(display,[invalid],new Set(['photo-check']))).toBe(false);
  expect(jobRigScreenRoute(display,[{...ask,subject:{kind:'review-verdict',stage:'rig-review'}} as PendingAskV3],new Set())).toBe(false);
-});
-
-test('#1136 direction save hands the host ordered native comments from the shared draft', async () => {
-  const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
-  const rows = [feedback, {id: 'general', summary: '  전체 timing '}, {...feedback, id: 'two', summary: 'Later pose'}];
-  const start = main.indexOf("  button('save').onclick = async () => {");
-  const end = main.indexOf('    try { const saved = await api<ReviewSession>', start);
-  const mapStart = main.indexOf('function recordJobComments('), mapEnd = main.indexOf('function projectRecordComments(', mapStart);
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  expect(mapStart).toBeGreaterThanOrEqual(0);
-  expect(mapEnd).toBeGreaterThan(mapStart);
-  const source = main.slice(mapStart, mapEnd) + main.slice(start, end) + '};';
-  const code = new Bun.Transpiler({loader: 'ts'}).transformSync(source);
-  const args: unknown[][] = [], save = {onclick: async () => {}};
-  const scope = {button: () => save, readOnly: false, draftConflict: false, saving: false,
-    session: {...session({status: 'changes-requested'}), feedbackWarnings: []},
-    updateSavedState() {}, recordComments: rows, feedbackItemComments,
-    recordCommentWords: () => 'legacy scalar', host: {direction: {}, submit: async (...input: unknown[]) => {args.push(input); return '';}}};
-  new Function('scope', `with(scope){${code}}`)(scope);
-  await save.onclick();
-  expect(args).toHaveLength(1);
-  expect(args[0]![2]).toEqual([...feedbackItemComments([feedback]), {text: '  전체 timing '},
-    ...feedbackItemComments([rows[2] as Feedback])]);
-});
-
-test('#1136 transport sends direction comments in order and retains the omitted-argument words path', async () => {
-  const source = await Bun.file(new URL('../web/job-rig-screen.ts', import.meta.url)).text();
-  const start = source.indexOf('  async function submit(session:'), end = source.indexOf('  const partsAttempts=', start);
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  const code = new Bun.Transpiler({loader: 'ts'}).transformSync(source.slice(start, end));
-  const ask = {askId: 'direction-ask', publicationId: 'publication', status: 'pending',
-    subject: {kind: 'review-verdict', stage: 'direction-review'}};
-  const sent: JobUISubmission[] = [];
-  const scope = {mounted: {display: {publication: {publicationId: ask.publicationId}}}, attempts: new Map(),
-    jobRigScreenRefusal: () => null, jobRigScreenDecisions, createJobRigSubmission: () => ({}),
-    options: {access: {capability: 'owner'}, pageId: 'page', translate: (key: string) => key,
-      window: {state: () => ({receipt: {displayedNonce: 'nonce'}, pending: [ask], generation: 2}),
-        submit: async (input: JobUISubmission) => {sent.push(input); return {ok: true, value: {kind: input.kind, at: 'time'}};}}}};
-  const submit = new Function('scope', `with(scope){${code};return submit;}`)(scope);
-  const review = session({status: 'changes-requested', feedback: [feedback]});
-  const comments = [{text: 'First general'}, ...feedbackItemComments([feedback]), {text: 'Final general'}];
-  await submit(review, () => {}, comments);
-  await submit(review, () => {}, []);
-  await submit(review, () => {});
-  const decision = {stage: 'direction-review', verdict: 'changes-requested'} as const;
-  expect(sent.map(input => input.value)).toEqual([
-    {...decision, comments}, {...decision, comments: []}, {...decision, words: projectComments(feedbackItemComments([feedback]))},
-  ]);
 });
 
 test('#798 direction comments restore cannot override the inspection draft verdict', async()=>{
@@ -508,7 +404,7 @@ test('#992 record and verdict comment drafts survive reload, same-source republi
  }
 });
 
-test('#999 assembled box-pin comments clamp to intersecting bound parts, commit pending composer drafts on Request changes, and fail on da67304 control',()=>{
+test('#999 assembled box-pin comments clamp to intersecting bound parts and fail on the da67304 control',()=>{
  const items=new Map([
   ['handwear_l',{name:'handwear_l',x:1165,y:292,w:755,h:274,imageHash:'a'.repeat(64)}],
   ['objects',{name:'objects',x:1274,y:353,w:646,h:727,imageHash:'b'.repeat(64)}],

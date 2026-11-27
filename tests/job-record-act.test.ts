@@ -20,7 +20,6 @@ import commentsLegacy from './fixtures/comments-contract-legacy.json';
 import {
   bindJobAsk,
   bindJobRecordAsk,
-  finalizeJobAct,
   parseUISubmission,
   prepareJobRecordAct,
 } from '../src/job-act.ts';
@@ -402,14 +401,6 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
         jobId: 'job_1', submission, ask, retained, reviewer, actId: 'act_picks_1', at: '2026-11-08T12:00:00.000Z',
       }),
     ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
-    // Also through the finalizeJobAct overload
-    expect(() =>
-      finalizeJobAct({
-        jobId: 'job_1', submission: { ...submission, value: { ...submission.value, note: '' } }, ask, retained,
-        reviewer: { id: 'delegate_1', role: 'delegate' }, actId: 'act_picks_2', at: '2026-11-08T12:05:00.000Z',
-      }),
-    ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
-
     // The act@4 picks bytes 285a59f's writer emitted for this submission still decode byte-identically.
     const survey = { questionId: 'rig_type', selections: submission.value.selections, note: verbatimNote };
     const historical = {
@@ -490,18 +481,6 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
           at: '2026-11-08T12:00:00.000Z',
         }),
       ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
-      expect(() =>
-        finalizeJobAct({
-          jobId: 'job_plan_1',
-          submission,
-          ask: checkpointAsk,
-          retained,
-          reviewer,
-          actId: `act_cp_${outcome}`,
-          at: '2026-11-08T12:00:00.000Z',
-        }),
-      ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
-
       const storedCheckpointAct = {
         schema: JOB_RECORD_ACT_SCHEMA,
         actId: `act_cp_${outcome}`,

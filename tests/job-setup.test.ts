@@ -5,7 +5,6 @@ import {readFileSync} from 'node:fs';
 import {RigPlayer} from '@rig-c/play';
 import {applyDomI18n,setLanguagePreference,setSourceText} from '../web/i18n.ts';
 import {PartInspection,partCatalog} from '../web/part-selection.ts';
-import {freezeJobRigStage} from '../web/job-rig-capture.ts';
 import {loadSetupAssets,setupRoot} from './helpers/setup-mesh.ts';
 
 const main=readFileSync(new URL('../web/main.ts',import.meta.url),'utf8');
@@ -34,18 +33,8 @@ async function screen(visible=true,direction?:DirectionInspection){
  const transport=new Function('scope',`with(scope){${code};return {chooseAnimation,seek,inspectControlTime};}`)(scope) as {chooseAnimation(name:string):void;seek(time:number):void;inspectControlTime(time:number,signal:AbortSignal):Promise<void>};
  const reset=new Function('scope',`with(scope){${code};${new Bun.Transpiler({loader:'ts'}).transformSync('if(false){}'+setup)};drawRig(()=>player.draw());renderTransport();}`);
  function at(animation:string,time:number){if(animation){if(scope.animation!==animation)transport.chooseAnimation(animation);}else reset(scope);transport.seek(time);}
- let generation=0;
- async function capture(){
-  const saved=Object.getOwnPropertyDescriptor(globalThis,'FileReader');
-  const document=globalThis.document,create=document.createElement.bind(document);
-  document.createElement=((tag:string)=>{if(tag==='div')return setupRoot();const canvas=create(tag) as HTMLCanvasElement&{toBuffer(format:string):Buffer};if(tag==='canvas')canvas.toBlob=callback=>callback(new Blob([new Uint8Array(canvas.toBuffer('image/png'))]));return canvas;}) as typeof document.createElement;
-  class Reader{result:string|null=null;onload:(()=>void)|null=null;onerror:(()=>void)|null=null;readAsDataURL(blob:Blob){void blob.arrayBuffer().then(bytes=>{this.result='data:image/png;base64,'+Buffer.from(bytes).toString('base64');this.onload?.();},()=>this.onerror?.());}}
-  Object.defineProperty(globalThis,'FileReader',{configurable:true,value:Reader});
-  try{return await freezeJobRigStage({player:scope.player,assets:loaded.assets,source,playing:false,pane:{clientWidth:160,clientHeight:128} as HTMLElement},'ask-1',++generation).encode();}
-  finally{document.createElement=create;if(saved)Object.defineProperty(globalThis,'FileReader',saved);else delete (globalThis as unknown as Record<string,unknown>).FileReader;}
- }
  at('',0);
- return {scope,drawTimes,open:(name:string)=>transport.chooseAnimation(name),get player(){return scope.player;},parts,root,source,camera,clock,at,capture,restoreTime:(time:number)=>transport.inspectControlTime(time,new AbortController().signal),close(){scope.player.dispose();loaded.dispose();}};
+ return {scope,drawTimes,open:(name:string)=>transport.chooseAnimation(name),get player(){return scope.player;},parts,root,source,camera,clock,at,restoreTime:(time:number)=>transport.inspectControlTime(time,new AbortController().signal),close(){scope.player.dispose();loaded.dispose();}};
 }
 
 test('#557 shared Setup holds a public null-animation pose before inspection',async()=>{
@@ -57,52 +46,50 @@ test('#796 setup → animation → Setup → animation retains source, camera an
   for(const [animation,time]of [['inspect',0],['inspect',.375],['',0],['inspect',.625]] as const){
    h.at(animation,time);const identity=h.scope.player;expect(h.scope.source).toBe(source);expect(h.camera).toEqual(camera);
    expect(identity.current).toBe(animation||null);expect(identity.entry(0)?.animationTime??0).toBe(time);
+   expect(h.scope.time).toBe(time);expect(h.clock.value).toBe(String(time));
    expect(h.parts.frame('single')).toEqual(identity.posedFrame());expect(h.parts.value()).toEqual(selection);
   }
  }finally{h.close();}
 });
-test('#796 held-pose stills bind source/public frame across shared-screen transitions without changing the owner view',async()=>{
- const h=await screen();try{
-  for(const [animation,time]of [['',0],['inspect',0],['inspect',.375],['',0]]as const){
-   h.at(animation,time);const pose=structuredClone(h.player.posedFrame()),camera=structuredClone(h.camera),generation=h.player.generation;
-   const still=await h.capture();expect(still.frame).toBe(animation?time:'setup');expect(still.animation).toBe(animation||undefined);
-   expect(still.binding).toMatchObject({...h.source,askId:'ask-1',playerGeneration:generation});
-   expect(h.player.posedFrame()).toEqual(pose);expect(h.camera).toEqual(camera);expect(h.scope.time).toBe(time);expect(still.png).toStartWith('data:image/png;base64,');
-  }
+test('#557 shared Setup retains valid models with no visible attachment',async()=>{
+ const h=await screen(false);try{
+  expect(h.player.current).toBeNull();expect(h.player.time).toBe(0);
+  expect(h.player.posedFrame().order).toEqual([]);expect(h.parts.frame('single')?.order).toEqual([]);
  }finally{h.close();}
 });
-test('#557 shared Setup retains valid models with no visible attachment',async()=>{
- const h=await screen(false);try{expect(h.player.posedFrame().order).toEqual([]);expect(h.parts.frame('single')?.order).toEqual([]);expect((await h.capture()).frame).toBe('setup');expect(()=>freezeJobRigStage({player:h.player,assets:{...h.scope.assets,stage:null},pane:{} as HTMLElement,source:h.source,playing:false},'missing-pose',1)).toThrow('JOB_STILL_CAPTURE_FAILED');}finally{h.close();}
-});
-test('#796 context and solo selection capture the whole rig and retain the owner selection and camera',async()=>{
+test('#796 context and solo preserve the public whole pose and the selected inspection frame',async()=>{
  const h=await screen();try{
-  h.at('inspect',.375);const whole=await h.capture(),slot=h.player.slotIdentity().slots[0]!.slot;
-  for(const mode of ['context','solo']as const){h.parts.select({side:'single',slot,mode});const selected=structuredClone(h.parts.value()),camera=structuredClone(h.camera),pose=h.player.posedFrame(null);
-   const still=await h.capture();expect(still.png).toBe(whole.png);expect(still.view).toBe('whole-rig');expect(still.frame).toBe(.375);
-   expect(h.parts.value()).toEqual(selected);expect(h.camera).toEqual(camera);expect(h.player.posedFrame(null)).toEqual(pose);
+  h.at('inspect',.375);
+  const whole=structuredClone(h.player.posedFrame(null)),slot=h.player.slotIdentity().slots[0]!.slot;
+  const camera=structuredClone(h.camera),generation=h.player.generation;
+  for(const mode of ['context','solo']as const){
+   h.parts.select({side:'single',slot,mode});
+   expect(h.parts.value()).toMatchObject({side:'single',slot,mode});
+   expect(h.parts.frame('single')?.order).toEqual(mode==='solo'?whole.order.filter(row=>row.slot===slot):whole.order);
+   expect(h.player.posedFrame(null)).toEqual(whole);expect(h.player.generation).toBe(generation);
+   expect(h.player.entry(0)?.animationTime).toBe(.375);expect(h.camera).toEqual(camera);
   }
-  expect(()=>freezeJobRigStage({player:h.player,assets:null,pane:{} as HTMLElement,source:h.source,playing:false},'missing',1)).toThrow('JOB_STILL_CAPTURE_FAILED');
  }finally{h.close();}
 });
 test('#557 shared Setup clears the animated pose on the same public player',async()=>{
  const h=await screen();try{h.at('inspect',.375);const animated=structuredClone(h.player.posedFrame());h.at('',0);expect(h.player.current).toBeNull();expect(h.player.time).toBe(0);expect(h.player.posedFrame()).not.toEqual(animated);expect(h.parts.frame('single')).toEqual(h.player.posedFrame());}finally{h.close();}
 });
-test('#796 Repeat-end UI endpoint, public wrapped frame and whole-rig capture agree by loop phase; Setup keeps reference-only seconds',async()=>{
+test('#796 Repeat-end UI endpoint, public wrapped frame agree by loop phase; Setup keeps reference-only seconds',async()=>{
  const h=await screen();try{
-  for(const repeat of [true,false]){h.scope.repeat=repeat;h.at('',0);h.at('inspect',1);const actual=h.player.entry(0)!.animationTime,still=await h.capture();
-   expect(h.clock.value).toBe('1');expect(h.scope.time).toBe(1);expect(actual).toBeCloseTo(repeat?0:1,12);expect(still.frame).toBe(actual);expect(still.animation).toBe('inspect');
+  for(const repeat of [true,false]){h.scope.repeat=repeat;h.at('',0);h.at('inspect',1);const actual=h.player.entry(0)!.animationTime;
+   expect(h.clock.value).toBe('1');expect(h.scope.time).toBe(1);expect(h.player.current).toBe('inspect');expect(actual).toBeCloseTo(repeat?0:1,12);
    expect(repeat?h.scope.time%h.scope.duration:h.scope.time).toBeCloseTo(actual,12);
   }
-  h.at('',1.25);expect(h.scope.time).toBe(1.25);expect(h.clock.value).toBe('1.25');expect(h.player.current).toBeNull();expect(h.player.time).toBe(0);expect((await h.capture()).frame).toBe('setup');
+  h.at('',1.25);expect(h.scope.time).toBe(1.25);expect(h.clock.value).toBe('1.25');expect(h.player.current).toBeNull();expect(h.player.time).toBe(0);expect(h.parts.frame('single')).toEqual(h.player.posedFrame());
  }finally{h.close();}
 });
 
 test('#796 restored Setup retains numeric reference seconds without seeking a cleared rig track',async()=>{
- const h=await screen();try{await h.restoreTime(1.25);expect(h.scope.time).toBe(1.25);expect(h.clock.value).toBe('1.25');expect(h.player.current).toBeNull();expect(h.player.time).toBe(0);expect((await h.capture()).frame).toBe('setup');h.at('inspect',.375);expect(h.player.entry(0)!.animationTime).toBe(.375);}finally{h.close();}
+ const h=await screen();try{await h.restoreTime(1.25);expect(h.scope.time).toBe(1.25);expect(h.clock.value).toBe('1.25');expect(h.player.current).toBeNull();expect(h.player.time).toBe(0);expect(h.parts.frame('single')).toEqual(h.player.posedFrame());h.at('inspect',.375);expect(h.player.entry(0)!.animationTime).toBe(.375);}finally{h.close();}
 });
 
 
-test('#799 the first scene draw and immediate frozen pose use a nonzero mapped source start while take time stays zero',async()=>{
+test('#799 the first scene draw uses a nonzero mapped source start while take time stays zero',async()=>{
  const direction:DirectionInspection={file:{path:'direction.json',sha256:'a'.repeat(64)},model:{path:'skeleton.model.json',sha256:'b'.repeat(64)},rigVersion:1,
   camera:{space:'rig-world-y-up',keys:[{time:0,easing:'hold',box:{x:0,y:0,width:80,height:64}}]},
   take:{duration:8,loop:true},timing:[{time:0,source_time:.5,easing:'linear'},{time:8,source_time:2,easing:'hold'}]};
@@ -110,11 +97,12 @@ test('#799 the first scene draw and immediate frozen pose use a nonzero mapped s
   h.drawTimes.length=0;h.open('inspect');
   expect(h.scope.time).toBe(0);expect(h.clock.value).toBe('0');
   expect(h.drawTimes).toEqual([.5]);expect(h.player.entry(0)!.animationTime).toBe(.5);
-  const initial=structuredClone(h.player.posedFrame()),captured=await h.capture();
-  expect(captured.frame).toBe(.5);expect(captured.binding.sourceHash).toBe(h.source.sourceHash);
+  const initial=structuredClone(h.player.posedFrame());
+  expect(h.parts.frame('single')?.order).toEqual(initial.order);
   h.at('inspect',1);h.at('inspect',0);
   expect(h.player.posedFrame().order).toEqual(initial.order);
-  expect((await h.capture()).png).toBe(captured.png);expect(h.scope.time).toBe(0);
+  expect(h.parts.frame('single')?.order).toEqual(initial.order);
+  expect(h.player.entry(0)!.animationTime).toBe(.5);expect(h.scope.time).toBe(0);
  }finally{h.close();}
 });
 

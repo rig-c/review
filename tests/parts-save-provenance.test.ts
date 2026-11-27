@@ -7,8 +7,9 @@ import {mkdir, mkdtemp, open, readFile, realpath, rm, writeFile} from 'node:fs/p
 import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {resolve, join, dirname} from 'node:path';
-import {loadPartsView, readVerdict, saveVerdict, saveVerdictWithReceipt, exportPartsVerdict} from '../src/parts-view.ts';
-import {startPartsServer, type PartsSavedEvent, type PartsServerOptions} from '../src/parts-server.ts';
+import {LOCAL_COMMENTS_ROUTE} from '../src/local-comments.ts';
+import {loadPartsView, readVerdict, saveVerdict, saveVerdictWithReceipt, exportPartsVerdict, verdictSource} from '../src/parts-view.ts';
+import {startPartsServer} from '../src/parts-server.ts';
 import {writePartsPackage} from './helpers/parts-package.ts';
 
 const roots: string[] = [];
@@ -62,8 +63,8 @@ async function probe(script: string) {
   } finally { clearTimeout(timer); }
 }
 
-async function launch(args: string[], bootstrap?: string) {
-  const command = bootstrap ? ['-e', bootstrap] : ['src/entry.ts', 'parts', ...args];
+async function launch(args: string[]) {
+  const command = ['src/entry.ts', 'parts', ...args];
   const child = spawn(process.execPath, command, {stdio: 'pipe'});
   children.add(child);
   let stdout = '', stderr = '';
@@ -96,22 +97,6 @@ async function launch(args: string[], bootstrap?: string) {
     child.kill('SIGTERM');
     return done;
   }};
-}
-
-function post(origin: string, capability: string, body: unknown = input) {
-  return fetch(origin + '/api/parts/verdict', {method: 'POST', headers: {
-    Origin: origin, 'Content-Type': 'application/json', 'X-Review-Capability': capability,
-  }, body: JSON.stringify(body)});
-}
-function records(stdout: string): PartsSavedEvent[] {
-  return stdout.split('\n').filter(line => line.startsWith('RIG_REVIEW_PARTS_SAVED '))
-    .map(line => JSON.parse(line.slice('RIG_REVIEW_PARTS_SAVED '.length)));
-}
-async function serve(pkg: Awaited<ReturnType<typeof fixture>>, options: PartsServerOptions = {}) {
-  const capability = 'a'.repeat(64);
-  const server = await startPartsServer(pkg, {port: 0, capability, ...options});
-  const origin = `http://127.0.0.1:${server.port}`;
-  return {server, origin, save: (body: unknown = input) => post(origin, capability, body)};
 }
 
 test('#568 default JSON reads the ordinary verdict plus null attribution and the raw saved digest', async () => {
@@ -150,20 +135,18 @@ test('#568 historical /1 and /2 ignored extensions and /3 named provenance remai
   expect(await readFile(pkg.verdictPath)).toEqual(bytes);
 });
 
-test('#568 named launch owns attribution, shared HTTP uses /4, and an unnamed explicit save clears it', async () => {
-  const pkg = await fixture(), by = '  나루 \"declared\"\u2028\u2029  ';
-  const named = await serve(pkg, {by});
+test('#568 named /4 verdicts retain attribution in HTTP and CLI reads', async () => {
+  const pkg = await fixture(), by = '  나루 "declared"\u2028\u2029  ';
+  const {verdict} = await saveVerdictWithReceipt(pkg, {...input, by: 'ignored'}, undefined, by);
+  const bytes = await readFile(pkg.verdictPath);
+  const server = await startPartsServer(pkg, {port: 0});
   try {
-    const response = await named.save({...input, by: 'browser has no authority'});
-    expect(response.status).toBe(200);
-    const {verdict} = await response.json();
-    const bytes = await readFile(pkg.verdictPath);
     expect(JSON.parse(bytes.toString())).toEqual({...verdict, schema: 'rig-review-parts-verdict/4', by});
-    const shared = await readVerdict(pkg);
-    expect(shared).toEqual({verdict, stale: null});
-    const view = await (await fetch(named.origin + '/api/parts')).json();
+    expect(await readVerdict(pkg)).toEqual({verdict, stale: null});
+    const origin = 'http://127.0.0.1:' + server.port;
+    const view = await (await fetch(origin + '/api/parts')).json();
     expect(view.verdict).toEqual(verdict);
-    const exported = await (await fetch(named.origin + '/api/parts/export?format=json')).json();
+    const exported = await (await fetch(origin + '/api/parts/export?format=json')).json();
     expect(exported).toEqual(verdict);
     const result = await cli([pkg.root, '--format', 'json']);
     expect(result.exit).toBe(0);
@@ -172,15 +155,13 @@ test('#568 named launch owns attribution, shared HTTP uses /4, and an unnamed ex
     const issue = await cli([pkg.root, '--format', 'issue']);
     expect(issue.exit).toBe(0);
     expect(issue.stdout).toBe(exportPartsVerdict(verdict, 'issue'));
-  } finally { named.server.stop(true); }
-  const unnamed = await serve(pkg);
-  try {
-    expect((await unnamed.save({...input, by})).status).toBe(200);
-    const stored = JSON.parse(await readFile(pkg.verdictPath, 'utf8'));
-    expect(stored.schema).toBe('rig-review-parts-verdict/4');
-    expect(Object.hasOwn(stored, 'by')).toBe(false);
-    expect(JSON.parse((await cli([pkg.root, '--format', 'json'])).stdout).by).toBeNull();
-  } finally { unnamed.server.stop(true); }
+  } finally { server.stop(true); }
+
+  await saveVerdict(pkg, {...input, by});
+  const stored = JSON.parse(await readFile(pkg.verdictPath, 'utf8'));
+  expect(stored.schema).toBe('rig-review-parts-verdict/4');
+  expect(Object.hasOwn(stored, 'by')).toBe(false);
+  expect(JSON.parse((await cli([pkg.root, '--format', 'json'])).stdout).by).toBeNull();
 });
 
 test('#568 malformed named records retain PARTS_VERDICT_INVALID and cannot be reset by save', async () => {
@@ -217,128 +198,32 @@ test('#568 --by rejects duplicate, missing, blank, export and correction conflic
   }
 });
 
-test('#568 actual CLI emits exactly three framed saves including identical saves and resets count on restart', async () => {
-  const pkg = await fixture();
-  const verdict = join(pkg.root, 'save-"\\\r\n\u2028\u2029.json');
-  const args = [pkg.root, '--port', '0', '--verdict', verdict, '--by', '--declared-name'];
-  const launched = await launch(args);
-  const expected: PartsSavedEvent[] = [];
+test('#1233 parts CLI sends attributed local comments without a standalone verdict or stdout save receipt', async () => {
+  const pkg = await fixture(), by = '  나루 "declared"\u2028\u2029  ';
+  const launched = await launch([pkg.root, '--port', '0', '--by', by]);
   try {
-    const fixes = await partsIssueSubmission(pkg);
-    for (const body of [input, input, fixes]) {
-      const response = await post(launched.origin, launched.capability, body);
-      expect(response.status).toBe(200);
-      await response.json();
-      expected.push({verdictPath: verdict, sha256: digest(await readFile(verdict)), status: body.status as PartsSavedEvent['status'], saveCount: expected.length + 1});
-    }
+    const headers = {Origin: launched.origin, 'Content-Type': 'application/json', 'X-Review-Capability': launched.capability};
+    const removed = await fetch(launched.origin + '/api/parts/verdict', {
+      method: 'POST', headers, body: JSON.stringify(input),
+    });
+    expect(removed.status).toBe(404);
+    expect(await removed.json()).toEqual({error: 'Not found'});
+    const sendId = crypto.randomUUID(), value = {comments: [{text: 'Inspect the edge'}]};
+    const sent = await fetch(launched.origin + LOCAL_COMMENTS_ROUTE, {
+      method: 'POST', headers, body: JSON.stringify({sendId, value, sourceHash: verdictSource(pkg).sha256}),
+    });
+    expect(sent.status).toBe(200);
+    expect(await sent.json()).toEqual({sendId, at: expect.any(String)});
+    expect(await Bun.file(pkg.verdictPath).exists()).toBe(false);
+    const read = await cli([pkg.root, '--format', 'json']);
+    expect({exit: read.exit, stderr: read.stderr}).toEqual({exit: 0, stderr: ''});
+    expect(JSON.parse(read.stdout).localComments.sends).toMatchObject([{sendId, value, by}]);
   } finally {
     const result = await launched.stop();
-    expect(result.exit).toBe(0);
-    expect(records(result.stdout)).toEqual(expected);
-    const prefix = 'RIG_REVIEW_PARTS_SAVED ';
-    const eventLines = result.stdout.split('\n').filter(line => line.startsWith(prefix));
-    expect(eventLines).toHaveLength(3);
-    for (const [index, line] of eventLines.entries()) {
-      expect(line).not.toContain('\u2028');
-      expect(line).not.toContain('\u2029');
-      expect(line).toContain('\\u2028');
-      expect(line).toContain('\\u2029');
-      expect(line).toBe(prefix + JSON.stringify(expected[index]).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029'));
-      expect(result.stdout).toContain(line + '\n');
-    }
+    expect({exit: result.exit, stderr: result.stderr}).toEqual({exit: 0, stderr: ''});
+    expect(result.stdout).toContain('review parts: exiting — received SIGTERM.');
+    expect(result.stdout).not.toContain('RIG_REVIEW_PARTS_SAVED ');
   }
-  const restarted = await launch(args);
-  try { expect((await post(restarted.origin, restarted.capability)).status).toBe(200); }
-  finally {
-    const result = await restarted.stop();
-    expect(result.exit).toBe(0);
-    expect(records(result.stdout).map(record => record.saveCount)).toEqual([1]);
-  }
-});
-
-test('#568 normal SIGTERM preserves the legacy stdout shutdown line and successful save framing', async () => {
-  const pkg = await fixture(), launched = await launch([pkg.root, '--port', '0']);
-  let expected: PartsSavedEvent | undefined;
-  try {
-    const response = await post(launched.origin, launched.capability);
-    expect(response.status).toBe(200);await response.json();
-    expected = {verdictPath: pkg.verdictPath, sha256: digest(await readFile(pkg.verdictPath)), status: 'approved', saveCount: 1};
-  } finally {
-    const result = await launched.stop();
-    expect(result.exit).toBe(0);
-    expect(records(result.stdout)).toEqual([expected!]);
-    const eventLine = 'RIG_REVIEW_PARTS_SAVED ' + JSON.stringify(expected) + '\n';
-    expect(result.stdout).toContain(eventLine);
-    expect(result.stdout.endsWith('review parts: exiting — received SIGTERM.\n')).toBe(true);
-    expect(result.stderr).toBe('');
-  }
-});
-
-test('#568 concurrent saves serialize validation through notification and shutdown drains queued commits', async () => {
-  const pkg = await fixture(), events: PartsSavedEvent[] = [];
-  let release!: () => void;
-  const barrier = new Promise<void>(resolveBarrier => { release = resolveBarrier; });
-  let entered!: () => void;
-  const firstNotification = new Promise<void>(resolveEntered => { entered = resolveEntered; });
-  const serving = await serve(pkg, {onSaved: async event => {
-    events.push(event);
-    expect(digest(await readFile(pkg.verdictPath))).toBe(event.sha256);
-    if (event.saveCount === 1) { entered(); await barrier; }
-  }});
-  const fixes = await partsIssueSubmission(pkg);
-  const requests = [serving.save(input), serving.save(fixes), serving.save(input)];
-  try {
-    await firstNotification;
-    // Every request reached the queue before graceful shutdown begins.
-    await Bun.sleep(20);
-    expect(events.length).toBe(1);
-    const stopping = serving.server.shutdown();
-    release();
-    const responses = await Promise.all(requests);
-    expect(responses.map(response => response.status)).toEqual([200, 200, 200]);
-    await Promise.all(responses.map(response => response.json()));
-    await stopping;
-    expect(events.map(event => event.saveCount)).toEqual([1, 2, 3]);
-    expect(events.map(event => event.status).sort()).toEqual(['approved', 'approved', 'changes-requested']);
-    expect(digest(await readFile(pkg.verdictPath))).toBe(events[2]!.sha256);
-  } finally { release(); serving.server.stop(true); }
-});
-
-test('#568 a committed notification failure preserves the file and prevents queued commits or replay', async () => {
-  const pkg = await fixture(), attempts: PartsSavedEvent[] = [], failures: string[] = [];
-  const serving = await serve(pkg, {
-    onSaved: async event => { attempts.push(event); throw Object.assign(new Error('planted EPIPE'), {code: 'EPIPE'}); },
-    onNotifyFailure: error => { failures.push(error.message); },
-  });
-  try {
-    const response = await serving.save();
-    expect(response.status).toBe(400);
-    expect((await response.json()).error).toContain('PARTS_VERDICT_NOTIFY_FAILED');
-    const committed = await readFile(pkg.verdictPath);
-    expect(attempts).toEqual([{verdictPath: pkg.verdictPath, sha256: digest(committed), status: 'approved', saveCount: 1}]);
-    const second = await serving.save(await partsIssueSubmission(pkg));
-    expect(second.status).toBe(400);
-    expect((await second.json()).error).toContain('PARTS_VERDICT_NOTIFY_FAILED');
-    expect(attempts.length).toBe(1);
-    expect(failures.length).toBe(1);
-    expect(await readFile(pkg.verdictPath)).toEqual(committed);
-  } finally { serving.server.stop(true); }
-});
-
-test('#568 actual CLI broken pipe reports notification failure, exits 1 and preserves its durable save', async () => {
-  const pkg = await fixture(), launched = await launch([pkg.root, '--port', '0', '--by', 'pipe reviewer']);
-  launched.child.stdout.destroy();
-  const response = await post(launched.origin, launched.capability);
-  expect(response.status).toBe(400);
-  expect((await response.json()).error).toContain('PARTS_VERDICT_NOTIFY_FAILED');
-  const result = await launched.done;
-  expect(result.exit).toBe(1);
-  expect(result.stderr).toContain('PARTS_VERDICT_NOTIFY_FAILED');
-  expect(records(result.stdout)).toEqual([]);
-  const bytes = await readFile(pkg.verdictPath);
-  const stored = JSON.parse(bytes.toString());
-  expect(stored).toMatchObject({schema: 'rig-review-parts-verdict/4', by: 'pipe reviewer', status: 'approved'});
-  expect(JSON.parse((await cli([pkg.root, '--format', 'json'])).stdout).savedFileSha256).toBe(digest(bytes));
 });
 
 test('#568 missing, corrupt, invalid-date, stale files and stale flags keep existing CLI failure behavior', async () => {
@@ -459,114 +344,6 @@ test('#568 filesystem write, file-fsync, rename and directory-fsync failures ret
   expect(original.status).toBe('approved');
 });
 
-test('#568 a failed second CLI write emits zero records for that save and cannot relabel prior success', async () => {
-  const pkg = await fixture();
-  const fixes = await partsIssueSubmission(pkg);
-  const bootstrap = `
-    import {mock} from 'bun:test';
-    import * as fs from 'node:fs/promises';
-    const rename = fs.rename;
-    let calls = 0;
-    mock.module('node:fs/promises', () => ({...fs, rename: async (...args) => {
-      if (String(args[1]) === ${JSON.stringify(pkg.verdictPath)} && ++calls === 2) throw Object.assign(new Error('planted ENOSPC'), {code: 'ENOSPC'});
-      return rename(...args);
-    }}));
-    const {main} = await import(${JSON.stringify(resolve('src/cli.ts'))});
-    await main(['parts', ${JSON.stringify(pkg.root)}, '--port', '0']);
-  `;
-  const launched = await launch([], bootstrap);
-  try {
-    expect((await post(launched.origin, launched.capability)).status).toBe(200);
-    const before = await readFile(pkg.verdictPath);
-    const failed = await post(launched.origin, launched.capability, fixes);
-    expect(failed.status).toBe(400);
-    expect((await failed.json()).error).toContain('PARTS_VERDICT_WRITE_FAILED');
-    expect(await readFile(pkg.verdictPath)).toEqual(before);
-    expect((await post(launched.origin, launched.capability, fixes)).status).toBe(200);
-  } finally {
-    const result = await launched.stop();
-    expect(result.exit).toBe(0);
-    expect(records(result.stdout).map(row => [row.status, row.saveCount])).toEqual([['approved', 1], ['changes-requested', 2]]);
-    expect(result.stderr).toContain('PARTS_VERDICT_WRITE_FAILED');
-  }
-});
-
-test('#568 safe-integer exhaustion refuses before committing in an isolated counter-boundary copy', async () => {
-  const pkg = await fixture(), bytes = await readFile(resolve('src/parts-server.ts'));
-  const source = bytes.toString();
-  expect(source.includes('saveCount = 0')).toBe(true);
-  const copy = join(pkg.root, 'counter-boundary.ts');
-  const isolated = source.replace('saveCount = 0', 'saveCount = Number.MAX_SAFE_INTEGER')
-    .replace(/from '(\.\/[^']+)'/g, (_match, path: string) => `from ${JSON.stringify(resolve('src', path))}`);
-  await writeFile(copy, isolated);
-  const result = await probe(`
-    const {loadPartsView} = await import(${JSON.stringify(resolve('src/parts-view.ts'))});
-    const {startPartsServer} = await import(${JSON.stringify(copy)});
-    const pkg = await loadPartsView(${JSON.stringify(pkg.root)});
-    const events = [];
-    const server = await startPartsServer(pkg, {port: 0, onSaved: async event => {events.push(event);}});
-    try {
-      const origin = 'http://127.0.0.1:' + server.port;
-      const response = await fetch(origin + '/api/parts/verdict', {method: 'POST', headers: {Origin: origin, 'Content-Type': 'application/json'}, body: ${JSON.stringify(JSON.stringify(input))}});
-      console.log(JSON.stringify({status: response.status, body: await response.json(), events, saved: (await import('node:fs')).existsSync(pkg.verdictPath)}));
-    } finally {server.stop(true);}
-  `);
-  expect({exit: result.exit, stderr: result.stderr}).toEqual({exit: 0, stderr: ''});
-  expect(JSON.parse(result.stdout)).toEqual({status: 400, body: {error: 'PARTS_VERDICT_WRITE_FAILED: save count exhausted'}, events: [], saved: false});
-  expect(digest(await readFile(resolve('src/parts-server.ts')))).toBe(digest(bytes));
-});
-
-test('#568 CLI awaits real Writable backpressure and split pipe writes before the next commit', async () => {
-  const pkg = await fixture();
-  const fixes = await partsIssueSubmission(pkg);
-  const bootstrap = `
-    import {Writable} from 'node:stream';
-    import {readFileSync} from 'node:fs';
-    import {createHash} from 'node:crypto';
-    const writeToPipe = process.stdout.write.bind(process.stdout);
-    const prefix = 'RIG_REVIEW_PARTS_SAVED ';
-    const stream = new Writable({highWaterMark: 1, write(chunk, encoding, callback) {
-      const event = JSON.parse(chunk.toString().slice(prefix.length));
-      const middle = Math.floor(chunk.length / 2);
-      writeToPipe(chunk.subarray(0, middle), error => {
-        if (error) {callback(error);return;}
-        setTimeout(() => writeToPipe(chunk.subarray(middle), error => {
-          const sha256 = createHash('sha256').update(readFileSync(event.verdictPath)).digest('hex');
-          console.error('BACKPRESSURE_COMPLETE ' + JSON.stringify({saveCount: event.saveCount, stableRawDigest: sha256 === event.sha256}));
-          callback(error);
-        }), 25);
-      });
-    }});
-    process.stdout.write = function(chunk, ...args) {
-      if (!String(chunk).startsWith(prefix)) return writeToPipe(chunk, ...args);
-      const accepted = stream.write(chunk, ...args);
-      console.error('BACKPRESSURE_RETURN ' + accepted);
-      return accepted;
-    };
-    const {main} = await import(${JSON.stringify(resolve('src/cli.ts'))});
-    await main(['parts', ${JSON.stringify(pkg.root)}, '--port', '0']);
-  `;
-  const launched = await launch([], bootstrap);
-  try {
-    const responses = await Promise.all([
-      post(launched.origin, launched.capability),
-      post(launched.origin, launched.capability, fixes),
-      post(launched.origin, launched.capability),
-    ]);
-    expect(responses.map(response => response.status)).toEqual([200, 200, 200]);
-    await Promise.all(responses.map(response => response.json()));
-  } finally {
-    const result = await launched.stop();
-    expect(result.exit).toBe(0);
-    expect(records(result.stdout).map(event => event.saveCount)).toEqual([1, 2, 3]);
-    const lines = result.stderr.split('\n');
-    expect(lines.filter(line => line === 'BACKPRESSURE_RETURN false')).toHaveLength(3);
-    const completions = lines.filter(line => line.startsWith('BACKPRESSURE_COMPLETE '))
-      .map(line => JSON.parse(line.slice('BACKPRESSURE_COMPLETE '.length)));
-    expect(completions).toEqual([1, 2, 3].map(saveCount => ({saveCount, stableRawDigest: true})));
-  }
-});
-
 test('#568 native fsync order covers the saved file and every newly created directory entry', async () => {
   const pkg = await fixture(), destination = join(pkg.root, 'new-output', 'nested', 'verdict.json');
   const result = await probe(`
@@ -596,13 +373,9 @@ test('#568 native fsync order covers the saved file and every newly created dire
   expect(output.receipt).toEqual({verdictPath: destination, sha256: digest(await readFile(destination)), status: 'approved'});
 });
 
-test('#568 nonblank reviewer names retain their original string beyond unrelated manifest string bounds', async () => {
+test('#568 shared writer preserves long nonblank reviewer names in saved /4 reads', async () => {
   const pkg = await fixture(), by = '  ' + '나루'.repeat(6000) + '  ';
-  const launched = await launch([pkg.root, '--port', '0', '--by', by]);
-  try {
-    const response = await post(launched.origin, launched.capability);
-    expect(response.status).toBe(200);await response.json();
-  } finally { expect((await launched.stop()).exit).toBe(0); }
+  await saveVerdictWithReceipt(pkg, input, undefined, by);
   const bytes = await readFile(pkg.verdictPath);
   expect(JSON.parse(bytes.toString()).by).toBe(by);
   const read = await cli([pkg.root, '--format', 'json']);
@@ -610,7 +383,7 @@ test('#568 nonblank reviewer names retain their original string beyond unrelated
   expect(JSON.parse(read.stdout)).toMatchObject({by, savedFileSha256: digest(bytes)});
 });
 
-test('#568 filesystem-limit destination still saves and emits one complete record without an event-size cap', async () => {
+test('#568 shared writer preserves the filesystem-limit destination and its raw digest', async () => {
   const pkg = await fixture(), suffix = '.00000000-0000-0000-0000-000000000000.tmp';
   expect(Buffer.byteLength(suffix)).toBe(41);
   const probeTemporary = async (path: string) => {
@@ -640,20 +413,11 @@ test('#568 filesystem-limit destination still saves and emits one complete recor
   }
   expect(destination.length).toBeGreaterThan(0);
   expect(firstRejectedBytes).toBe(Buffer.byteLength(destination + suffix) + 1);
-  const launched = await launch([pkg.root, '--port', '0', '--verdict', destination]);
-  try {
-    const response = await post(launched.origin, launched.capability);
-    expect(response.status).toBe(200);await response.json();
-  } finally {
-    const result = await launched.stop();
-    expect(result.exit).toBe(0);
-    const expected: PartsSavedEvent = {verdictPath: destination, sha256: digest(await readFile(destination)), status: 'approved', saveCount: 1};
-    expect(records(result.stdout)).toEqual([expected]);
-    const line = 'RIG_REVIEW_PARTS_SAVED ' + JSON.stringify(expected) + '\n';
-    expect(result.stdout).toContain(line);
-    console.log(JSON.stringify({control: 'filesystem-limit-event', pathBytes: Buffer.byteLength(destination),
-      temporaryPathBytes: Buffer.byteLength(destination + suffix), firstRejectedBytes, eventBytes: Buffer.byteLength(line)}));
-  }
+  const view = await loadPartsView(pkg.root, {verdict: destination});
+  const {receipt} = await saveVerdictWithReceipt(view, input);
+  expect(receipt).toEqual({verdictPath: destination, sha256: digest(await readFile(destination)), status: 'approved'});
+  console.log(JSON.stringify({control: 'filesystem-limit-destination', pathBytes: Buffer.byteLength(destination),
+    temporaryPathBytes: Buffer.byteLength(destination + suffix), firstRejectedBytes}));
   const read = await cli([pkg.root, '--verdict', destination, '--format', 'json']);
   expect({exit: read.exit, stderr: read.stderr}).toEqual({exit: 0, stderr: ''});
   expect(JSON.parse(read.stdout)).toMatchObject({by: null, savedFileSha256: digest(await readFile(destination))});

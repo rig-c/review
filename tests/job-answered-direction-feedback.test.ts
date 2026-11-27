@@ -1,3 +1,5 @@
+import {seedHistoricalDecisionAct} from './helpers/historical-decision-act.ts';
+import historicalDirection from './fixtures/job-decision-1233/direction.json';
 import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {afterEach, expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
@@ -45,16 +47,10 @@ async function finalize(f: Awaited<ReturnType<typeof fixture>>, publication: Job
     if (!saved.ok) throw new Error(saved.error.code);
     return saved.value;
   }
-  const decision = subject;
-  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, decision);
-  const page = await f.display(publication);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({
-    ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: ask.askId, kind: decision.kind,
-    value: {stage, verdict: options.verdict ?? 'changes-requested', comments: options.comments ?? comments},
-  }));
-  if (!saved.ok) throw new Error(saved.error.code);
-  return saved.value;
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, subject);
+  return seedHistoricalDecisionAct(f.session,ask,historicalDirection.receipt.value,{
+    stage, verdict: options.verdict ?? 'changes-requested', comments: options.comments ?? comments,
+  });
 }
 
 function reopen(f: Awaited<ReturnType<typeof fixture>>): JobSession {

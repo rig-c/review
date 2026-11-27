@@ -109,25 +109,20 @@ test('#817 HTTP owner refusals preserve response and report sanitized metadata',
         await f.publish();
         await refuseAct({submissionId: 'stale-owner-submit'}, 'JOB_ACT_SOURCE_STALE');
 
-        f.setContext({...f.getContext(), subjects: [{kind: 'review-verdict', stage: 'rig-review'}]});
         const rig = await rigStillInput(f);
-        const refuseStill = (patch: object, code: string, limit?: number) => {
-            const body = JSON.stringify({...rig.input, capture: {...rig.input.capture, ...patch}});
-            return refused(post(url, body), 409, code, bytes(body), limit);
-        };
-        await refuseStill({camera: 'free'}, 'JOB_STILL_CAMERA_NOT_FIXED');
-        await refuseStill({view: 'parts'}, 'JOB_STILL_VIEW_UNSUPPORTED');
-        await refuseStill({binding: {...rig.input.capture.binding, drawGeneration: 0}}, 'JOB_STILL_BINDING_MISMATCH');
-        await refuseStill({png: 'invalid'}, 'JOB_STILL_CAPTURE_FAILED');
-        const largePNG = 'data:image/png;base64,' + Buffer.alloc(jobStillByteLimit + 1).toString('base64');
-        await refuseStill({png: largePNG}, 'JOB_STILL_CAPTURE_FAILED', jobStillByteLimit);
-        const refuseAsked = (patch: object, code: string) => {
-            const body = JSON.stringify({...rig.input, ...patch});
-            return refused(post(url, body), 409, code, bytes(body));
-        };
-        await refuseAsked({askId: 'unknown-ask'}, 'JOB_ASK_INVALID');
-        expect((await post(url, JSON.stringify(rig.input))).status).toBe(200);
-        await refuseAsked({submissionId: 'duplicate-owner-submit'}, 'JOB_ASK_SUPERSEDED');
+        const beforeVerdicts = host.session.status();
+        const {capture: _capture, ...withoutCapture} = rig.input;
+        const largePng = 'data:image/png;base64,' + Buffer.alloc(jobStillByteLimit + 1).toString('base64');
+        for (const submission of [
+            rig.input,
+            {...rig.input, capture: {...rig.input.capture, png: largePng}},
+            {...withoutCapture, kind: 'parts-verdict', value: {verdict: 'approved', issues: [], words: privateText}},
+        ]) {
+            const body = JSON.stringify(submission);
+            await refused(post(url, body), 409, 'JOB_ACT_KIND_DISABLED', bytes(body));
+        }
+        expect(host.session.status()).toEqual(beforeVerdicts);
+        expect(JSON.stringify(events)).not.toContain(privateText);
 
         await f.call({...f.base(), verb: 'close', expectedGeneration: host.session.status().generation,
             idempotencyKey: 'close-job', reason: 'synthetic done'});

@@ -7,11 +7,12 @@ import {loadReview} from '../src/manifest.ts';
 import {assertReviewUnchanged} from '../src/reference.ts';
 import {createRebuilds,MAX_KEPT_BUILDS,rebuildDir,keptRoot} from '../src/rebuild.ts';
 import {startServer} from '../src/server.ts';
-import {freshSession} from '../src/session.ts';
+import type {Feedback} from '../src/session.ts';
+import {lastLocalPackageFeedback,postLocalPackageFeedback} from './helpers/local-package-feedback.ts';
 import {appliedRecord,type RebuildJobView} from '../web/rebuild-client.ts';
 
 const region={name:'right',shape:'circle',cx:20,cy:20,r:8,bone:'chest',spacing:4,band:2};
-/** Small deterministic executables exercise the actual rebuild tail and session HTTP boundary. */
+/** Small deterministic executables exercise the actual rebuild tail and local feedback HTTP boundary. */
 async function fixture(){
  const root=await realpath(await mkdtemp(join(tmpdir(),'stage1-evidence-'))),pkg=join(root,'pkg'),state=join(root,'state');
  await mkdir(join(pkg,'out/rig'),{recursive:true});await mkdir(join(pkg,'out/parts'),{recursive:true});
@@ -61,11 +62,11 @@ test('an explicitly symlinked state root builds; a revision symlink escaping the
  }finally{await rm(f.root,{recursive:true,force:true});}
 });
 
-test('historical exact made claims survive nine Applies, first submit after eviction, Undo and restart; new forged or unsealed claims refuse',async()=>{
+test('historical applied evidence survives eviction, Undo and restart; forged or unsealed comment sends refuse',async()=>{
  const f=await fixture();let server:Awaited<ReturnType<typeof startServer>>|undefined;
  try{
   server=await startServer(f.p,{port:0,stateDir:f.state,cwd:f.root});let base=`http://127.0.0.1:${server.port}`;
-  const request=async(path:string,body:unknown,method='POST')=>fetch(base+path,{method,headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const request=(path:string,body:unknown)=>fetch(base+path,{method:'POST',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify(body)});
   const status=await (await fetch(base+'/api/rebuild')).json() as any;const jobs:RebuildJobView[]=[];
   for(let n=0;n<=MAX_KEPT_BUILDS;n++){
    let job=await (await request('/api/rebuild',{part:'torso',regions:[{...region,cx:20+n}],configHash:status.inputs.configHash})).json() as RebuildJobView;
@@ -75,26 +76,48 @@ test('historical exact made claims survive nine Applies, first submit after evic
   const first=jobs[0]!,last=jobs.at(-1)!;
   expect(await access(rebuildDir(f.state,f.p.sourceHash,first.id)).then(()=>true,()=>false)).toBe(false);
   expect(await access(join(keptRoot(f.state,f.p.sourceHash),first.id)).then(()=>true,()=>false)).toBe(false);
-  const session=freshSession(f.p),row=(job:RebuildJobView,id:string)=>({id,frameStart:0,frameEnd:0,target:{kind:'rig' as const,name:f.p.feedbackCatalog.rig},category:'quality' as const,summary:'Historical correction',context:{applied:appliedRecord(job)}});
-  session.feedback=[row(first,'first') as any];
-  let response=await request('/api/session',session,'PUT');expect({status:response.status,text:await response.text()}).toMatchObject({status:200});
-  // The last correction has only a local row when Undo removes its live directory.
-  session.feedback.push(row(last,'undone') as any);expect((await (await request('/api/rebuild/undo',{from:last.id})).json() as any).status).toBe('built');
-  response=await request('/api/session',session,'PUT');expect(response.status).toBe(200);
-  server.stop(true);server=await startServer(f.p,{port:0,stateDir:f.state,cwd:f.root});base=`http://127.0.0.1:${server.port}`;
-  response=await request('/api/session',session,'PUT');expect(response.status).toBe(200);
-  const forged=structuredClone(session);(forged.feedback[0]!.context as any).applied.regions[0].cx++;
-  response=await request('/api/session',forged,'PUT');expect(response.ok).toBe(false);expect(await response.text()).toContain('STAGE_DRAFT_STALE');
-  const sealPath=join(f.state,'applied-evidence',f.p.sourceHash,first.id+'.json'),seal=await readFile(sealPath);await rm(sealPath);
-  response=await request('/api/session',session,'PUT');expect(response.ok).toBe(false);expect(await response.text()).toContain('STAGE_DRAFT_STALE');
-  // Even a forged result.json in a reconstructed cache directory is not authority.
-  const dir=rebuildDir(f.state,f.p.sourceHash,first.id);await mkdir(dir,{recursive:true});await writeFile(join(dir,'result.json'),JSON.stringify(first));
-  response=await request('/api/session',session,'PUT');expect(response.ok).toBe(false);
-  await writeFile(sealPath,seal);const damaged=JSON.parse(seal.toString());damaged.digest='0'.repeat(64);await writeFile(sealPath,JSON.stringify(damaged));
-  response=await request('/api/session',session,'PUT');expect(response.ok).toBe(false);expect(await response.text()).toContain('STAGE_DRAFT_STALE');
-  await writeFile(sealPath,seal);response=await request('/api/session',session,'PUT');expect(response.status).toBe(200);
-  const other=structuredClone(session);(other.feedback[0]!.context as any).applied.buildId='f'.repeat(64);
-  response=await request('/api/session',other,'PUT');expect(response.ok).toBe(false);expect(await response.text()).toContain('STAGE_DRAFT_STALE');
+  const row=(job:RebuildJobView,id:string):Feedback=>({
+   id,frameStart:0,frameEnd:0,target:{kind:'rig',name:f.p.feedbackCatalog.rig},
+   category:'quality',summary:'Historical correction',context:{applied:JSON.parse(JSON.stringify(appliedRecord(job)))},
+  });
+  const send=(feedback:Feedback)=>postLocalPackageFeedback(base,f.p.sourceHash,[feedback]);
+  const accepted=async(feedback:Feedback)=>{
+   const response=await send(feedback);
+   expect({status:response.status,text:await response.text()}).toMatchObject({status:200});
+   expect(await lastLocalPackageFeedback(f.p,f.state)).toEqual([feedback]);
+  };
+  const refused=async(feedback:Feedback)=>{
+   const response=await send(feedback);
+   expect(response.ok).toBe(false);
+   expect(await response.text()).toContain('STAGE_DRAFT_STALE');
+  };
+  await accepted(row(first,'after-eviction'));
+
+  // Undo removes the live directory before the last build's evidence is sent.
+  expect((await (await request('/api/rebuild/undo',{from:last.id})).json() as any).status).toBe('built');
+  await accepted(row(last,'undone'));
+  server.stop(true);server=await startServer(f.p,{port:0,stateDir:f.state,cwd:f.root});base='http://127.0.0.1:'+server.port;
+  await accepted(row(first,'after-restart'));
+
+  const forged=row(first,'forged-region');
+  (forged.context as any).applied.regions[0].cx++;
+  await refused(forged);
+  const sealPath=join(f.state,'applied-evidence',f.p.sourceHash,first.id+'.json'),seal=await readFile(sealPath);
+  await rm(sealPath);
+  await refused(row(first,'missing-seal'));
+  // A reconstructed result.json does not authenticate an applied record.
+  const dir=rebuildDir(f.state,f.p.sourceHash,first.id);
+  await mkdir(dir,{recursive:true});await writeFile(join(dir,'result.json'),JSON.stringify(first));
+  await refused(row(first,'forged-cache'));
+  const damaged=JSON.parse(seal.toString());damaged.digest='0'.repeat(64);
+  await writeFile(sealPath,JSON.stringify(damaged));
+  await refused(row(first,'damaged-seal'));
+  await writeFile(sealPath,seal);
+  await accepted(row(first,'restored-seal'));
+  const other=row(first,'wrong-build');
+  (other.context as any).applied.buildId='f'.repeat(64);
+  await refused(other);
+  expect(await lastLocalPackageFeedback(f.p,f.state)).toEqual([row(first,'restored-seal')]);
   expect(createHash('sha256').update(await readFile(sealPath)).digest('hex')).toBe(createHash('sha256').update(seal).digest('hex'));
  }finally{server?.stop(true);await rm(f.root,{recursive:true,force:true});}
 });

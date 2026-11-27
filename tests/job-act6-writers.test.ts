@@ -1,12 +1,9 @@
-import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {afterEach, expect, test} from 'bun:test';
 import {readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {PNG} from 'pngjs';
-import {jobRigScreenDecisions} from '../web/job-rig-screen.ts';
-import {feedbackItemComments, timeOnlyBasis, type StageComment} from '../src/stage-comment.ts';
-import {bindJobAsk, finalizeJobAct, parseUISubmission} from '../src/job-act.ts';
-import {jobHash} from '../src/job-api.ts';
+import {timeOnlyBasis, type StageComment} from '../src/stage-comment.ts';
+import {jobHash, parseCommentOnlyAct} from '../src/job-api.ts';
 import {parseCommentsAct, projectComments} from '../src/job-host.ts';
 import {checkpointNoteComments, noteComments, partsIssueComments} from '../src/feedback-export.ts';
 import {jobRawActMediaType, type JobComment, type JobPendingAsk, type JobUISubmission} from '../src/job-contract.ts';
@@ -17,14 +14,12 @@ import {readProject} from '../src/interview-project.ts';
 import {jobFixture, jobInputHashes, syntheticJobParts} from './helpers/job-api-fixture.ts';
 import {seedHistoricalCheckpointAct} from './helpers/historical-checkpoint-act.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
-import {rigStillInput} from './helpers/job-rig-still.ts';
 import {seedHistoricalPicksAct} from './helpers/historical-picks-act.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
+import historicalRig from './fixtures/job-decision-1233/rig.json';
+import historicalDirection from './fixtures/job-decision-1233/direction.json';
 import vendored from './fixtures/act6-projection-create-c8382ba5.json';
 useTemporaryReviewState();
-
-// #713: fresh checkpoint, signoff, parts-verdict and rig/post review-verdict acts are act@6.
-// Interview-picks joined act@6 under #646; #1230 refuses fresh picks and keeps historical act@6 readers. Image-review stays act@2.
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => {for (const f of fixtures.splice(0)) await f.close();});
@@ -128,59 +123,30 @@ test('fresh checkpoint and signoff asks/acts refuse while historical act@6 check
   expect(JSON.stringify(parseCommentsAct(JSON.parse(JSON.stringify(historicalSignoff))))).toBe(JSON.stringify(historicalSignoff));
 });
 
-test('rig verdict keeps its still under act@6 and reads back through the public decoder', async () => {
-  const f = await fixture(), {input, sha256} = await rigStillInput(f);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  if (!saved.ok) throw new Error(saved.error.code);
-  expect(saved.value.schema).toBe('rig-review/act@6');
-  expect(saved.value).toMatchObject({kind: 'review-verdict', still: {path: sha256 + '.png', sha256, camera: 'fixed'}});
-  expect(f.session.readActExport(saved.value.actId, false).toString()).toBe(JSON.stringify(saved.value));
-  expect(parseCommentsAct(JSON.parse(JSON.stringify(saved.value)))).toEqual(saved.value as never);
+test('the public act@6 decoder preserves the historical rig still and ordered direction comments byte-for-byte', () => {
+  for (const historical of [historicalRig, historicalDirection]) {
+    const act = parseCommentsAct(JSON.parse(historical.bytes));
+    expect(JSON.stringify(act)).toBe(historical.bytes);
+    expect(jobHash(historical.bytes)).toBe(historical.sha256);
+  }
+  expect(parseCommentsAct(historicalRig.receipt.value)).toMatchObject({
+    kind: 'review-verdict', still: {path: historicalRig.still.sha256 + '.png', sha256: historicalRig.still.sha256, camera: 'fixed'},
+  });
+  expect(parseCommentsAct(historicalDirection.receipt.value)).not.toHaveProperty('still');
 });
 
-test('legacy direct direction decisions still project words to one anchorless act@6 row', async () => {
-  const f = await fixture(), publication = await f.publish();
-  const base = f.session.retainedSource(publication.publicationId);
-  const retained = {...base, source: {...base.source, selector: {kind: 'post' as const, version: 2, rigVersion: 1},
-    direction: {path: 'out/direction.json', sha256: 'd'.repeat(64)}}} as typeof base;
-  const subject = {kind: 'review-verdict', stage: 'direction-review'} as const;
-  const ask: JobPendingAsk = {askId: 'ask-post', publicationId: publication.publicationId, subject,
-    source: bindJobAsk(subject, retained), status: 'pending'};
-  const submission = {publicationId: publication.publicationId, askId: ask.askId, pageId: 'page', displayedNonce: 'nonce',
-    expectedGeneration: 1, submissionId: 'post', kind: 'review-verdict',
-    value: {stage: 'direction-review', verdict: 'changes-requested', words: 'tighten the turn'}} as JobUISubmission;
-  const act = finalizeJobAct({jobId: f.session.jobId, submission, ask, retained, reviewer});
-  expect(act).toMatchObject({schema: 'rig-review/act@6', kind: 'review-verdict',
-    value: {stage: 'direction-review', verdict: 'changes-requested', comments: [{text: 'tighten the turn'}]}});
-  expect(act).not.toHaveProperty('still');
-  expect(parseCommentsAct(JSON.parse(JSON.stringify(act)))).toEqual(act as never);
-  expect(() => finalizeJobAct({jobId: f.session.jobId, submission: {...submission,
-    value: {...submission.value, feedback: []}} as JobUISubmission, ask, retained, reviewer})).toThrow('JOB_REQUEST_INVALID');
-  const withGeneral = parseUISubmission({...submission, value: {...submission.value, general: ['Rig/Parts only']}});
-  expect(() => finalizeJobAct({jobId: f.session.jobId, submission: withGeneral, ask, retained, reviewer}))
-    .toThrow('JOB_REQUEST_INVALID');
-  const rows = [{id:'first',frameStart:0,frameEnd:1,target:{kind:'rig' as const,name:'fixture'},category:'defect' as const,summary:'first comment'},
-    {id:'second',frameStart:null,frameEnd:null,target:{kind:'rig' as const,name:'fixture'},category:'defect' as const,summary:'second comment'}];
-  const decision = jobRigScreenDecisions({status:'changes-requested',checkpoints:{},feedback:rows}, [ask], publication.publicationId)[0]!;
-  const projected = projectComments(feedbackItemComments(rows));
-  const shared = finalizeJobAct({jobId:f.session.jobId,submission:{...submission,value:decision.value} as JobUISubmission,ask,retained,reviewer});
-  expect(parseCommentsAct(shared)).toMatchObject({schema:'rig-review/act@6',value:{stage:'direction-review',comments:[{text:projected}]}});
-  expect(shared).not.toHaveProperty('still');
-  expect(decision.value).not.toHaveProperty('feedback');
-});
-
-test('#1136 direction@3 writes three exact time-only pins and an interleaved general row through the retained host', async () => {
+test('#1136 direction@3 comment acts keep three exact time-only pins and an interleaved general row through the retained host', async () => {
   const {f, publication, modelHash, directionBytes} = await postFixture();
-  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'direction-review'}), page = await f.display(publication);
+  const page = await f.display(publication);
   const originalInputs = await jobInputHashes(f.root);
   const pins = [timedPin(publication.source.sourceHash, modelHash, 0.125, 4, 'First held location'),
     timedPin(publication.source.sourceHash, modelHash, 0.5000000000000001, 12, '중간 위치'),
     timedPin(publication.source.sourceHash, modelHash, 0.875, 20, 'Third held location')];
   const [first, second, third] = pins.map(({text, anchor}) => ({text, anchor}));
   const comments: JobComment[] = [first!, {text: '  Direction 전체\r\n'}, second!, third!];
-  const value = {stage: 'direction-review', verdict: 'changes-requested', comments};
-  const input = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: 'direction-structured', kind: 'review-verdict', value};
+  const value = {comments};
+  const input = {...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'direction-structured', kind: 'comments', value};
   const commit = (body: object) => f.ports.commitUIAct(f.session.jobId, f.uiRequest(body));
   const withChangedMark = (change: Partial<StageComment>) => comments.map((row, index) => index !== 2 ? row : {
     text: pins[1]!.text, anchor: {...pins[1]!.anchor, context: {...pins[1]!.anchor.context as object,
@@ -190,13 +156,13 @@ test('#1136 direction@3 writes three exact time-only pins and an interleaved gen
   const directionPath = join(f.root, 'out/direction.json');
   await writeFile(directionPath, directionBytes + '\n');
   try {
-    expect(await commit({...input, value: {...value, comments: []}})).toMatchObject({ok: false, error: {code: 'JOB_SOURCE_MISMATCH'}});
+    expect(await commit(input)).toMatchObject({ok: false, error: {code: 'JOB_SOURCE_MISMATCH'}});
   } finally {await writeFile(directionPath, directionBytes);}
   expect(f.session.status()).toEqual(pendingBeforeDrift);
   const saved = await commit(input);
   if (!saved.ok) throw new Error(saved.error.code);
-  const parsed = parseCommentsAct(saved.value);
-  expect(parsed).toMatchObject({schema: 'rig-review/act@6', kind: 'review-verdict', source: ask.source});
+  const parsed = parseCommentOnlyAct(saved.value);
+  expect(parsed).toMatchObject({schema: 'rig-review/act@10', kind: 'comments', source: publication.source});
   expect(parsed.value).toEqual(value);
   expect(parsed).not.toHaveProperty('still');
   for (const [index, pin] of pins.entries()) {
@@ -207,7 +173,7 @@ test('#1136 direction@3 writes three exact time-only pins and an interleaved gen
   const label = '[["rig-review-comment/1","animate","rig","rig","viewport-387-public",null,null]]\n';
   expect(projectComments(parsed.value.comments)).toBe(label + 'First held location\n\n[general]\n  Direction 전체\r\n\n\n' +
     label + '중간 위치\n\n' + label + 'Third held location');
-  roundTrip(f, saved.value);
+  expect(f.session.readActExport(parsed.actId, false).toString()).toBe(JSON.stringify(parsed));
   const bytes = await rawAct(f, parsed.actId);
   expect(bytes).toBe(JSON.stringify(saved.value));
   for (const {mark} of pins) {
@@ -222,9 +188,8 @@ test('#1136 direction@3 writes three exact time-only pins and an interleaved gen
     .toMatchObject({ok: false, error: {code: 'JOB_IDEMPOTENCY_CONFLICT'}});
   expect(f.session.status().generation).toBe(generation);
 
-  const negativeAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'direction-review'});
   const pending = f.session.status();
-  const negative = {...input, askId: negativeAsk.askId, expectedGeneration: pending.generation};
+  const negative = {...input, expectedGeneration: pending.generation};
   for (const [label, change, code] of [
     ['source hash', {comments: withChangedMark({sourceHash: '0'.repeat(64)})}, 'JOB_ACT_INVALID'],
     ['model hash', {comments: withChangedMark({modelHash: '0'.repeat(64)})}, 'JOB_ACT_INVALID'],
@@ -240,9 +205,9 @@ test('#1136 direction@3 writes three exact time-only pins and an interleaved gen
   expect(await jobInputHashes(f.root)).toEqual(originalInputs);
 });
 
-test('#1136 direction verdict preserves producer and reference frame pins', async () => {
+test('#1136 direction comment acts preserve producer and reference frame pins', async () => {
   const {f, publication, modelHash} = await postFixture();
-  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'direction-review'}), page = await f.display(publication);
+  const page = await f.display(publication);
   const comments = (['producer', 'reference'] as const).map((basis, offset) => {
     const index = 4 + offset;
     const {text, anchor, mark: {timeBasis: _timeBasis, ...mark}} =
@@ -255,30 +220,29 @@ test('#1136 direction verdict preserves producer and reference frame pins', asyn
       interval: {frameStart: index, frameEnd: index, inclusive: true}, comment,
     } as Json}};
   });
-  const value = {stage: 'direction-review', verdict: 'approved', comments};
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: f.session.status().generation, submissionId: 'direction-framed', kind: 'review-verdict', value}));
+  const value = {comments};
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page,
+    expectedGeneration: f.session.status().generation, submissionId: 'direction-framed', kind: 'comments', value}));
   if (!saved.ok) throw new Error(saved.error.code);
-  const parsed = parseCommentsAct(saved.value);
-  expect(parsed).toMatchObject({schema: 'rig-review/act@6', kind: 'review-verdict'});
+  const parsed = parseCommentOnlyAct(saved.value);
+  expect(parsed).toMatchObject({schema: 'rig-review/act@10', kind: 'comments'});
   expect(parsed.value).toEqual(value);
 });
 
-test('#1136 words-only direction retains its anchorless export and replay bytes', async () => {
-  const {f, publication} = await postFixture();
-  const stage = 'direction-review', verdict = 'changes-requested', words = '  Legacy 연출\r\nKeep edges  \n';
-  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage}), page = await f.display(publication);
-  const input = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: 'old-direction', kind: 'review-verdict', value: {stage, verdict, words}};
+test('#1136 a direction comment retains its anchorless export and replay bytes', async () => {
+  const {f, publication} = await postFixture(), page = await f.display(publication);
+  const text = '  Legacy 연출\r\nKeep edges  \n';
+  const input = {...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'direction-general', kind: 'comments', value: {comments: [{text}]}};
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
   if (!saved.ok) throw new Error(saved.error.code);
-  const {value: _value, ...envelope} = saved.value;
-  const expected = JSON.stringify({...envelope, value: {stage, verdict, comments: [{text: words}]}});
-  expect(await rawAct(f, saved.value.actId)).toBe(expected);
-  expect(JSON.stringify(parseCommentsAct(JSON.parse(expected)))).toBe(expected);
-  expect(projectComments(parseCommentsAct(saved.value).value.comments)).toBe('[general]\n  Legacy 연출\r\nKeep edges  \n');
+  const act = parseCommentOnlyAct(saved.value);
+  const expected = JSON.stringify(act);
+  expect(act.value).toEqual(input.value);
+  expect(await rawAct(f, act.actId)).toBe(expected);
+  expect(projectComments(act.value.comments)).toBe('[general]\n' + text);
   expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
-  expect(await rawAct(f, saved.value.actId)).toBe(expected);
+  expect(await rawAct(f, act.actId)).toBe(expected);
 });
 
 test('#1230 the interview-picks writer refuses JOB_ACT_KIND_DISABLED and a historical act@6 with its note decodes byte-identically', async () => {
@@ -290,7 +254,9 @@ test('#1230 the interview-picks writer refuses JOB_ACT_KIND_DISABLED and a histo
   const submission: JobUISubmission = {publicationId: publication.publicationId, askId: ask.askId, pageId: 'page',
     displayedNonce: 'nonce', expectedGeneration: 1, submissionId: 'submission', kind: 'interview-picks', value: {
       questionId: 'question-one', selections: [{itemId: 'item-one', optionId: 'value-one', otherText: null}], note: '  원문 '}};
-  expect(() => finalizeJobAct({jobId: f.session.jobId, submission, ask, retained, reviewer})).toThrow('JOB_ACT_KIND_DISABLED');
+  const page = await f.display(publication);
+  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...submission, ...page})))
+    .toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
   const historical = {schema: 'rig-review/act@6', actId: 'historical-picks', jobId: f.session.jobId, askId: ask.askId,
     publicationId: publication.publicationId, authority: {actor: 'human', channel: 'review-ui', reviewer}, at: '2026-11-01T00:00:00.000Z',
     kind: 'interview-picks', source: ask.source, value: {...submission.value, comments: []}};
@@ -347,21 +313,20 @@ test('an empty or whitespace-only note has no comment form: zero comments, nothi
   expect(noteComments(' x ')).toEqual([{text: ' x '}]);
 });
 
-test('a note whose act@6 projection exceeds 10,000 UTF-16 units is refused by name (JOB_ACT_INVALID)', async () => {
-  // #1229: checkpoint retired; exercise the 10,000-unit act@6 scalar bound on a live direction-review verdict.
+test('a comment whose projection exceeds 10,000 UTF-16 units is refused by name (JOB_ACT_INVALID)', async () => {
   const {f, publication} = await postFixture();
-  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'direction-review'}), page = await f.display(publication);
+  const page = await f.display(publication);
   const generation = f.session.status().generation;
   const label = '[general]\n';
   const words = 'x'.repeat(10000 - label.length + 1);
-  const refused = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: generation, submissionId: 'too-long', kind: 'review-verdict',
-    value: {stage: 'direction-review', verdict: 'changes-requested', words}}));
+  const refused = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page,
+    expectedGeneration: generation, submissionId: 'too-long', kind: 'comments',
+    value: {comments: [{text: words}]}}));
   expect(refused).toEqual({ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}});
   expect(f.session.status().generation).toBe(generation);
-  const fits = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: generation, submissionId: 'fits', kind: 'review-verdict',
-    value: {stage: 'direction-review', verdict: 'changes-requested', words: words.slice(1)}}));
+  const fits = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page,
+    expectedGeneration: generation, submissionId: 'fits', kind: 'comments',
+    value: {comments: [{text: words.slice(1)}]}}));
   expect(fits.ok).toBe(true);
 });
 
@@ -389,40 +354,37 @@ const boundaryTail = '🚀'.repeat(Math.floor(boundaryUnits / 2)) + 'x'.repeat(b
 test.each([
   {name: 'multiple notes', general: [generalNote, 'Second Parts comment']},
   {name: 'exact projection limit', general: [generalNote, boundaryTail]},
-])('#831 Parts Approve accepts anchorless comments ($name)', async ({name, general}) => {
+])('#831 Parts accepts anchorless comments ($name)', async ({name, general}) => {
   const f = await fixture();
   await syntheticJobParts(f, {project: true});
   const publication = await f.publish();
-  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-draft'}), page = await f.display(publication);
+  const page = await f.display(publication);
   const generation = f.session.status().generation;
-  const input = {...page, askId: ask.askId, expectedGeneration: generation, kind: 'parts-verdict'};
-  const approve = {verdict: 'approved', issues: [], words: ''};
+  const input = {...page, expectedGeneration: generation, kind: 'comments'};
 
   if (name === 'exact projection limit') {
     const invalid = [
-      {label: 'aggregate projection overflow', value: {...approve, general: [generalNote, boundaryTail + 'x']}},
-      {label: 'text omitted by a trim-and-filter implementation', value: {...approve, general: [' \t\n ']}},
-      {label: 'entry type', value: {...approve, general: ['valid', {text: 'object'}]}},
-      {label: 'list type', value: {...approve, general: 'not an array'}},
-      {label: 'count', value: {...approve, general: Array.from({length: 1001}, () => 'x')}},
-      {label: 'missing pinned issue', value: {...approve, verdict: 'changes-requested', general: [generalNote]}},
+      {label: 'aggregate projection overflow', value: {comments: [{text: generalNote}, {text: boundaryTail + 'x'}]}},
+      {label: 'text omitted by a trim-and-filter implementation', value: {comments: [{text: ' \t\n '}]}},
+      {label: 'entry type', value: {comments: [{text: 'valid'}, {text: {text: 'object'}}]}},
+      {label: 'list type', value: {comments: 'not an array'}},
+      {label: 'count', value: {comments: Array.from({length: 1001}, () => ({text: 'x'}))}},
+      {label: 'empty submission', value: {comments: []}},
     ];
     for (const [index, {label, value}] of invalid.entries()) {
       const rejected = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, submissionId: 'invalid-' + index, value}));
       expect(rejected, label).toMatchObject({ok: false, error: {code: 'JOB_ACT_INVALID'}});
       const status = f.session.status();
       expect(status.generation, label).toBe(generation);
-      expect(status.pending.map(pending => pending.askId), label).toContain(ask.askId);
     }
   }
 
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input,
-    submissionId: 'general-parts-831', value: {...approve, general}}));
+    submissionId: 'general-parts-831', value: {comments: general.map(text => ({text}))}}));
   if (!saved.ok) throw new Error(saved.error.code);
-  roundTrip(f, saved.value);
-  const act = parseCommentsAct(saved.value);
-  expect(act.kind).toBe('parts-verdict');
-  expect(act.value).toEqual({verdict: 'approved', comments: general.map(text => ({text}))});
+  const act = parseCommentOnlyAct(saved.value);
+  expect(f.session.readActExport(act.actId, false).toString()).toBe(JSON.stringify(act));
+  expect(act.value).toEqual({comments: general.map(text => ({text}))});
   const projected = projectComments(act.value.comments);
   expect(projected).toBe(generalHeader + general.join('\n\n' + generalHeader));
   if (name === 'exact projection limit') expect(projected).toHaveLength(projectionLimit);
