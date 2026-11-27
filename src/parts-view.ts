@@ -952,7 +952,7 @@ export async function readPartsVerdictForCli(
 /** Standalone CLI retrieval metadata and content come from one validated saved-file buffer. */
 export async function readPartsVerdictJson(pkg: PartsViewPackage): Promise<string> {
   const result = await readPartsVerdictExport(pkg, 'json');
-  return result ?? refuse('PARTS_VERDICT_UNAVAILABLE', 'save a verdict first');
+  return result ?? refuse('PARTS_VERDICT_UNAVAILABLE', 'no saved verdict to read');
 }
 
 /** CLI exports can still show local comments in the absence of a saved verdict. */

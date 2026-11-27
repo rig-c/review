@@ -261,7 +261,7 @@ let answerInFlightRows:readonly CommentRow[]=[];let recordAnswered=false;
 let partsSubmittedIssues:ReadonlySet<string>=new Set();
 let localCommentSource:{publicationId:string;sourceHash:string;jobId?:undefined;draftId?:undefined;previousPublicationId?:undefined}|null=null;
 let localCommentAttempt:{key:string;sendId:string}|null=null;
-const localCommentNotes={rows:[] as {id:string;summary:string}[],available:()=>true};
+const localCommentNotes={rows:[] as {id:string;summary:string}[]};
 let view: 'compare' | 'reference' | 'rig' = 'compare';
 // Requested layout persists in the source-bound draft; the effective one follows actual load events only.
 let rigInput:InputState={state:'pending'},referenceInput:InputState={state:'absent'},effectiveView:SingleLayout|null=null;

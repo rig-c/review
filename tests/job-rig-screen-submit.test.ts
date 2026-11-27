@@ -317,7 +317,7 @@ test('#1242 the parts and record screens send act@10: parts pins keep their anch
       expect(typeof host.submitComments).toBe('function');
       // A parts host with no ask takes general comments; the record binds its own publication.
       if (kind === 'parts') {
-        expect(host.verdictComments!.available()).toBe(true);
+        expect(host.verdictComments!.rows).toEqual([]);
         expect(await host.read('/api/session', 'GET')).toEqual({subject: 'parts', issues: []});
         const historical = fixtureAct('parts-verdict');
         const {summary, ...anchor} = issue;
