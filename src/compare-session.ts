@@ -67,22 +67,11 @@ export function parseCompareSession(input:unknown,p:ComparePackage,strict=true):
   return {...fresh,status,feedback,feedbackWarnings,updatedAt:new Date().toISOString()};
 }
 export function compareSessionFile(p:ComparePackage,stateDir=join(homedir(),'.local','state','rig-c-review')):string {const key=createHash('sha256').update(JSON.stringify(['compare',p.response.sourceHash,p.response.binding])).digest('hex');return join(stateDir,key+'.json');}
-export async function readCompareSession(p:ComparePackage,stateDir?:string):Promise<CompareSession>{await assertCompareUnchanged(p);try{const value=JSON.parse(await readFile(compareSessionFile(p,stateDir),'utf8'));return {...parseCompareSession(value,p,false),updatedAt:value.updatedAt};}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return freshCompareSession(p);throw e;}}
+async function readStoredCompareSession(p:ComparePackage,stateDir?:string):Promise<{session:CompareSession;recordedStatus?:CompareSession['status']}>{await assertCompareUnchanged(p);try{const value=JSON.parse(await readFile(compareSessionFile(p,stateDir),'utf8'));const session={...parseCompareSession(value,p,false),updatedAt:value.updatedAt};return value&&typeof value==='object'&&!Array.isArray(value)&&Object.hasOwn(value,'status')&&value.status!==undefined?{session,recordedStatus:session.status}:{session};}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return {session:freshCompareSession(p)};throw e;}}
+export async function readCompareSession(p:ComparePackage,stateDir?:string):Promise<CompareSession>{return (await readStoredCompareSession(p,stateDir)).session;}
 export async function saveCompareSession(p:ComparePackage,input:unknown,stateDir?:string):Promise<CompareSession>{
-  await assertCompareUnchanged(p);
+  const {session:stored,recordedStatus:historicalStatus}=await readStoredCompareSession(p,stateDir);
   const file=compareSessionFile(p,stateDir);
-  let stored:CompareSession,historicalStatus:CompareSession['status']|undefined;
-  try{
-    const raw=JSON.parse(await readFile(file,'utf8'));
-    const parsed=parseCompareSession(raw,p,false);
-    stored={...parsed,updatedAt:raw.updatedAt};
-    if(raw&&typeof raw==='object'&&!Array.isArray(raw)&&Object.hasOwn(raw,'status')&&raw.status!==undefined){
-      historicalStatus=parsed.status;
-    }
-  }catch(e){
-    if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;
-    stored=freshCompareSession(p);
-  }
   const value=parseCompareSession(input,p,true);
   assertSubmittedComments(stored.feedback,value.feedback);
   await saveCommentCrops(value.feedback,stateDir);
