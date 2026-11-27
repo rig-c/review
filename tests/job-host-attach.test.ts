@@ -1526,55 +1526,94 @@ test('CP1 ordinary startJobHost preserves released 2.6.0 getter and prototype op
 test('CP1 standalone attachment checks serialized strict request budget while preserving ownerAttachment and exact 65536-byte boundary', async () => {
   const f = await createFixture(), options = baseOptions(f), first = await startJobHost(options); hosts.push(first);
   const initial = first.attachment!, port = Number(new URL(first.origin).port);
+  const recordPath = join(options.stateDir, 'job-ui', initial.jobId + '.json');
+  const initialObserved = observed(initial);
   first.stop();
   const reqOverhead = Buffer.byteLength(JSON.stringify({
     expected: {...initial, binding: {...initial.binding, readerId: ''}},
-    observed: observed(initial),
+    observed: initialObserved,
   }));
 
-  const overOptions: JobHostOptions = {...options, port, readerId: 'r'.repeat(65536 - reqOverhead + 1)};
-  const over = await startJobHost(overOptions); hosts.push(over);
-  const overRecordPath = join(options.stateDir, 'job-ui', over.session.jobId + '.json');
-  const overDescriptorBytes = await readFile(overRecordPath, 'utf8');
-  const overDescriptor = JSON.parse(overDescriptorBytes) as {listenerIncarnation?: string};
-  expect(Buffer.byteLength(overDescriptorBytes)).toBeLessThanOrEqual(65536);
-  expect(overDescriptor.listenerIncarnation).toMatch(/^[0-9a-f-]{36}$/);
-  const unadvertised: JobHostReuseExpectation = {
-    ...initial,
-    jobId: over.session.jobId,
-    origin: over.origin,
-    listenerIncarnation: overDescriptor.listenerIncarnation!,
-    binding: {...initial.binding, readerId: overOptions.readerId!},
+  const serveInPlaceRecord = async (hostOptions: JobHostOptions) => {
+    const session = new JobSession(hostOptions);
+    let context!: ReturnType<typeof createJobRequestContext>;
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port,
+      idleTimeout: 0,
+      fetch(request) { return context.fetch(request); },
+    });
+    servers.push(server);
+    const origin = `http://127.0.0.1:${server.port}`;
+    context = createJobRequestContext(session, hostOptions, origin, jobHostIdentity(hostOptions));
+    const descriptorBytes = JSON.stringify(context.descriptor().record);
+    await writeFile(recordPath, descriptorBytes);
+    context.publish();
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      context.stop();
+      server.stop(true);
+      session.dispose();
+    };
+    hosts.push({session, ports: context.ports, origin, ownerUrl: '', reused: false, attachment: context.attachment(), stop});
+    return {session, context, origin, descriptorBytes, stop};
   };
+
+  const overOptions: JobHostOptions = {...options, port, readerId: 'r'.repeat(65536 - reqOverhead + 1)};
+  const over = await serveInPlaceRecord(overOptions);
+  const overDescriptor = JSON.parse(over.descriptorBytes) as {listenerIncarnation?: string};
+  expect(Buffer.byteLength(over.descriptorBytes)).toBeLessThanOrEqual(65536);
+  expect(overDescriptor.listenerIncarnation).toMatch(/^[0-9a-f-]{36}$/);
+  const unadvertised = over.context.ownerAttachment();
+  expect(observed(unadvertised)).toEqual(initialObserved);
   expect(Buffer.byteLength(JSON.stringify({ok: true, attachment: unadvertised, pid: process.pid}))).toBeLessThanOrEqual(65536);
   expect(Buffer.byteLength(JSON.stringify({expected: unadvertised, observed: observed(unadvertised)}))).toBe(65537);
-  expect(over.attachment).toBeNull();
+  expect(over.context.attachment()).toBeNull();
   const ordinaryOver = await startJobHost(overOptions); hosts.push(ordinaryOver);
   expect(ordinaryOver.reused).toBe(true);
   expect(ordinaryOver.attachment).toBeNull();
   await expect(startJobHost({...overOptions, reuseOnly: {expected: unadvertised}})).rejects.toMatchObject({code: 'JOB_BODY_LIMIT'});
-  const overContext = createJobRequestContext(over.session, overOptions, over.origin, jobHostIdentity(overOptions), undefined, overDescriptor.listenerIncarnation!);
-  overContext.publish();
-  expect(overContext.ownerAttachment()).toEqual(unadvertised);
-  expect(overContext.attachment()).toBeNull();
-  overContext.stop();
   ordinaryOver.stop();
   over.stop();
 
   const exactOptions: JobHostOptions = {...options, port, readerId: 'r'.repeat(65536 - reqOverhead)};
-  const exact = await startJobHost(exactOptions); hosts.push(exact);
-  expect(exact.attachment).not.toBeNull();
-  expect(Buffer.byteLength(JSON.stringify({expected: exact.attachment, observed: observed(exact.attachment!)}))).toBe(65536);
-  expect(Buffer.byteLength(JSON.stringify({ok: true, attachment: exact.attachment, pid: process.pid}))).toBeLessThanOrEqual(65536);
+  const exact = await serveInPlaceRecord(exactOptions);
+  const exactAttachment = exact.context.attachment();
+  expect(exactAttachment).not.toBeNull();
+  expect(observed(exactAttachment!)).toEqual(initialObserved);
+  expect(Buffer.byteLength(JSON.stringify({expected: exactAttachment, observed: observed(exactAttachment!)}))).toBe(65536);
+  expect(Buffer.byteLength(JSON.stringify({ok: true, attachment: exactAttachment, pid: process.pid}))).toBeLessThanOrEqual(65536);
   const ordinaryExact = await startJobHost(exactOptions); hosts.push(ordinaryExact);
   expect(ordinaryExact.reused).toBe(true);
-  expect(ordinaryExact.attachment).toEqual(exact.attachment);
-  const strictExact = await startJobHost({...exactOptions, reuseOnly: {expected: exact.attachment!}}); hosts.push(strictExact);
+  expect(ordinaryExact.attachment).toEqual(exactAttachment);
+  const strictExact = await startJobHost({...exactOptions, reuseOnly: {expected: exactAttachment!}}); hosts.push(strictExact);
   expect(strictExact.reused).toBe(true);
-  expect(strictExact.attachment).toEqual(exact.attachment);
+  expect(strictExact.attachment).toEqual(exactAttachment);
   strictExact.stop();
   ordinaryExact.stop();
   exact.stop();
+
+  const standaloneOverOptions: JobHostOptions = {...options, port, readerId: 'r'.repeat(65536 - reqOverhead + 32)};
+  const standaloneOver = await startJobHost(standaloneOverOptions); hosts.push(standaloneOver);
+  const standaloneDescriptorBytes = await readFile(recordPath, 'utf8');
+  const standaloneDescriptor = JSON.parse(standaloneDescriptorBytes) as {listenerIncarnation?: string};
+  expect(standaloneOver.reused).toBe(false);
+  expect(standaloneOver.attachment).toBeNull();
+  expect(Buffer.byteLength(standaloneDescriptorBytes)).toBeLessThanOrEqual(65536);
+  expect(standaloneDescriptor.listenerIncarnation).toMatch(/^[0-9a-f-]{36}$/);
+  const standaloneUnadvertised: JobHostReuseExpectation = {
+    ...initial,
+    jobId: standaloneOver.session.jobId,
+    origin: standaloneOver.origin,
+    listenerIncarnation: standaloneDescriptor.listenerIncarnation!,
+    binding: {...initial.binding, readerId: standaloneOverOptions.readerId!},
+  };
+  expect(Buffer.byteLength(JSON.stringify({ok: true, attachment: standaloneUnadvertised, pid: process.pid}))).toBeLessThanOrEqual(65536);
+  expect(Buffer.byteLength(JSON.stringify({expected: standaloneUnadvertised, observed: observed(standaloneUnadvertised)}))).toBeGreaterThan(65536);
+  await expect(startJobHost({...standaloneOverOptions, reuseOnly: {expected: standaloneUnadvertised}})).rejects.toMatchObject({code: 'JOB_BODY_LIMIT'});
+  standaloneOver.stop();
 });
 
 test('#1105 slow live host delayed past 1.5s reuses the existing host instead of re-binding its port', async () => {
