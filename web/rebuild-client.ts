@@ -9,8 +9,8 @@ import {ellipsePolygon,fitChestEllipse,CHEST_ELLIPSE_MIN_POINTS} from '../src/ch
 import {deriveBust,parseBustSpec,type BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
 import {APPLIED_ANIMATION_SCHEMA,APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,APPLIED_RETARGET_SCHEMA,filesDiffText,type AppliedAnimation,type AppliedAssembled,type AppliedDelta,type AppliedPatch,type AppliedRetarget,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
-import {appliedBuildOwner,appliedPanelOps,reconcilePanelStatuses,staleReadouts,type AppliedPatchPanel,type RebuildPanelKind,type RestoredPanelOutcome} from '../src/applied-blocks.ts';
-import {meshApplyOutcome,meshMode} from '../src/mesh-entry.ts';
+import {appliedBuildOwner,appliedPanelOps,reconcilePanelStatuses,recordBlock,staleReadouts,type AppliedPatchPanel,type RebuildPanelKind,type RestoredPanelOutcome} from '../src/applied-blocks.ts';
+import {meshApplyOutcome,meshMode,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
 import type {AnimationSourceOp} from '../src/animation-ops.ts';
 import type {MotionSummary,RetargetFlags,RetargetLine,RetargetRecord} from '../src/retarget.ts';
 export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,AppliedRetarget,AppliedAnimation,AnimationSourceOp,CheckSummary,BustSpec};
@@ -18,7 +18,8 @@ import {chestContourFields,chestRegionFields,chestRegionRows,chestRowId,type Che
 import {readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {IDLE_READOUT_BARS} from '../src/idle-tracks.ts';
 import {assertRigFieldOps,RIG_FIELDS_READOUT_BARS} from '../src/rig-fields.ts';
-import type {StageWorld} from './environment-world.ts';
+import type {StageWorld,WorldExport} from './environment-world.ts';
+import type {DensityStripViewLike} from './density-strip-panel.ts';
 import {samplesClock,type StageClock} from '../src/frame-clock.ts';
 import {worstLine,type ReadingsRequest} from '../src/readings.ts';
 import type {RequirementsCatalogView,RequirementsPanel} from './requirements-panel.ts';
@@ -817,6 +818,541 @@ export type StageChange<P>=
  |{kind:'apply';via:'regions'|'mesh'|'physics'|'idle'|'cuts'|'cloth'|'rig-fields'|'bones'|'patch'|'delta'|'retarget'|'animation'}
  |{kind:'reset'}|{kind:'undo'}|{kind:'refused'}
  |{kind:'load';row:P};
+
+type StageRecord=AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation;
+type StageCheck={lines:string[];check:CheckSummary|null};
+type StageTarget={url:string;prefix:string;hash:string};
+type ScratchTarget={id:string;url:string;hash:string};
+type StagePending={index:number;id:string;candidate:string;back:StageTarget&{applied:StageRecord|null;check:StageCheck|null}};
+type DraftRestore=(next:ScratchTarget|null,world?:StageWorld|null)=>Promise<void>;
+
+interface RigStageDraftHook {
+ canManage():boolean;
+ deltaRefusal():string|null;
+ begin(kind:'apply'|'reset'|'undo'):DraftRestore;
+ refresh():void;
+ regionStatus(loaded:RebuildStatusView|null):RebuildStatusView|null;
+ regionRefusal():string|null;
+}
+
+export interface StageJobScreen extends JobApi {
+ state:{
+  inspectedModel:{url:string;prefix:string;sha256:string}|null;
+  stageSource:StageTarget|null;stageModelHash:string|null;rebuildStatus:RebuildStatusView|null;
+  appliedOnStage:StageRecord|null;stageCheck:StageCheck|null;appliedHistory:AppliedHistoryView|null;
+  stripPending:StagePending|null;stripView:DensityStripViewLike|null;
+ };
+ readOnly():string|null;
+ loadStatus():Promise<RebuildStatusView|null>;
+ selected():boolean;
+ busy():boolean;
+ setBusy(value:boolean):void;
+ setScopedBusy(value:boolean,ui?:ScopedJobUiSink):void;
+ world():StageWorld|null;
+ swap(target:StageTarget,world?:StageWorld|null,animation?:string):Promise<void>;
+ target(next:ScratchTarget,stripId?:string):StageTarget;
+ changed(change:StageChange<StagePending>):void;
+ writeDraft():void;
+ message(text:string,error?:boolean):void;
+ chest():ChestEditor|null;
+ chestField:ChestFieldReader;
+ mesh():MeshPanel|null;
+ meshNote(text:string):void;
+ animation():AnimationInspectionPanel|null;
+ retarget():RetargetPanel|null;
+ schedule():WorldExport|{error:string}|null;
+ draft?:RigStageDraftHook;
+ inactive?(ops:readonly AnimationSourceOp[]|undefined,status?:{text:string;error:boolean},clearSelection?:boolean):void;
+ buildLetter?:'A'|'B';
+ chestOutput(ui?:ScopedJobUiSink):StageChestOutput;
+ patchStart(patch:ConfigPatch):string;
+ resetNote:string;
+ resetMessage:string;
+ finishReset?():void;
+ undoStatus(text:string,error?:boolean):void;
+ undoText(result:StageUndoResult):string;
+ restoreUndoRetarget?(retarget:ReturnType<typeof retargetStage>):void;
+ finishUndo(job:AnyJobView|null):void;
+ undoReadouts(cuts:PatchJobView|null,cloth:PatchJobView|null):void;
+ redrawUndo():void;
+ setRetargetClock?(job:RetargetJobView,hash:string):void;
+ selectRetargetPlayback?(job:RetargetJobView):void|Promise<void>;
+ redrawStripBack():void;
+ renderStrip():void;
+ reportStrip(text:string,error:boolean,ui?:ScopedJobUiSink):void;
+ animationApplyText(path:string,count:number):string;
+ animationResetText:string;
+ resetForAnimation():Promise<void>;
+ beforeAnimationReset?():void;
+ rememberAnimation?():void;
+ stripLoad:StageStripPresentation;
+}
+
+async function loadStage(screen:StageJobScreen,next:ScratchTarget|null,world?:StageWorld|null,draft?:DraftRestore,animation?:string):Promise<void> {
+ const inspected=screen.state.inspectedModel;
+ if(!inspected&&draft)return draft(next,world);
+ if(next)return screen.swap(screen.target(next),world,animation);
+ if(inspected)return screen.swap({url:inspected.url,prefix:inspected.prefix,hash:inspected.sha256},world,animation);
+}
+
+export function writeRebuildDraft(node:HTMLTextAreaElement,record:StageRecord|null):void {
+ node.value=record?JSON.stringify(record):'';
+ node.dispatchEvent(new Event('input',{bubbles:true}));
+}
+
+interface StageChestOutput {
+ progress(write:()=>void):void;
+ notice(text:string,error:boolean,lines?:readonly string[]):void;
+ message(text:string,error?:boolean):void;
+}
+type StageUndoResult=Extract<UndoView,{status:'inspected'|'built'}>;
+
+const stageBuildErrorText=(error:unknown)=>error instanceof Error?error.message:String(error);
+
+/**
+ * Edit Mesh's Apply · Rebuild (#135): `{part, delta, configHash}` to `/api/rebuild`, where the server runs
+ * `rig-parts remesh --delta` and the shared tail; on a built job the revision replaces the drawn rig in place under the
+ * same world, and the draft keeps the applied delta (by content and hash), the producer's line, op "remesh", the
+ * per-file diff and the part's counts. A refusal leaves the stage as it was and returns the producer's line verbatim.
+ */
+export async function stageApplyMeshDelta(screen:StageJobScreen,doc:DeltaRequestBody['delta'],line:(text:string)=>void):Promise<{built:boolean;text:string;error:boolean}> {
+ if(screen.busy())return {built:false,text:'REBUILD_BUSY: an Apply is still running',error:true};
+ const readOnly=screen.readOnly();
+ if(readOnly)return {built:false,text:readOnly,error:true};
+ const {state,draft}=screen;
+ const beforeStatus=draft?.deltaRefusal();
+ if(beforeStatus)return {built:false,text:beforeStatus,error:true};
+ const status=state.rebuildStatus??await screen.loadStatus();
+ const afterStatus=draft?.deltaRefusal();
+ if(afterStatus)return {built:false,text:afterStatus,error:true};
+ if(!status?.inputs)return {built:false,text:status?.reason??'REBUILD_STATUS_UNAVAILABLE',error:true};
+ const body:DeltaRequestBody={part:doc.slot,delta:doc,configHash:status.inputs.configHash},world=screen.world();
+ const restore=draft?.begin('apply');
+ screen.setBusy(true);
+ try{
+  const {outcome,next}=await runRebuildApply(body,{api:screen.api,path:screen.path,formatOutcome:deltaOutcomeLine,
+   onLine:text=>{if(screen.selected())line(text);}});
+  if(!next){screen.message(outcome.text,true);return {built:false,text:outcome.text,error:true};}
+  await loadStage(screen,next,world,restore);
+  state.appliedOnStage=deltaAppliedRecord(next.job);state.stageCheck=null;screen.changed({kind:'apply',via:'delta'});
+  if(!state.inspectedModel)draft?.refresh();
+  if(screen.selected()){
+   screen.meshNote(outcome.text);
+   screen.writeDraft();
+  }else screen.inactive?.([]);
+  screen.message(outcome.text);
+  return {built:true,text:outcome.text,error:false};
+ }catch(error){
+  const text=`REBUILD_FAILED: ${stageBuildErrorText(error)}`;
+  screen.message(text,true);
+  return {built:false,text,error:true};
+ }finally{screen.setBusy(false);}
+}
+
+/**
+ * Apply a config patch (#102): the same stream, in-place reload and Reset as a region Apply. The patch goes to the
+ * installed producer through `POST /api/rebuild {patch}`; on a built job the scratch build replaces the drawn rig with
+ * the same camera, animation, time, set and environment, and the draft keeps the patch, its hash, the producer's line
+ * and check's summary. A refusal leaves the stage as it was and shows the producer's line verbatim. No editing UI calls
+ * this yet (#103+); `window.rigReviewEditor.applyPatch` is its entry point.
+ */
+export async function stageApplyPatch(screen:StageJobScreen,patch:ConfigPatch,world:StageWorld|null=null,ui?:ScopedJobUiSink):Promise<PatchJobView|RebuildRefusal> {
+ if(screen.busy())return {status:'refused',error:'REBUILD_BUSY: an Apply is still running',producerLine:null};
+ const output=screen.chestOutput(ui);
+ ui?.clearOutcome('chest');
+ const readOnly=screen.readOnly();
+ if(readOnly){output.notice(readOnly,true);return {status:'refused',error:readOnly,producerLine:null};}
+ const {state,draft}=screen,lines:string[]=[];
+ const restore=draft?.begin('apply');
+ screen.setScopedBusy(true,ui);
+ output.progress(()=>screen.chest()?.notify(screen.patchStart(patch),false,[]));
+ try{
+  // #112: with "Use for readings" on, Apply's check reads the exported schedule of the clip check renders (its idle).
+  const scheduled=screen.schedule();
+  if(scheduled&&'error' in scheduled){
+   output.notice(scheduled.error,true);output.message(scheduled.error,true);
+   return {status:'refused',error:scheduled.error,producerLine:scheduled.error};
+  }
+  const {result,outcome,next}=await runRebuildApply({patch,...(scheduled?{environment:scheduled.schedule}:{})},{
+   api:screen.api,path:screen.path,formatOutcome:patchOutcomeLine,
+   onLine:line=>{lines.push(line);output.progress(()=>screen.chest()?.notify(line.trim()||'…',false,lines.slice(-6)));},
+  });
+  if(!next){output.notice(outcome.text,true,[...lines.slice(-5),outcome.text]);output.message(outcome.text,true);return result;}
+  await loadStage(screen,next,world,restore);
+  state.appliedOnStage=patchAppliedRecord(next.job);state.stageCheck={lines:[...next.job.lines],check:next.job.check};
+  screen.changed({kind:'apply',via:'patch'});
+  if(!state.inspectedModel)draft?.refresh();
+  if(screen.selected())screen.writeDraft();else screen.inactive?.([]);
+  output.notice(outcome.text,outcome.error,[]);output.message(outcome.text,outcome.error);
+  return result;
+ }catch(error){
+  const text=`REBUILD_FAILED: ${stageBuildErrorText(error)}`;
+  output.notice(text,true);output.message(text,true);
+  return {status:'refused',error:text,producerLine:null};
+ }finally{screen.setScopedBusy(false,ui);}
+}
+
+export async function stageResetRebuild(screen:StageJobScreen,world:StageWorld|null=null,ui?:ScopedJobUiSink):Promise<void> {
+ const {state,draft}=screen;
+ if(screen.busy()||(!state.appliedOnStage&&!state.stripPending)||!(draft?draft.canManage():state.inspectedModel))return;
+ const restore=draft?.begin('reset');
+ const output=screen.chestOutput(ui);
+ ui?.clearOutcome('chest');
+ screen.setScopedBusy(true,ui);
+ try{
+  await loadStage(screen,null,world,restore);
+  state.appliedOnStage=null;state.stageCheck=null;screen.changed({kind:'reset'});
+  if(!state.inspectedModel)draft?.refresh();
+  if(screen.selected()){
+   screen.animation()?.reconcileStageApplied(null);
+   screen.finishReset?.();
+  }else screen.inactive?.([]);
+  output.notice(screen.resetNote,false);
+  output.message(screen.resetMessage);
+ }catch(error){output.notice(`REBUILD_RESET_FAILED: ${stageBuildErrorText(error)}`,true);}
+ finally{screen.setScopedBusy(false,ui);}
+}
+
+/**
+ * #166: Undo last Apply — the last record leaves the server's stack and the stage returns to its predecessor's build
+ * (kept on disk, or re-run from its record when evicted) or to the inspected build, under the same world. The feedback
+ * context then carries the post-undo record (or null), never the reverted one. A refusal leaves the stage as it was.
+ */
+export async function stageUndoApply(screen:StageJobScreen):Promise<UndoView|null> {
+ const {state,draft}=screen,from=state.appliedOnStage?.buildId;
+ if(screen.busy()||screen.readOnly()||!from||!(draft?draft.canManage():state.inspectedModel))return null;
+ const world=screen.world(),restore=draft?.begin('undo');
+ screen.setBusy(true);screen.undoStatus('Undoing the last Apply…');
+ try{
+  const result=await runRebuildUndo(from,{api:screen.api,path:screen.path,onLine:line=>screen.undoStatus(line),
+   ...(draft?{}:{showLines:()=>screen.selected()}),
+  });
+  if(result.status==='refused'){
+   if(screen.selected())screen.undoStatus(result.error,true);
+   screen.message(result.error,true);
+   return result;
+  }
+  const job=result.status==='built'?result.job:null;
+  if(job){
+   if(!job.build)throw new Error('the restored job carries no build');
+   const modelHash=job.build.modelHash;
+   await loadStage(screen,{id:job.id,url:job.build.modelUrl,hash:modelHash},world,restore);
+   state.appliedOnStage=recordFor(job);state.stageCheck=isPatchJob(job)?{lines:[...job.lines],check:job.check}:null;
+   // #186: a restored retarget build gets what its Apply set — its own clock, then its animation selected.
+   screen.restoreUndoRetarget?.(retargetStage(job,modelHash));
+  }else{
+   await loadStage(screen,null,world,restore);
+   state.appliedOnStage=null;state.stageCheck=null;
+  }
+  if(!state.inspectedModel)draft?.refresh();
+  screen.changed({kind:'undo'});
+  if(!draft)state.appliedHistory=result.history;
+  const earlyText=draft?null:screen.undoText(result),selected=screen.selected();
+  if(selected){
+   // The panels mark the ops the stage's build applied; the pending edits stay as they are.
+   screen.finishUndo(job);
+   // #172: the Cuts and Cloth readouts show the restored build's job when it is theirs, else nothing (never the reverted one).
+   const restored=job&&isPatchJob(job)?job:null,block=recordBlock(state.appliedOnStage);
+   screen.undoReadouts(block==='cuts'?restored:null,block==='cloth'?restored:null);
+   screen.writeDraft();
+  }else screen.inactive?.(state.appliedOnStage?.schema===APPLIED_ANIMATION_SCHEMA?state.appliedOnStage.ops:[]);
+  if(draft)state.appliedHistory=result.history;
+  const text=earlyText??screen.undoText(result);
+  if(selected)screen.undoStatus(text);
+  screen.message(text);screen.redrawUndo();
+  return result;
+ }catch(error){
+  const text=`UNDO_FAILED: ${stageBuildErrorText(error)}`;
+  if(screen.selected())screen.undoStatus(text,true);
+  screen.message(text,true);
+  return {status:'refused',error:text,producerLine:null};
+ }finally{screen.setBusy(false);}
+}
+
+/** Apply · Rebuild: the rows go to the installed producer; on success its scratch build replaces the drawn rig in place. */
+export async function stageApplyRebuild(screen:StageJobScreen):Promise<void> {
+ if(screen.busy())return;
+ const ro=screen.readOnly();
+ if(ro){screen.chest()?.notify(ro,true);return;}
+ const {state,draft,buildLetter}=screen;
+ const loaded=state.rebuildStatus??await screen.loadStatus();
+ const status=draft?draft.regionStatus(loaded):loaded;
+ const refusal=draft?.regionRefusal();
+ if(refusal){screen.chest()?.notify(refusal,true);return;}
+ const notify=(...args:Parameters<ChestEditor['notify']>)=>{if(screen.selected())screen.chest()?.notify(...args);};
+ if(!status||!status.available||!status.inputs){
+  const noContour=status?noContourReason(status):null,reason=noContour?.text??status?.reason??'REBUILD_STATUS_UNAVAILABLE';
+  notify(reason,!noContour,noContour?.lines??[reason]);screen.message(reason,!noContour);return;
+ }
+ let part:string,body:RebuildRequestBody;
+ const lines:string[]=[],chest=screen.chest();
+ if(chest?.mode()==='landmarks'){
+  // #105: refused here, before anything is sent, when a point is missing or the circles would not clear.
+  const request=landmarksRequest(status,chest.landmarks());
+  if('error' in request){
+   if(screen.selected())chest.notify(request.error,true,[request.error]);
+   screen.message(request.error,true);return;
+  }
+  ({part,body}=request);
+ }else{
+  const designated=designatedRegions(screen.chestField,chestSeed(status));
+  if('error' in designated){notify(designated.error,true);return;}
+  const picked=pickPart(status,designated.regions);
+  if(!picked){notify(`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the designated bones name none of them alone`,true);return;}
+  part=picked;body={part,regions:designated.regions,configHash:status.inputs.configHash};
+ }
+ const restore=draft?.begin('apply');
+ screen.setBusy(true);
+ notify(buildLetter===undefined?`Rebuilding ${part} with ${status.producer?.package} ${status.producer?.version}…`
+  :`Rebuilding ${part} on Build ${buildLetter} with ${status.producer?.package} ${status.producer?.version}…`,false,[]);
+ try{
+  const {outcome,next}=await runRebuildApply(body,{api:screen.api,path:screen.path,formatOutcome:outcomeLine,
+   onLine:line=>{lines.push(line);notify(line.trim()||'…',false,lines.slice(-6));},
+  });
+  // A refusal stays readable in full: the bar's status line is one line, so the log ends with the producer's line verbatim.
+  if(!next){notify(outcome.text,true,[...lines.slice(-5),outcome.text]);screen.message(outcome.text,true);return;}
+  await loadStage(screen,next,undefined,restore);
+  state.appliedOnStage=appliedRecord(next.job);state.stageCheck=null;screen.changed({kind:'apply',via:'regions'});
+  if(!state.inspectedModel)draft?.refresh();
+  if(screen.selected()){
+   screen.writeDraft();
+   // The log closes on success so nothing floats over the rebuilt stage; a refusal keeps it open.
+   screen.chest()?.notify(outcome.text,false,[]);
+  }else screen.inactive?.([]);
+  screen.message(outcome.text);
+ }catch(error){
+  if(screen.selected())screen.chest()?.notify(`REBUILD_FAILED: ${stageBuildErrorText(error)}`,true);
+  screen.message(`REBUILD_FAILED: ${stageBuildErrorText(error)}`,true);
+ }finally{screen.setBusy(false);}
+}
+
+/**
+ * Retarget Apply (#114): `{retarget: {sequence, map, flags, configHash}}` to `/api/rebuild`, where the server runs the
+ * installed `rig-pose clean` and `rig-pose retarget` and the shared tail into scratch. On a built job the scratch build
+ * replaces the drawn rig in place, the new animation is chosen and the sequence is shown as the reference beside it; the
+ * draft keeps the record (map by content, flags and their argv), the producer's line, the motion summary and the lines.
+ * A refusal leaves the stage as it was and shows every FAIL line verbatim.
+ */
+export async function stageApplyRetarget(screen:StageJobScreen,body:{
+ sequence:string;map:import('./retarget-panel.ts').PoseMap;flags:RetargetFlags;
+}):Promise<RetargetJobView|RebuildRefusal|null> {
+ if(screen.busy()){screen.retarget()?.status('REBUILD_BUSY: an Apply is still running',true);return null;}
+ const ro=screen.readOnly();
+ if(ro){screen.retarget()?.status(ro,true);return null;}
+ const {state,buildLetter}=screen;
+ const status=state.rebuildStatus??await screen.loadStatus();
+ if(!status?.inputs){
+  if(screen.selected())screen.retarget()?.status(status?.reason??'REBUILD_STATUS_UNAVAILABLE',true);
+  return null;
+ }
+ const request:RetargetRequestBody={retarget:{...body,configHash:status.inputs.configHash}};
+ const world=screen.world();
+ screen.setBusy(true);
+ if(screen.selected()){
+  screen.retarget()?.busy(true);screen.retarget()?.result(null);
+  screen.retarget()?.status(buildLetter===undefined
+   ?`Retargeting ${body.sequence} as "${body.flags.animation}" with ${status.retarget?.producer?.package??'@rig-c/pose'} ${status.retarget?.producer?.version??''}: ${body.flags.clean?'clean, ':''}retarget, compile…`
+   :`Retargeting ${body.sequence} as "${body.flags.animation}" on Build ${buildLetter}…`,false);
+ }
+ try{
+  const {result,outcome,next}=await runRebuildApply(request,{api:screen.api,path:screen.path,formatOutcome:retargetOutcomeLine,
+   onLine:text=>{if(screen.selected())screen.retarget()?.line(text);},
+  });
+  if(screen.selected()){screen.retarget()?.result(result);screen.retarget()?.status(outcome.text,outcome.error);}
+  if(!next){screen.message(outcome.text,true);return result;}
+  const animation=buildLetter===undefined?undefined:next.job.request.record.flags.animation;
+  await loadStage(screen,next,world,undefined,animation);
+  // The new animation's own clock (the run's report frameTimes), bound to this build: the transport counter and the rig pane read it.
+  screen.setRetargetClock?.(next.job,next.hash);
+  state.appliedOnStage=retargetAppliedRecord(next.job);state.stageCheck=null;screen.changed({kind:'apply',via:'retarget'});
+  if(screen.selected())screen.writeDraft();
+  else screen.inactive?.([]);
+  // The new animation plays against the reference: choose it, and show the sequence it was made from beside it.
+  const reference=screen.selectRetargetPlayback?.(next.job);
+  if(reference)await reference;
+  screen.message(outcome.text,outcome.error);
+  return result;
+ }catch(error){
+  const text=`REBUILD_FAILED: ${stageBuildErrorText(error)}`;
+  if(screen.selected())screen.retarget()?.status(text,true);
+  screen.message(text,true);
+  return {status:'refused',error:text,producerLine:null};
+ }finally{screen.setBusy(false);screen.retarget()?.busy(false);}
+}
+
+export async function stageStripBack(screen:StageJobScreen,ui?:ScopedJobUiSink):Promise<void> {
+ const {state,buildLetter}=screen,pending=state.stripPending;
+ if(!pending||screen.busy())return;
+ screen.setScopedBusy(true,ui);
+ try{
+  const {url,prefix,hash}=pending.back;
+  await screen.swap({url,prefix,hash},screen.world());
+  state.appliedOnStage=pending.back.applied;state.stageCheck=pending.back.check;state.stripPending=null;
+  const write=()=>{screen.writeDraft();screen.mesh()?.counts([]);};
+  if(ui)ui.render(write);
+  else if(screen.selected())write();
+  screen.redrawStripBack();
+  screen.reportStrip(buildLetter===undefined
+   ?`Back: the stage shows ${state.appliedOnStage?`the last applied record (model ${hash.slice(0,12)}…)`:`the inspected build (model ${hash.slice(0,12)}…)`}.`
+   :`Back: Build ${buildLetter} shows ${state.appliedOnStage?'the last applied record':'the inspected build'}.`,false,ui);
+ }catch(error){screen.reportStrip(`DENSITY_STRIP_BACK_FAILED: ${stageBuildErrorText(error)}`,true,ui);}
+ finally{
+  screen.setScopedBusy(false,ui);
+  (ui??directJobUiSink).render(()=>screen.renderStrip());
+ }
+}
+
+/**
+ * Keyed animation Apply (#235): sends the entire cumulative pending op list with the handoff's `configHash` and
+ * `animationsFromHash` to `POST /api/rebuild {animation}`. A second Apply sends the first edits too. On a built job the
+ * scratch build reloads in place under the same world and the pending preview is cleared; a refusal leaves the stage and
+ * the pending op list as they were and shows the producer/compiler refusal verbatim.
+ */
+export async function stageApplyAnimation(screen:StageJobScreen,ops:readonly AnimationSourceOp[]):Promise<AnimationJobView|RebuildRefusal|null> {
+ if(screen.busy()){screen.animation()?.setEditorStatus('REBUILD_BUSY: an Apply is still running',true);return null;}
+ const readOnly=screen.readOnly();
+ if(readOnly){screen.animation()?.setEditorStatus(readOnly,true);return null;}
+ if(!ops.length){screen.animation()?.setEditorStatus('ANIMATION_OPS_EMPTY: no pending animation ops to apply',true);return null;}
+ const {state}=screen;
+ const status=state.rebuildStatus??await screen.loadStatus();
+ if(!status?.inputs){
+  const reason=status?.reason??'REBUILD_STATUS_UNAVAILABLE';
+  if(screen.selected())screen.animation()?.setEditorStatus(reason,true);
+  return null;
+ }
+ const animSource=status.animations;
+ if(!animSource?.available||!animSource.sha256){
+  const reason=animSource?.reason??'ANIMATION_SOURCE_MISSING: config.json does not declare an "animations_from" motion spec file.';
+  if(screen.selected())screen.animation()?.setEditorStatus(reason,true);
+  return null;
+ }
+ const scheduled=screen.schedule();
+ if(scheduled&&'error' in scheduled){
+  if(screen.selected())screen.animation()?.setEditorStatus(scheduled.error,true);
+  screen.message(scheduled.error,true);
+  return {status:'refused',error:scheduled.error,producerLine:scheduled.error};
+ }
+ const keying=status.idle?.keying,keys=keying&&'keys' in keying?keying.keys:null;
+ const request:AnimationRequestBody={
+  animation:{configHash:status.inputs.configHash,animationsFromHash:animSource.sha256,ops:[...ops],...(keys?{args:['--idle-keys',keys]}:{})},
+  ...(scheduled?{environment:scheduled.schedule}:{}),
+ };
+ const world=screen.world();
+ screen.setBusy(true);
+ if(screen.selected()){
+  screen.animation()?.busy(true);
+  screen.animation()?.setEditorStatus(screen.animationApplyText(animSource.path??'animations_from',ops.length),false);
+ }
+ try{
+  const {result,outcome,next}=await runRebuildApply(request,{
+   api:screen.api,path:screen.path,formatOutcome:animationOutcomeLine,
+   onLine:line=>{if(screen.selected())screen.animation()?.setEditorStatus(line.trim()||'…',false);},
+  });
+  if(!next){
+   if(screen.selected())screen.animation()?.setEditorStatus(outcome.text,true);
+   screen.message(outcome.text,true);
+   return result;
+  }
+  if(screen.selected())screen.animation()?.markApplied(ops,outcome.text,outcome.error);
+  await loadStage(screen,next,world);
+  state.appliedOnStage=animationAppliedRecord(next.job);
+  state.stageCheck={lines:[...next.job.lines],check:next.job.check};
+  screen.changed({kind:'apply',via:'animation'});
+  if(screen.selected()){
+   screen.writeDraft();
+   screen.animation()?.setEditorStatus(outcome.text,outcome.error);
+   screen.rememberAnimation?.();
+  }else screen.inactive?.(ops,outcome);
+  screen.message(outcome.text,outcome.error);
+  return result;
+ }catch(error){
+  const text=`REBUILD_FAILED: ${stageBuildErrorText(error)}`;
+  if(screen.selected())screen.animation()?.setEditorStatus(text,true);
+  screen.message(text,true);
+  return {status:'refused',error:text,producerLine:null};
+ }finally{
+  screen.setBusy(false);
+  screen.animation()?.busy(false);
+ }
+}
+
+/** Animation Reset: clears pending ops and preview, and restores the inspected build on stage. */
+export async function stageResetAnimation(screen:StageJobScreen):Promise<void> {
+ screen.animation()?.resetEdits();
+ screen.beforeAnimationReset?.();
+ if(screen.state.appliedOnStage){
+  screen.animation()?.busy(true);
+  try{await screen.resetForAnimation();}
+  finally{
+   screen.animation()?.busy(false);
+   if(screen.selected())screen.animation()?.resetEdits();
+   else screen.inactive?.([],undefined,true);
+  }
+ }
+ const text=screen.animationResetText;
+ if(screen.selected()){
+  screen.animation()?.setEditorStatus(text,false);
+  screen.rememberAnimation?.();
+ }else screen.inactive?.(undefined,{text,error:false});
+}
+
+type StageStripRow=DensityStripViewLike['rows'][number];
+interface StageStripPresentation {
+ densityBusy():boolean;
+ draw():void;
+ triangles(part:string):number|null;
+ pendingCount(view:DensityStripViewLike,row:StageStripRow):string;
+ pendingStatus(view:DensityStripViewLike,row:StageStripRow,index:number,agreementLine:string):string;
+}
+
+export async function stageLoadStripRow(screen:StageJobScreen,index:number):Promise<{line:string;ok:boolean}|{error:string}> {
+ const {state,stripLoad:options}=screen;
+ const view=state.stripView,row=view?.rows[index];
+ if(!view||!row)return {error:'DENSITY_STRIP_NOT_FOUND'};
+ if(!row.modelUrl||!row.modelHash){
+  const text=`DENSITY_STRIP_ROW_NOT_LOADABLE: ${row.value} — ${row.applied?'applied already':row.verdict}`;
+  screen.reportStrip(text,true);
+  return {error:text};
+ }
+ if(screen.busy()||options.densityBusy())return {error:'REBUILD_BUSY'};
+ const back=state.stripPending?.back??{
+  url:state.stageSource?.url??state.inspectedModel!.url,
+  prefix:state.stageSource?.prefix??state.inspectedModel!.prefix,
+  hash:state.stageSource?.hash??state.inspectedModel!.sha256,
+  applied:state.appliedOnStage,
+  check:state.stageCheck,
+ };
+ screen.setBusy(true);
+ try{
+  const target=screen.target({id:row.id,url:row.modelUrl,hash:row.modelHash},view.id);
+  await screen.swap(target,screen.world());
+  const pending:StagePending={index,id:view.id,candidate:row.id,back};
+  state.stripPending=pending;
+  // Pending, not applied: no record, no undo entry; the feedback context names no applied state while it is on the stage.
+  state.appliedOnStage=null;state.stageCheck=null;
+  if(screen.selected()){
+   screen.writeDraft();
+   screen.mesh()?.setEntry(row.entry as MeshEntry);
+  }else screen.inactive?.([]);
+  options.draw();
+  const counts=row.counts?{vertices:row.counts.vertices,triangles:row.counts.triangles,hull:0}:null;
+  const agree=triangleAgreement(counts?{part:view.part,before:counts,after:counts}:null,row.modelTriangles,options.triangles(view.part));
+  if(screen.selected())screen.mesh()?.counts([
+   {label:'PENDING',text:options.pendingCount(view,row)},
+   {label:agree.ok?'AGREE':'DIFFER',text:agree.line,error:!agree.ok},
+  ]);
+  screen.reportStrip(options.pendingStatus(view,row,index,agree.line),!agree.ok);
+  return {line:agree.line,ok:agree.ok};
+ }catch(error){
+  const text=`DENSITY_STRIP_LOAD_FAILED: ${stageBuildErrorText(error)}`;
+  screen.reportStrip(text,true);
+  return {error:text};
+ }finally{
+  screen.setBusy(false);
+  screen.renderStrip();
+ }
+}
+
 export function stripPendingAfter<P>(pending:P|null,change:StageChange<P>):P|null {
  if(change.kind==='load')return change.row;
  if(change.kind==='refused')return pending;

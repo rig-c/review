@@ -17,6 +17,7 @@ import { partBounds, type PartExplorer } from './part-selection.ts';
 import { bindInspectorBlocks, activeBlocksUI, restoreActiveBlocksUI, type InspectorBlocks } from './inspector-blocks.ts';
 import { sourceTextContent, tr } from './i18n.ts';
 import { bindChestEditor, canvasToCrop, chestField, chestCircles as readChestCircles, exportChest as exportChestFiles, chestMarkers as readChestMarkers, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, type ChestEditor } from './chest-editor.ts';
+import { writeRebuildDraft, stageApplyMeshDelta, stageApplyPatch, stageResetRebuild, stageUndoApply, stageApplyAnimation, stageLoadStripRow, stageResetAnimation, stageApplyRebuild, stageApplyRetarget, stageStripBack, type StageJobScreen } from './rebuild-client.ts';
 import { chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from './chest-regions-tool.ts';
 import { cropWorldMapping, type CropWorldMapping } from '../src/chest-regions.ts';
 import { bindMeshEditor, exportMesh as exportMeshFiles, meshEditSource, sha256Hex, type MeshEditor } from './mesh-editor.ts';
@@ -45,17 +46,13 @@ import type { RetargetFlags } from '../src/retarget.ts';
 import {
   createHandoffRefresh, directJobUiSink, bindRequirementsCatalog, bindMeshFolds,
   bindPanelRebuilds, createJobUiState, type JobUiSink, type ScopedJobUiSink, appliedStatus as setAppliedStatus, inspectedCheckView as readInspectedCheck, renderApplied as renderAppliedPanel,
-  renderAppliedBlocks as reconcileAppliedBlocks, isPatchJob, recordFor, retargetStage,
-  animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, chestSeed, designatedRegions,
-  landmarksRequest, noContourReason, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
-  pickBustPart, pickPart, runRebuildApply, runRebuildUndo, runReadingsRequest, seedFields, retargetAppliedRecord, retargetOutcomeLine, stageChanged as updateDensityPending,
-  type AnimationJobView, type AnimationRequestBody, type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
-  type AppliedRecord, type AppliedRetarget, type DeltaRequestBody, type ConfigPatch,
-  type PatchJobView, type RebuildRefusal, type RebuildRequestBody, type RebuildStatusView,
-  type RetargetJobView, type RetargetRequestBody, type StageChange,
+  renderAppliedBlocks as reconcileAppliedBlocks, chestSeed, designatedRegions, noContourReason, seedLandmarks, makePatch,
+  pickBustPart, pickPart, runReadingsRequest, seedFields, stageChanged as updateDensityPending, type AppliedHistoryView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
+  type AppliedRecord, type AppliedRetarget, type ConfigPatch,
+  type PatchJobView, type RebuildRefusal, type RebuildStatusView, type StageChange,
 } from './rebuild-client.ts';
 import type { CheckSummary } from '../src/applied-context.ts';
-import { dropNoticeForPanel, recordBlock, type RebuildPanelKind } from '../src/applied-blocks.ts';
+import { dropNoticeForPanel, type RebuildPanelKind } from '../src/applied-blocks.ts';
 import { compareSeekStep } from '../src/compare-playhead.ts';
 import { composeAdjust, PhysicsPreview } from './preview.ts';
 import {
@@ -1086,64 +1083,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     }
   }
 
-  async function applyRebuild(): Promise<void> {
-    if (rebuildBusy) return;
-    const ro = host.readOnly();
-    if (ro) { chestEditor?.notify(ro, true); return; }
-    const side = pickedSide, state = sides[side];
-    const status = state.rebuildStatus ?? await loadRebuildStatus(side);
-    if (!status || !status.available || !status.inputs) {
-      const noContour = status ? noContourReason(status) : null, reason = noContour?.text ?? status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE';
-      if (pickedSide === side) chestEditor?.notify(reason, !noContour, noContour?.lines ?? [reason]);
-      host.message(reason, !noContour);
-      return;
-    }
-    let part: string, body: RebuildRequestBody;
-    const lines: string[] = [];
-    if (chestEditor?.mode() === 'landmarks') {
-      const request = landmarksRequest(status, chestEditor.landmarks());
-      if ('error' in request) {
-        if (pickedSide === side) chestEditor.notify(request.error, true, [request.error]);
-        host.message(request.error, true);
-        return;
-      }
-      ({ part, body } = request);
-    } else {
-      const designated = designatedRegions(chestField, chestSeed(status));
-      if ('error' in designated) { if (pickedSide === side) chestEditor?.notify(designated.error, true); return; }
-      const picked = pickPart(status, designated.regions);
-      if (!picked) { if (pickedSide === side) chestEditor?.notify(`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the designated bones name none of them alone`, true); return; }
-      part = picked; body = { part, regions: designated.regions, configHash: status.inputs.configHash };
-    }
-    rebuildBusy = true; rebuildState();
-    if (pickedSide === side) chestEditor?.notify(`Rebuilding ${part} on Build ${side.toUpperCase()} with ${status.producer?.package} ${status.producer?.version}…`, false, []);
-    try {
-      const { outcome, next } = await runRebuildApply(body, {
-        api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`, formatOutcome: outcomeLine,
-        onLine: line => { lines.push(line); if (pickedSide === side) chestEditor?.notify(line.trim() || '…', false, lines.slice(-6)); },
-      });
-      if (!next) {
-        if (pickedSide === side) chestEditor?.notify(outcome.text, true, [...lines.slice(-5), outcome.text]);
-        host.message(outcome.text, true);
-        return;
-      }
-      await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
-      state.appliedOnStage = appliedRecord(next.job); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'regions' });
-      if (pickedSide === side) {
-        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
-        chestEditor?.notify(outcome.text, false, []);
-      } else if (state.animationState) {
-        state.animationState.appliedOps = [];
-      }
-      host.message(outcome.text);
-    } catch (error) {
-      if (pickedSide === side) chestEditor?.notify(`REBUILD_FAILED: ${errorText(error)}`, true);
-      host.message(`REBUILD_FAILED: ${errorText(error)}`, true);
-    } finally {
-      rebuildBusy = false; rebuildState();
-    }
-  }
-
   const panelRebuilds = bindPanelRebuilds({
     bones: () => bonesPanel, cloth: () => clothPanel, cuts: () => cutsPanel, idle: () => idlePanel,
     mesh: () => meshPanel, physics: () => physicsPanel, 'rig-fields': () => rigFieldsPanel,
@@ -1174,207 +1113,15 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   async function applyPatch(patch: ConfigPatch, _world: StageWorld | null = null, side: Side = pickedSide, ui?: ScopedJobUiSink): Promise<PatchJobView | RebuildRefusal> {
-    if (rebuildBusy) return { status: 'refused', error: 'REBUILD_BUSY: an Apply is still running', producerLine: null };
-    const output = rebuildJobOutput(side, ui);
-    ui?.clearOutcome('chest');
-    const ro = host.readOnly();
-    if (ro) { output.notice(ro, true); return { status: 'refused', error: ro, producerLine: null }; }
-    const state = sides[side];
-    const lines: string[] = [];
-    setRebuildBusy(true, side, ui);
-    output.progress(() => chestEditor?.notify(`Applying patch on Build ${side.toUpperCase()} (${patch.op.cmd}, ${patch.ops.length} op(s))…`, false, []));
-    try {
-      const scheduled = useWorld() ? worldFor(checkAnimation(side), side) : null;
-      if (scheduled && 'error' in scheduled) {
-        output.notice(scheduled.error, true);
-        output.message(scheduled.error, true);
-        return { status: 'refused', error: scheduled.error, producerLine: scheduled.error };
-      }
-      const { result, outcome, next } = await runRebuildApply(
-        { patch, ...(scheduled ? { environment: scheduled.schedule } : {}) },
-        {
-          api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`, formatOutcome: patchOutcomeLine,
-          onLine: line => { lines.push(line); output.progress(() => chestEditor?.notify(line.trim() || '…', false, lines.slice(-6))); },
-        },
-      );
-      if (!next) {
-        output.notice(outcome.text, true, [...lines.slice(-5), outcome.text]);
-        output.message(outcome.text, true);
-        return result;
-      }
-      await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
-      state.appliedOnStage = patchAppliedRecord(next.job);
-      state.stageCheck = { lines: [...next.job.lines], check: next.job.check };
-      stageChanged(side, { kind: 'apply', via: 'patch' });
-      if (pickedSide === side) {
-        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
-      } else {
-        if (state.animationState) state.animationState.appliedOps = [];
-      }
-      output.notice(outcome.text, outcome.error, []);
-      output.message(outcome.text, outcome.error);
-      return result;
-    } catch (error) {
-      const textMsg = `REBUILD_FAILED: ${errorText(error)}`;
-      output.notice(textMsg, true);
-      output.message(textMsg, true);
-      return { status: 'refused', error: textMsg, producerLine: null };
-    } finally {
-      setRebuildBusy(false, side, ui);
-    }
-  }
-
-  async function applyMeshDelta(doc: MeshEditDocument, line: (text: string) => void): Promise<{ built: boolean; text: string; error: boolean }> {
-    if (rebuildBusy) return { built: false, text: 'REBUILD_BUSY: an Apply is still running', error: true };
-    const ro = host.readOnly();
-    if (ro) return { built: false, text: ro, error: true };
-    const side = pickedSide, state = sides[side];
-    const status = state.rebuildStatus ?? await loadRebuildStatus(side);
-    if (!status?.inputs) return { built: false, text: status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE', error: true };
-    const body: DeltaRequestBody = { part: doc.slot, delta: doc, configHash: status.inputs.configHash };
-    rebuildBusy = true; rebuildState();
-    try {
-      const { outcome, next } = await runRebuildApply(body, {
-        api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`, formatOutcome: deltaOutcomeLine,
-        onLine: textLine => { if (pickedSide === side) line(textLine); },
-      });
-      if (!next) { host.message(outcome.text, true); return { built: false, text: outcome.text, error: true }; }
-      await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
-      state.appliedOnStage = deltaAppliedRecord(next.job); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'delta' });
-      if (pickedSide === side) {
-        meshEditor?.setStatusNote(outcome.text, false);
-        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
-      } else if (state.animationState) {
-        state.animationState.appliedOps = [];
-      }
-      host.message(outcome.text);
-      return { built: true, text: outcome.text, error: false };
-    } catch (error) {
-      const textMsg = `REBUILD_FAILED: ${errorText(error)}`; host.message(textMsg, true);
-      return { built: false, text: textMsg, error: true };
-    } finally {
-      rebuildBusy = false; rebuildState();
-    }
-  }
-
-  async function applyRetarget(body: { sequence: string; map: PoseMap; flags: RetargetFlags }): Promise<RetargetJobView | RebuildRefusal | null> {
-    if (rebuildBusy) { retargetPanel?.status('REBUILD_BUSY: an Apply is still running', true); return null; }
-    const ro = host.readOnly();
-    if (ro) { retargetPanel?.status(ro, true); return null; }
-    const side = pickedSide, state = sides[side];
-    const status = state.rebuildStatus ?? await loadRebuildStatus(side);
-    if (!status?.inputs) { if (pickedSide === side) retargetPanel?.status(status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE', true); return null; }
-    const request: RetargetRequestBody = { retarget: { ...body, configHash: status.inputs.configHash } };
-    rebuildBusy = true; rebuildState();
-    if (pickedSide === side) {
-      retargetPanel?.busy(true); retargetPanel?.result(null);
-      retargetPanel?.status(`Retargeting ${body.sequence} as "${body.flags.animation}" on Build ${side.toUpperCase()}…`, false);
-    }
-    try {
-      const { result, outcome, next } = await runRebuildApply(request, {
-        api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`, formatOutcome: retargetOutcomeLine,
-        onLine: textLine => { if (pickedSide === side) retargetPanel?.line(textLine); },
-      });
-      if (pickedSide === side) {
-        retargetPanel?.result(result); retargetPanel?.status(outcome.text, outcome.error);
-      }
-      if (!next) { host.message(outcome.text, true); return result; }
-      await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash, next.job.request.record.flags.animation);
-      state.appliedOnStage = retargetAppliedRecord(next.job); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'retarget' });
-      if (pickedSide === side) {
-        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
-      } else if (state.animationState) {
-        state.animationState.appliedOps = [];
-      }
-      host.message(outcome.text, outcome.error);
-      return result;
-    } catch (error) {
-      const textMsg = `REBUILD_FAILED: ${errorText(error)}`;
-      if (pickedSide === side) retargetPanel?.status(textMsg, true);
-      host.message(textMsg, true);
-      return { status: 'refused', error: textMsg, producerLine: null };
-    } finally {
-      rebuildBusy = false; rebuildState(); retargetPanel?.busy(false);
-    }
+    return stageApplyPatch(stageJobs[side], patch, _world, ui);
   }
 
   async function resetRebuild(_world: StageWorld | null = null, side: Side = pickedSide, ui?: ScopedJobUiSink): Promise<void> {
-    const state = sides[side];
-    if (rebuildBusy || (!state.appliedOnStage && !state.stripPending) || !state.inspectedModel) return;
-    const output = rebuildJobOutput(side, ui);
-    ui?.clearOutcome('chest');
-    setRebuildBusy(true, side, ui);
-    try {
-      await swapPickedSide(side, state.inspectedModel.url, state.inspectedModel.prefix, state.inspectedModel.sha256);
-      state.appliedOnStage = null; state.stageCheck = null; stageChanged(side, { kind: 'reset' });
-      if (pickedSide === side) {
-        animationPanel?.reconcileStageApplied(null);
-        if (animationPanel) state.animationState = animationPanel.exportSideState();
-        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
-      } else {
-        if (state.animationState) state.animationState.appliedOps = [];
-      }
-      output.notice(`Reset: Build ${side.toUpperCase()} is back on its inspected build.`, false);
-      output.message(`Reset Build ${side.toUpperCase()} to its inspected build.`);
-    } catch (error) {
-      output.notice(`REBUILD_RESET_FAILED: ${errorText(error)}`, true);
-    } finally {
-      setRebuildBusy(false, side, ui);
-    }
+    return stageResetRebuild(stageJobs[side], _world, ui);
   }
 
   function appliedStatus(msg: string, error = false): void {
     setAppliedStatus(el('applied-status'), msg, error);
-  }
-
-  async function undoApply(): Promise<UndoView | null> {
-    const side = pickedSide, state = sides[side];
-    const from = state.appliedOnStage?.buildId;
-    if (rebuildBusy || host.readOnly() || !from || !state.inspectedModel) return null;
-    rebuildBusy = true; rebuildState(); appliedStatus('Undoing the last Apply…');
-    try {
-      const result = await runRebuildUndo(from, { api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`,
-        onLine: appliedStatus, showLines: () => pickedSide === side,
-      });
-      if (result.status === 'refused') {
-        if (pickedSide === side) appliedStatus(result.error, true);
-        host.message(result.error, true);
-        return result;
-      }
-      if (result.status === 'inspected') {
-        await swapPickedSide(side, state.inspectedModel.url, state.inspectedModel.prefix, state.inspectedModel.sha256);
-        state.appliedOnStage = null; state.stageCheck = null;
-      } else {
-        const job = result.job; if (!job.build) throw new Error('the restored job carries no build');
-        await swapPickedSide(side, new URL(host.route(job.build.modelUrl), location.href).href, host.route(`/compare-rebuild/${side}/${job.id}/`), job.build.modelHash);
-        state.appliedOnStage = recordFor(job);
-        state.stageCheck = (job as PatchJobView).kind === 'patch' ? { lines: [...job.lines], check: (job as PatchJobView).check } : null;
-      }
-      stageChanged(side, { kind: 'undo' });
-      state.appliedHistory = result.history;
-      const textMsg = `Undid ${result.undone.slice(0, 12)}… on Build ${side.toUpperCase()} · ${result.history.depth} applied record(s) left`;
-      if (pickedSide === side) {
-        renderAppliedBlocks(result.status === 'built' ? result.job : null);
-        if (animationPanel) state.animationState = animationPanel.exportSideState();
-        const restored = result.status === 'built' && isPatchJob(result.job) ? result.job : null, block = recordBlock(state.appliedOnStage);
-        cutsPanel?.shown(block === 'cuts' ? restored : null); clothPanel?.shown(block === 'cloth' ? restored : null);
-        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = state.appliedOnStage ? JSON.stringify(state.appliedOnStage) : ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
-        appliedStatus(textMsg);
-      } else if (state.animationState) {
-        state.animationState.appliedOps = state.appliedOnStage?.schema === 'rig-review-applied/5'
-          ? state.appliedOnStage.ops.map(o => structuredClone(o))
-          : [];
-      }
-      host.message(textMsg); host.redrawOverlays(true);
-      return result;
-    } catch (error) {
-      const textMsg = `UNDO_FAILED: ${errorText(error)}`;
-      if (pickedSide === side) appliedStatus(textMsg, true);
-      host.message(textMsg, true);
-      return { status: 'refused', error: textMsg, producerLine: null };
-    } finally {
-      rebuildBusy = false; rebuildState();
-    }
   }
 
   function inspectedCheckView(side: Side = pickedSide): InspectedCheckView | null {
@@ -1388,115 +1135,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   const applyIdle = panelRebuilds.apply.bind(null, 'idle');
 
   const resetIdleBuild = panelRebuilds.reset.bind(null, 'idle');
-
-  async function applyAnimation(ops: readonly AnimationSourceOp[]): Promise<AnimationJobView | RebuildRefusal | null> {
-    if (rebuildBusy) { animationPanel?.setEditorStatus('REBUILD_BUSY: an Apply is still running', true); return null; }
-    const ro = host.readOnly();
-    if (ro) { animationPanel?.setEditorStatus(ro, true); return null; }
-    if (!ops.length) { animationPanel?.setEditorStatus('ANIMATION_OPS_EMPTY: no pending animation ops to apply', true); return null; }
-    const side = pickedSide, state = sides[side];
-    const status = state.rebuildStatus ?? await loadRebuildStatus(side);
-    if (!status?.inputs) {
-      const r = status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE';
-      if (pickedSide === side) animationPanel?.setEditorStatus(r, true);
-      return null;
-    }
-    const animSource = status.animations;
-    if (!animSource?.available || !animSource.sha256) {
-      const r = animSource?.reason ?? 'ANIMATION_SOURCE_MISSING: config.json does not declare an "animations_from" motion spec file.';
-      if (pickedSide === side) animationPanel?.setEditorStatus(r, true);
-      return null;
-    }
-    const scheduled = useWorld() ? worldFor(checkAnimation(side), side) : null;
-    if (scheduled && 'error' in scheduled) {
-      if (pickedSide === side) animationPanel?.setEditorStatus(scheduled.error, true);
-      host.message(scheduled.error, true);
-      return { status: 'refused', error: scheduled.error, producerLine: scheduled.error };
-    }
-    const keying = status.idle?.keying, keys = keying && 'keys' in keying ? keying.keys : null;
-    const request: AnimationRequestBody = {
-      animation: {
-        configHash: status.inputs.configHash,
-        animationsFromHash: animSource.sha256,
-        ops: [...ops],
-        ...(keys ? { args: ['--idle-keys', keys] } : {}),
-      },
-      ...(scheduled ? { environment: scheduled.schedule } : {}),
-    };
-    rebuildBusy = true; rebuildState();
-    if (pickedSide === side) {
-      animationPanel?.busy(true);
-      animationPanel?.setEditorStatus(`Applying ${ops.length} animation op(s) on Build ${side.toUpperCase()} (${animSource.path ?? 'animations_from'}: rig-parts rig → rigc build → rig-parts check)…`, false);
-    }
-    try {
-      const { result, outcome, next } = await runRebuildApply(request, {
-        api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`, formatOutcome: animationOutcomeLine,
-        onLine: line => { if (pickedSide === side) animationPanel?.setEditorStatus(line.trim() || '…', false); },
-      });
-      if (!next) {
-        if (pickedSide === side) animationPanel?.setEditorStatus(outcome.text, true);
-        host.message(outcome.text, true);
-        return result;
-      }
-      if (pickedSide === side) {
-        animationPanel?.markApplied(ops, outcome.text, outcome.error);
-      }
-      await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
-      state.appliedOnStage = animationAppliedRecord(next.job);
-      state.stageCheck = { lines: [...next.job.lines], check: next.job.check };
-      stageChanged(side, { kind: 'apply', via: 'animation' });
-      if (pickedSide === side) {
-        const draft = el<HTMLTextAreaElement>('rebuild-applied');
-        draft.value = JSON.stringify(state.appliedOnStage);
-        draft.dispatchEvent(new Event('input', { bubbles: true }));
-        animationPanel?.setEditorStatus(outcome.text, outcome.error);
-        state.animationState = animationPanel?.exportSideState() ?? state.animationState;
-      } else if (state.animationState) {
-        state.animationState.appliedOps = ops.map(o => structuredClone(o));
-        state.animationState.editorStatus = { text: outcome.text, error: outcome.error };
-      }
-      host.message(outcome.text, outcome.error);
-      return result;
-    } catch (error) {
-      const textMsg = `REBUILD_FAILED: ${errorText(error)}`;
-      if (pickedSide === side) animationPanel?.setEditorStatus(textMsg, true);
-      host.message(textMsg, true);
-      return { status: 'refused', error: textMsg, producerLine: null };
-    } finally {
-      rebuildBusy = false; rebuildState(); animationPanel?.busy(false);
-    }
-  }
-
-  async function resetAnimationBuild(): Promise<void> {
-    const side = pickedSide, state = sides[side];
-    const resetMsg = `Reset: Build ${side.toUpperCase()} is back on its inspected build; no pending animation ops.`;
-    animationPanel?.resetEdits();
-    animationPanel?.setEditorStatus(resetMsg, false);
-    if (animationPanel) state.animationState = animationPanel.exportSideState();
-    state.animAdjust = null;
-    setAdjust(side);
-    if (state.appliedOnStage) {
-      animationPanel?.busy(true);
-      try {
-        await resetRebuild(stageWorld(), side);
-      } finally {
-        animationPanel?.busy(false);
-        if (pickedSide === side) {
-          animationPanel?.resetEdits();
-        } else if (state.animationState) {
-          state.animationState.appliedOps = [];
-          state.animationState.selectedKey = null;
-          state.animationState.selectedKeys = [];
-        }
-      }
-    }
-    if (pickedSide === side) {
-      animationPanel?.setEditorStatus(resetMsg, false);
-      if (animationPanel) state.animationState = animationPanel.exportSideState();
-    } else if (state.animationState) {
-      state.animationState.editorStatus = { text: resetMsg, error: false };
-    }
-  }
 
   async function checkBones(ops: PatchOp[]): Promise<BonesCheckView> {
     const side = pickedSide, status = sides[side].rebuildStatus ?? await loadRebuildStatus(side);
@@ -1566,64 +1204,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const state = currentState();
     densityStrip?.show(state.stripView, state.stripPending && state.stripView?.id === state.stripPending.id ? state.stripPending.index : null, (densityBusy && densityOwner === pickedSide) || rebuildUiBusy() || !!host.readOnly());
   };
-
-  async function loadStripRow(index: number): Promise<{ line: string; ok: boolean } | { error: string }> {
-    const side = pickedSide, state = sides[side];
-    const view = state.stripView, row = view?.rows[index];
-    if (!view || !row) return { error: 'DENSITY_STRIP_NOT_FOUND' };
-    if (!row.modelUrl || !row.modelHash) { const t = `DENSITY_STRIP_ROW_NOT_LOADABLE: ${row.value} — ${row.applied ? 'applied already' : row.verdict}`; densityLine(t, true, side); return { error: t }; }
-    if (rebuildBusy || densityBusy) return { error: 'REBUILD_BUSY' };
-    const back = state.stripPending?.back ?? {
-      url: state.stageSource?.url ?? state.inspectedModel!.url,
-      prefix: state.stageSource?.prefix ?? state.inspectedModel!.prefix,
-      hash: state.stageSource?.hash ?? state.inspectedModel!.sha256,
-      applied: state.appliedOnStage,
-      check: state.stageCheck,
-    };
-    rebuildBusy = true; rebuildState();
-    try {
-      await swapPickedSide(side, new URL(host.route(row.modelUrl), location.href).href, host.route(`/compare-density-strip/${side}/${view.id}/${row.id}/`), row.modelHash);
-      state.stripPending = { index, id: view.id, candidate: row.id, back };
-      state.appliedOnStage = null; state.stageCheck = null;
-      if (pickedSide === side) {
-        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
-        meshPanel?.setEntry(row.entry as MeshEntry);
-      } else if (state.animationState) {
-        state.animationState.appliedOps = [];
-      }
-      if (!host.layers.mesh) { host.layers.mesh = true; input('layer-mesh').checked = true; }
-      host.redrawOverlays(true);
-      const c = row.counts ? { vertices: row.counts.vertices, triangles: row.counts.triangles, hull: 0 } : null;
-      const agree = triangleAgreement(c ? { part: view.part, before: c, after: c } : null, row.modelTriangles, state.lastOverlay?.meshTriangles[view.part] ?? null);
-      if (pickedSide === side) {
-        meshPanel?.counts([{ label: 'PENDING', text: `${view.field} ${row.value} — not applied` }, { label: agree.ok ? 'AGREE' : 'DIFFER', text: agree.line, error: !agree.ok }]);
-      }
-      densityLine(`Pending on Build ${side.toUpperCase()}: ${view.part} ${view.field} ${row.value} (strip row ${index + 1}) — not applied.`, !agree.ok, side);
-      return { line: agree.line, ok: agree.ok };
-    } catch (error) { const t = `DENSITY_STRIP_LOAD_FAILED: ${errorText(error)}`; densityLine(t, true, side); return { error: t }; }
-    finally { rebuildBusy = false; rebuildState(); renderStrip(); }
-  }
-
-  async function stripBack(side: Side = pickedSide, ui?: ScopedJobUiSink): Promise<void> {
-    const state = sides[side], pending = state.stripPending;
-    if (!pending || rebuildBusy) return;
-    const outcome = ui ? sideJobs[side].density.outcome : (text: string, error: boolean) => densityLine(text, error, side);
-    setRebuildBusy(true, side, ui);
-    try {
-      await swapPickedSide(side, pending.back.url, pending.back.prefix, pending.back.hash);
-      state.appliedOnStage = pending.back.applied; state.stageCheck = pending.back.check; state.stripPending = null;
-      (ui ?? sinkFor(side)).render(() => {
-        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = state.appliedOnStage ? JSON.stringify(state.appliedOnStage) : ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
-        meshPanel?.counts([]);
-      });
-      host.redrawOverlays(true);
-      outcome(`Back: Build ${side.toUpperCase()} shows ${state.appliedOnStage ? 'the last applied record' : 'the inspected build'}.`, false);
-    } catch (error) { outcome(`DENSITY_STRIP_BACK_FAILED: ${errorText(error)}`, true); }
-    finally {
-      setRebuildBusy(false, side, ui);
-      (ui ?? directJobUiSink).render(renderStrip);
-    }
-  }
 
   async function runReadings(override?: { readings: import('../src/readings.ts').ReadingRequest[] },
     origin?: Side): Promise<ReadingsJobView | ReadingsRefusal | null> {
@@ -1695,7 +1275,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       density: bindDensityStripJobs({
         api, path: `${path}/density-strip`, ui, view: () => state.stripView, save: next => { state.stripView = next; }, render: renderStrip,
         busy: () => densityBusy, setBusy: value => { densityBusy = value; densityOwner = value ? side : null; },
-        pendingId: () => state.stripPending?.id, back: () => stripBack(side, ui), panel: () => densityStrip,
+        pendingId: () => state.stripPending?.id, back: () => stageStripBack(stageJobs[side], ui), panel: () => densityStrip,
         footer: text => host.message(text, true), clearFooter: clearCompareJobMessage,
         readOnly: () => host.readOnly(), status: () => state.rebuildStatus, loadStatus: () => loadRebuildStatus(side),
         mesh: () => meshPanel, selected: () => pickedSide === side,
@@ -1717,6 +1297,69 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     };
   }
   const sideJobs = { a: bindSideJobs('a'), b: bindSideJobs('b') };
+
+  function bindStageJobs(side: Side): StageJobScreen {
+    const state = sides[side];
+    const buildLetter = side === 'a' ? 'A' : 'B';
+    const animationResetText = `Reset: Build ${buildLetter} is back on its inspected build; no pending animation ops.`;
+    const rememberAnimation = () => { if (animationPanel) state.animationState = animationPanel.exportSideState(); };
+    const directChest = rebuildJobOutput(side), scopedChest = rebuildJobOutput(side, sinkFor(side));
+    return {
+      state, buildLetter, api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`,
+      readOnly: () => host.readOnly(), loadStatus: () => loadRebuildStatus(side),
+      selected: () => pickedSide === side, busy: () => rebuildBusy,
+      setBusy: value => { rebuildBusy = value; rebuildState(); },
+      setScopedBusy: (value, ui) => setRebuildBusy(value, side, ui), world: () => null,
+      swap: ({ url, prefix, hash }, _world, animation) => swapPickedSide(side, url, prefix, hash, animation),
+      target: (next, stripId) => ({ url: new URL(host.route(next.url), location.href).href,
+        prefix: host.route(stripId ? `/compare-density-strip/${side}/${stripId}/${next.id}/` : `/compare-rebuild/${side}/${next.id}/`), hash: next.hash }),
+      changed: change => stageChanged(side, change), message: (text, error) => host.message(text, error),
+      writeDraft: () => writeRebuildDraft(el<HTMLTextAreaElement>('rebuild-applied'), state.appliedOnStage),
+      chest: () => chestEditor, chestField, mesh: () => meshPanel,
+      meshNote: text => meshEditor?.setStatusNote(text, false), animation: () => animationPanel, retarget: () => retargetPanel,
+      schedule: () => useWorld() ? worldFor(checkAnimation(side), side) : null,
+      inactive: (ops, status, clearSelection) => {
+        const cache = state.animationState;
+        if (!cache) return;
+        if (ops) cache.appliedOps = ops.map(op => structuredClone(op));
+        if (status) cache.editorStatus = status;
+        if (clearSelection) { cache.selectedKey = null; cache.selectedKeys = []; }
+      },
+      chestOutput: ui => ui ? scopedChest : directChest,
+      patchStart: patch => `Applying patch on Build ${buildLetter} (${patch.op.cmd}, ${patch.ops.length} op(s))…`,
+      resetNote: `Reset: Build ${buildLetter} is back on its inspected build.`,
+      resetMessage: `Reset Build ${buildLetter} to its inspected build.`,
+      finishReset: () => { rememberAnimation(); writeRebuildDraft(el<HTMLTextAreaElement>('rebuild-applied'), null); },
+      undoStatus: appliedStatus,
+      undoText: result => `Undid ${result.undone.slice(0, 12)}… on Build ${buildLetter} · ${result.history.depth} applied record(s) left`,
+      finishUndo: job => { renderAppliedBlocks(job); rememberAnimation(); },
+      undoReadouts: (cuts, cloth) => { cutsPanel?.shown(cuts); clothPanel?.shown(cloth); },
+      redrawUndo: () => host.redrawOverlays(true),
+      redrawStripBack: () => host.redrawOverlays(true), renderStrip,
+      reportStrip: (text, error, ui) => {
+        if (ui) sideJobs[side].density.outcome(text, error);
+        else densityLine(text, error, side);
+      },
+      animationApplyText: (path, count) => `Applying ${count} animation op(s) on Build ${buildLetter} (${path}: rig-parts rig → rigc build → rig-parts check)…`,
+      animationResetText, rememberAnimation,
+      resetForAnimation: () => resetRebuild(stageWorld(), side),
+      beforeAnimationReset: () => {
+        animationPanel?.setEditorStatus(animationResetText, false); rememberAnimation();
+        state.animAdjust = null; setAdjust(side);
+      },
+      stripLoad: {
+        densityBusy: () => densityBusy,
+        draw: () => {
+          if (!host.layers.mesh) { host.layers.mesh = true; input('layer-mesh').checked = true; }
+          host.redrawOverlays(true);
+        },
+        triangles: part => state.lastOverlay?.meshTriangles[part] ?? null,
+        pendingCount: (view, row) => `${view.field} ${row.value} — not applied`,
+        pendingStatus: (view, row, index) => `Pending on Build ${buildLetter}: ${view.part} ${view.field} ${row.value} (strip row ${index + 1}) — not applied.`,
+      },
+    };
+  }
+  const stageJobs = { a: bindStageJobs('a'), b: bindStageJobs('b') };
 
   function seekReading(clip: string, frame: number, exact: number | null, label: string): void {
     if (exact === null) { host.message(`${label}: F${frame} has no time; no seek was performed.`, true); return; }
@@ -1784,7 +1427,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       if (!host.playing()) host.message('Jolt queued · it reaches the physics on the next steps; press Play.');
     };
     button('physics-reset').onclick = resetPhysics;
-    button('applied-undo').onclick = () => { void undoApply(); };
+    button('applied-undo').onclick = () => { void stageUndoApply(stageJobs[pickedSide]); };
     input('environment-use').onchange = () => {
       if (!input('environment-use').checked) {
         host.message("Use for readings is off: readings send the standing wind and gravity, Apply's check reads the default world.");
@@ -1873,8 +1516,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       sides[pickedSide].animAdjust = fn;
       setAdjust(pickedSide);
     },
-    apply: ops => applyAnimation(ops),
-    reset: () => resetAnimationBuild(),
+    apply: ops => stageApplyAnimation(stageJobs[pickedSide], ops),
+    reset: () => stageResetAnimation(stageJobs[pickedSide]),
     seek: exact => {
       if (!Number.isFinite(exact) || exact < 0 || exact > host.duration()) {
         host.message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.', true);
@@ -1901,7 +1544,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     mapping: () => activeChestMapping(),
     changed: renderChest,
     download: () => { void exportChest(); },
-    apply: () => { void applyRebuild(); },
+    apply: () => { void stageApplyRebuild(stageJobs[pickedSide]); },
     reset: () => { void resetRebuild(); },
     message: host.message,
     inspector: currentInspector,
@@ -1918,7 +1561,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     pause: host.pause,
     changed: () => host.redrawOverlays(false),
     download: doc => { void exportMesh(doc); },
-    apply: (doc, line) => applyMeshDelta(doc, line),
+    apply: (doc, line) => stageApplyMeshDelta(stageJobs[pickedSide], doc, line),
     applied: () => currentState().appliedOnStage?.schema === 'rig-review-applied/3',
     resetBuild: () => resetRebuild(stageWorld()),
     message: host.message,
@@ -2029,8 +1672,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     part: () => meshPanel?.part() ?? null,
     entry: () => meshPanel?.entry() ?? null,
     build: values => sideJobs[pickedSide].density.build(values),
-    load: async i => { await loadStripRow(i); },
-    back: () => stripBack(),
+    load: async i => { await stageLoadStripRow(stageJobs[pickedSide], i); },
+    back: () => stageStripBack(stageJobs[pickedSide]),
     close: () => sideJobs[pickedSide].density.close(),
   });
 
@@ -2083,7 +1726,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   disposers.push(() => rigFieldsPanel?.dispose());
 
   readingsPanel = bindReadingsPanel({ run: () => { void runReadings(); }, seek: seekReading });
-  retargetPanel = bindRetargetPanel({ apply: body => applyRetarget(body), reset: () => { void resetRebuild(stageWorld()); }, seek: seekReading });
+  retargetPanel = bindRetargetPanel({ apply: body => stageApplyRetarget(stageJobs[pickedSide], body), reset: () => { void resetRebuild(stageWorld()); }, seek: seekReading });
   requirementsPanel = bindRequirementsPanel({
     check: runRequirements,
     seek: seekReading,
@@ -2100,7 +1743,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     pickSide: (s: Side) => setPickedSide(s),
     applyPatch,
     reset: () => resetRebuild(),
-    undo: () => undoApply(),
+    undo: () => stageUndoApply(stageJobs[pickedSide]),
     history: () => currentState().appliedHistory ? JSON.parse(JSON.stringify(currentState().appliedHistory)) : null,
     status: async () => currentState().rebuildStatus ?? await loadRebuildStatus(pickedSide),
     physics: {
@@ -2185,8 +1828,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       strip: {
         build: (values: number[]) => sideJobs[pickedSide].density.build(values),
         view: () => currentState().stripView ? JSON.parse(JSON.stringify(currentState().stripView)) : null,
-        load: (i: number) => loadStripRow(i),
-        back: () => stripBack(),
+        load: (i: number) => stageLoadStripRow(stageJobs[pickedSide], i),
+        back: () => stageStripBack(stageJobs[pickedSide]),
         close: () => sideJobs[pickedSide].density.close(),
         pending: () => currentState().stripPending ? { index: currentState().stripPending!.index, candidate: currentState().stripPending!.candidate } : null,
         applied: () => currentState().appliedOnStage ? JSON.parse(JSON.stringify(currentState().appliedOnStage)) : null,
@@ -2305,8 +1948,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       clearPending: () => animationPanel?.clearPending(),
       zoom: () => animationPanel?.zoomLevel() ?? 1,
       setZoom: (z: number) => animationPanel?.setZoom(z),
-      apply: () => applyAnimation(animationPanel?.ops() ?? []),
-      reset: () => resetAnimationBuild(),
+      apply: () => stageApplyAnimation(stageJobs[pickedSide], animationPanel?.ops() ?? []),
+      reset: () => stageResetAnimation(stageJobs[pickedSide]),
       status: () => document.querySelector('[data-animation-editor-status]')?.textContent ?? '',
     },
     stage: (side: Side = pickedSide) => ({
