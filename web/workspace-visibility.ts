@@ -3,6 +3,7 @@ import {setLanguagePreference, setLinkLanguage} from './i18n.ts';
 
 export const WORKSPACE_MODE_STATE_SCHEMA = 'rig-review-workspace-mode-state/1';
 export const WORKSPACE_MODE_REQUEST_SCHEMA = 'rig-review-workspace-mode-request/1';
+export const WORKSPACE_LANGUAGE_CHOICE_SCHEMA = 'rig-review-workspace-language-choice/1';
 export const workspaceModes = ['rig', 'playback', 'compare'] as const;
 export type WorkspaceMode = typeof workspaceModes[number];
 export type WorkspaceModeState = {pressed: boolean; disabled: boolean; title: string | null};
@@ -17,7 +18,18 @@ export function bindWorkspaceVisibility(binding: {key: string; sourceHash: strin
   if (parent === window || !incarnation) return;
   const identity = {incarnation, key: binding.key, sourceHash: binding.sourceHash};
   const buttons = binding.modeSwitch ? workspaceModeButtons(binding.modeSwitch) : [];
+  const comparePicker = !binding.modeSwitch && location.pathname === `/instances/${binding.key}/` &&
+    window.frameElement?.getAttribute('data-workspace-locale') === 'legacy-compare'
+    ? document.getElementById('settings-language') as HTMLSelectElement | null : null;
   let visible = false, reported = '';
+  const chooseLanguage = () => {
+    const language = comparePicker?.value;
+    if (visible && (language === 'en' || language === 'ko')) {
+      parent.postMessage({schema: WORKSPACE_LANGUAGE_CHOICE_SCHEMA, ...identity, language}, location.origin);
+    }
+  };
+  // Read the explicit selection before the existing Settings handler persists and re-renders it.
+  comparePicker?.addEventListener('change', chooseLanguage, true);
   const reportMode = () => {
     const modes = buttons.map(button => ({pressed: button.getAttribute('aria-pressed') === 'true',
       disabled: button.disabled, title: button.getAttribute('aria-description') ?? button.getAttribute('title')}));
@@ -41,11 +53,16 @@ export function bindWorkspaceVisibility(binding: {key: string; sourceHash: strin
     visible = value.visible;
     if (!visible) binding.pause();
     if (value.language === 'en' || value.language === 'ko') {
-      setLinkLanguage(binding.modeSwitch ? value.language : null); setLanguagePreference(value.language);
+      setLinkLanguage(binding.modeSwitch || comparePicker ? value.language : null);
+      setLanguagePreference(value.language);
+      if (comparePicker) comparePicker.value = value.language;
     }
   };
   window.addEventListener('message', receive);
-  const stop = () => {observer?.disconnect(); window.removeEventListener('message', receive); window.removeEventListener('pagehide', stop);};
+  const stop = () => {
+    observer?.disconnect(); comparePicker?.removeEventListener('change', chooseLanguage, true);
+    window.removeEventListener('message', receive); window.removeEventListener('pagehide', stop);
+  };
   window.addEventListener('pagehide', stop, {once: true});
   parent.postMessage({schema: WORKSPACE_READY_SCHEMA, ...identity}, location.origin);
   if (buttons.length) reportMode();

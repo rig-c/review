@@ -5,7 +5,7 @@ import {entryHtml, playBuildConditions} from '../src/build.ts';
 import {mountOwnerWorkspace} from '../web/owner-workspace.ts';
 import {WORKSPACE_READY_SCHEMA, WORKSPACE_SCHEMA, WORKSPACE_VISIBILITY_SCHEMA, WORKSPACE_TARGET_DOMAIN} from '../src/open-workspace-contract.ts';
 import {getLanguagePreference, getLinkLanguage, setLanguagePreference, setLinkLanguage, t, unbindDomI18n} from '../web/i18n.ts';
-import {bindWorkspaceVisibility, WORKSPACE_MODE_REQUEST_SCHEMA, WORKSPACE_MODE_STATE_SCHEMA} from '../web/workspace-visibility.ts';
+import {bindWorkspaceVisibility, WORKSPACE_LANGUAGE_CHOICE_SCHEMA, WORKSPACE_MODE_REQUEST_SCHEMA, WORKSPACE_MODE_STATE_SCHEMA} from '../web/workspace-visibility.ts';
 import {statusDom} from './helpers/workspace-status-dom.ts';
 
 const origin = 'http://127.0.0.1:4318', incarnation = '12345678-1234-1234-1234-123456789abc', capability = 'c'.repeat(64);
@@ -249,6 +249,7 @@ test('legacy Compare retains its URL and language handoff without taking the out
     await h.mount(); await h.waitForFrame();
     const [frame] = h.frames;
     expect(frame.dataset.stageEmbed).toBeUndefined();
+    expect(frame.dataset.workspaceLocale).toBe('legacy-compare');
     expect(frame.src.split('&lang=')[0]).toBe(h.targets[0]!.entry);
     expect(h.root.children[0].querySelector('strong').textContent).toBe('A');
     expect(h.root.children[0].querySelector('.mode-switch').hidden).toBe(true);
@@ -260,6 +261,93 @@ test('legacy Compare retains its URL and language handoff without taking the out
     expect(h.messages).toHaveLength(1);
     expect(h.messages[0]!.data).toMatchObject({schema: WORKSPACE_VISIBILITY_SCHEMA, visible: true, language: 'ko'});
   } finally {h.close();}
+});
+
+test('only the selected legacy Compare can change the owner language for retained frames', async () => {
+  const h = await host('owner');
+  h.targets[0]!.mode = 'compare';
+  try {
+    await h.mount(); await h.waitForFrame();
+    h.list().children[1].click();
+    for (let i = 0; h.frames.length < 2 && i < 100; i++) await Bun.sleep(1);
+    expect(h.frames).toHaveLength(2);
+    const [compare, rig] = h.frames;
+    const choice = {schema: WORKSPACE_LANGUAGE_CHOICE_SCHEMA, incarnation, key: 'a', sourceHash: 'a'.repeat(64), language: 'ko'};
+    const picker = h.root.children[0].querySelector('select');
+    h.messages.length = 0;
+    h.receive(compare, choice);
+    h.receive(rig, {...choice, key: 'b', sourceHash: 'b'.repeat(64)});
+    expect(picker.value).toBe('en');
+    expect(h.messages).toHaveLength(0);
+
+    h.list().children[0].click();
+    h.messages.length = 0;
+    for (const change of [{origin: origin + '1'}, {source: rig.contentWindow}, {data: {...choice, incarnation: 'stale'}},
+      {data: {...choice, key: 'b'}}, {data: {...choice, sourceHash: 'stale'}}, {data: {...choice, language: 'system'}}]) {
+      h.receive(compare, choice, change);
+    }
+    expect(picker.value).toBe('en');
+    expect(h.messages).toHaveLength(0);
+    h.receive(compare, choice);
+    expect(picker.value).toBe('ko');
+    expect(document.documentElement.lang).toBe('ko');
+    expect(h.messages.map(({frame, data, origin}) => [h.frames.indexOf(frame), data.visible, data.language, origin])).toEqual([
+      [0, true, 'ko', origin], [1, false, 'ko', origin],
+    ]);
+  } finally {h.close();}
+});
+
+test('marked Compare consumes owner language, then reports only an explicit visible picker change', async () => {
+  const h = await host('owner'), outgoing: {data: object; destination: string}[] = [];
+  const parent = {postMessage: (data: object, destination: string) => outgoing.push({data, destination})};
+  const prior = Object.getOwnPropertyDescriptor(globalThis, 'parent');
+  Object.defineProperty(globalThis, 'parent', {configurable: true, value: parent});
+  let stop: (() => void) | undefined;
+  try {
+    const picker = document.createElement('select'), pickerEvents = new Events();
+    picker.id = 'settings-language'; picker.value = 'en'; h.root.append(picker);
+    picker.addEventListener = pickerEvents.addEventListener.bind(pickerEvents);
+    picker.removeEventListener = pickerEvents.removeEventListener.bind(pickerEvents);
+    const frame = document.createElement('div');
+    frame.setAttribute('data-workspace-locale', 'legacy-compare');
+    Object.assign(h.events, {frameElement: frame});
+    const identity = {incarnation, key: 'a'.repeat(64), sourceHash: 'b'.repeat(64)};
+    h.location.pathname = `/instances/${identity.key}/`;
+    const binding = {...identity, pause() {}};
+    const visibility = {schema: WORKSPACE_VISIBILITY_SCHEMA, ...identity, visible: true, language: 'ko'};
+    stop = bindWorkspaceVisibility(binding);
+    expect(outgoing).toEqual([{data: {schema: WORKSPACE_READY_SCHEMA, ...identity}, destination: origin}]);
+    h.receive({contentWindow: parent}, visibility, {source: {}});
+    expect(picker.value).toBe('en');
+    h.receive({contentWindow: parent}, visibility);
+    expect(picker.value).toBe('ko');
+    expect(getLinkLanguage()).toBe('ko');
+    setLanguagePreference('en');
+    expect(document.documentElement.lang).toBe('ko');
+    expect(outgoing).toHaveLength(1);
+
+    picker.value = 'en'; pickerEvents.dispatchEvent(new Event('change'));
+    expect(outgoing[1]).toEqual({data: {schema: WORKSPACE_LANGUAGE_CHOICE_SCHEMA, ...identity, language: 'en'}, destination: origin});
+    h.receive({contentWindow: parent}, {...visibility, visible: false});
+    expect(picker.value).toBe('ko');
+    picker.value = 'en'; pickerEvents.dispatchEvent(new Event('change'));
+    expect(outgoing).toHaveLength(2);
+    stop!();
+    expect(pickerEvents.count('change')).toBe(0);
+
+    frame.removeAttribute('data-workspace-locale');
+    stop = bindWorkspaceVisibility(binding);
+    h.receive({contentWindow: parent}, visibility);
+    expect(picker.value).toBe('en');
+    expect(document.documentElement.lang).toBe('ko');
+    expect(getLinkLanguage()).toBeNull();
+    pickerEvents.dispatchEvent(new Event('change'));
+    expect(outgoing).toHaveLength(3);
+  } finally {
+    stop?.();
+    if (prior) Object.defineProperty(globalThis, 'parent', prior); else Reflect.deleteProperty(globalThis, 'parent');
+    h.close();
+  }
 });
 
 test('embedded rig accepts only visible, enabled mode requests from its bound parent and reports local changes', async () => {

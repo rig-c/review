@@ -4,7 +4,7 @@ import {WORKSPACE_TARGET_LIMIT, WORKSPACE_READY_SCHEMA, WORKSPACE_SCHEMA, WORKSP
   type WorkspaceList, type WorkspaceTargetView} from '../src/open-workspace-contract.ts';
 import {getLanguage, onLanguageChange, setLanguagePreference, setLinkLanguage, tr} from './i18n.ts';
 import {connectLiveWindow} from './live-connection.ts';
-import {WORKSPACE_MODE_REQUEST_SCHEMA, WORKSPACE_MODE_STATE_SCHEMA, workspaceModes, type WorkspaceModeState} from './workspace-visibility.ts';
+import {WORKSPACE_LANGUAGE_CHOICE_SCHEMA, WORKSPACE_MODE_REQUEST_SCHEMA, WORKSPACE_MODE_STATE_SCHEMA, workspaceModes, type WorkspaceModeState} from './workspace-visibility.ts';
 
 export function mountOwnerWorkspace(root: HTMLElement): () => void {
   const workspace = mountRetainedWorkspace({root, kind: 'owner'});
@@ -41,7 +41,8 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
       if (!retained.isCurrent(intent)) return;
       const frame = retained.createFrame(target.title, target.entry + '&lang=' + getLanguage() + '#cap=' + token);
       // #655 slice 4 / #1213 owns legacy Compare chrome, including its build picker and feedback actions.
-      if (target.mode !== 'compare') frame.dataset.stageEmbed = 'owner';
+      if (target.mode === 'compare') frame.dataset.workspaceLocale = 'legacy-compare';
+      else frame.dataset.stageEmbed = 'owner';
       entry = {frame, target}; retained.retain(entry);
     }
     retained.select(target.key);
@@ -88,6 +89,7 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
     finally {if (!disposed) timer = setTimeout(() => {void refresh();}, 1000);}
   }
 
+  const chooseLanguage = (value: 'en' | 'ko') => {setLinkLanguage(null); setLanguagePreference(value);};
   function receive(event: MessageEvent) {
     if (event.origin !== location.origin || !current || !event.data || typeof event.data !== 'object') return;
     const value = event.data;
@@ -95,6 +97,12 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
     const entry = retained.get(value.key);
     if (!entry || !event.source || entry.frame.contentWindow !== event.source || entry.target.contentHash !== value.sourceHash) return;
     if (value.schema === WORKSPACE_READY_SCHEMA) {retained.visibility(entry); return;}
+    if (value.schema === WORKSPACE_LANGUAGE_CHOICE_SCHEMA) {
+      if (entry === selected() && entry.target.mode === 'compare' && (value.language === 'en' || value.language === 'ko')) {
+        chooseLanguage(value.language);
+      }
+      return;
+    }
     const modes: unknown = value.modes;
     if (value.schema !== WORKSPACE_MODE_STATE_SCHEMA || entry.frame.dataset.stageEmbed !== 'owner' ||
         !Array.isArray(modes) || modes.length !== workspaceModes.length ||
@@ -114,7 +122,7 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
       entry.frame.contentWindow?.postMessage({schema: WORKSPACE_MODE_REQUEST_SCHEMA, ...identity(entry.target), mode}, location.origin);
     }
   });
-  language.onchange = () => {setLinkLanguage(null); setLanguagePreference(language.value === 'ko' ? 'ko' : 'en');};
+  language.onchange = () => chooseLanguage(language.value === 'ko' ? 'ko' : 'en');
   const unlocalize = onLanguageChange(() => {render(); retained.languageChanged();});
   const disconnect = connectLiveWindow({route: () => '/workspace/live'});
   const stop = () => {

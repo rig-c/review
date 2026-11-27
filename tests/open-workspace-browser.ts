@@ -552,9 +552,18 @@ try {
   if (compareSettingsCollapsed) await clickInside(0, '#settings-toggle');
   assert.ok(await inside(0, `document.querySelector('#settings-language').getClientRects().length>0`));
   if (compareSettingsCollapsed) await clickInside(0, '#settings-toggle');
-  for (const locale of [language === 'en' ? 'ko' : 'en', language]) {
+  const otherLocale = language === 'en' ? 'ko' : 'en';
+  const compareLocaleAgrees = (locale: 'en' | 'ko') => `(()=>{
+    const compare=document.querySelector('.owner-stage>iframe').contentDocument;
+    return document.documentElement.lang==='${locale}' && document.querySelector('#app>.topbar select').value==='${locale}' &&
+      compare.documentElement.lang==='${locale}' && compare.querySelector('#settings-language').value==='${locale}' &&
+      compare.querySelector('header [data-mode=rig]').textContent.trim()===${JSON.stringify((locale === 'ko' ? koCatalog : enCatalog).Setup)};
+  })()`;
+  for (const locale of [otherLocale, language] as const) {
     await page.evaluate(`(()=>{const picker=document.querySelector('#app>.topbar select');picker.value='${locale}';picker.dispatchEvent(new Event('change'));})()`);
-    await wait(frameExpression(0, `document.documentElement.lang==='${locale}'`), 'picker reaches legacy Compare in ' + locale);
+    await wait(compareLocaleAgrees(locale), 'outer picker agrees with legacy Compare in ' + locale);
+    await inside(0, `document.dispatchEvent(new window.Event('visibilitychange'))`);
+    assert.ok(await page.evaluate(compareLocaleAgrees(locale)), 'Compare Settings refresh preserves the owner language');
   }
   await record('compare-render-observations', renderObservations);
   const pair = await inside<any>(0, `({animation:document.querySelector('#animation').textContent,reference:{readyState:document.querySelector('#reference-video').readyState,width:document.querySelector('#reference-video').videoWidth,height:document.querySelector('#reference-video').videoHeight,time:document.querySelector('#reference-video').currentTime},trace:JSON.parse(document.querySelector('#trace').textContent)})`);
@@ -572,6 +581,20 @@ try {
     // Main pairPaint above retains both actual source canvas pixel checks (#735:8-11 / #741).
   }
   await writeFile(join(output, 'owner-compare-' + language + '.png'), await page.screenshot());
+  await open([0]);
+  await wait(`document.querySelectorAll('.owner-list button').length===2`, 'Compare and single rig share the workspace');
+  await choose(1, 2); await ready(1, 'synthetic-animation-1');
+  await choose(0, 2);
+  if (compareSettingsCollapsed) await clickInside(0, '#settings-toggle');
+  assert.ok(await inside(0, `document.querySelector('#settings-language').getClientRects().length>0`));
+  for (const locale of [otherLocale, language] as const) {
+    await inside(0, `(()=>{const picker=document.querySelector('#settings-language');picker.value='${locale}';
+      picker.dispatchEvent(new window.Event('change',{bubbles:true}));})()`);
+    await wait(`${compareLocaleAgrees(locale)} && ${frameExpression(1, `document.documentElement.lang==='${locale}'`)}`,
+      'inner Compare picker updates the owner and retained rig in ' + locale);
+  }
+  if (compareSettingsCollapsed) await clickInside(0, '#settings-toggle');
+  await record('compare-language-agreement', {outerPicker: true, innerPicker: true, settingsRefresh: true, retainedRig: true});
   assert.deepEqual(await Promise.all(inputs.map(jobInputHashes)), before);
   await record('input-immutability', {unchanged: true, targets: inputs.length});
   assert.equal(events.length, 0, 'unexpected browser exceptions');
