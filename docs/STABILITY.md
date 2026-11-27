@@ -803,9 +803,8 @@ runtime exports total, plus the type-only `CheckpointEvidencePacketResult`.
 `parseCommentOnlyAct` and `JOB_COMMENT_ONLY_ACT_SCHEMA` (`rig-review/act@10`),
 for thirty-seven runtime exports total, plus the type-only `JobCommentOnlyAct`.
 
-Review #1225 removes the retired decision writer, leaving thirty-six runtime
-exports. Constants preserve their literal values from the frozen semantic
-contract.
+Review #1225 removes the retired decision writer for thirty-six runtime exports total.
+Constants preserve their literal values from the frozen semantic contract.
 
 - `startJobHost`
 - `parseRecordAct`
@@ -1024,7 +1023,7 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ### Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer checks the thirty-seven runtime exports and the existing managed-host types, including
+A consumer checks the thirty-six runtime exports and the existing managed-host types, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and
