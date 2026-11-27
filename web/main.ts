@@ -45,10 +45,11 @@ import {readSetupPose,modelBoneNames} from './setup-pose.ts';
 import {bindBonesPanel,requestBonesCheck,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
 import {bindCutsPanel,type CutsPanel} from './cuts-panel.ts';
 import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
-import {animationAppliedRecord,animationOutcomeLine,retargetAppliedRecord,retargetOutcomeLine,stageChanged as updateDensityPending,type AnimationJobView,type AnimationRequestBody,type AnimationSourceOp,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
+import {stageChanged as updateDensityPending,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
+import {writeRebuildDraft, stageApplyMeshDelta, stageApplyPatch, stageResetRebuild, stageUndoApply, stageApplyAnimation, stageLoadStripRow, stageResetAnimation, stageApplyRebuild, stageApplyRetarget, stageStripBack,type StageJobScreen} from './rebuild-client.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {createHandoffRefresh,directJobUiSink,bindRequirementsCatalog,bindMeshFolds,bindPanelRebuilds,preparePanelPatch,appliedStatus as setAppliedStatus,inspectedCheckView as readInspectedCheck,renderApplied as renderAppliedPanel,renderAppliedBlocks as reconcileAppliedBlocks,isPatchJob,recordFor,retargetStage,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuildApply,runRebuildUndo,runReadingsRequest,seedFields,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {createHandoffRefresh,directJobUiSink,bindRequirementsCatalog,bindMeshFolds,bindPanelRebuilds,preparePanelPatch,appliedStatus as setAppliedStatus,inspectedCheckView as readInspectedCheck,renderApplied as renderAppliedPanel,renderAppliedBlocks as reconcileAppliedBlocks,retargetStage,type AppliedHistoryView,type UndoView,type AnyJobView,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,noContourReason,seedLandmarks,makePatch,pickBustPart,pickPart,runReadingsRequest,seedFields,type AppliedDelta,type AppliedPatch,type AppliedRecord,type ConfigPatch,type PatchJobView,type RebuildRefusal,type RebuildStatusView} from './rebuild-client.ts';
 import type {MeshEditDocument} from '../src/mesh-edit.ts';
 import {cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {mountWorkspaceShell,mountStatusBar,bindWorkspaceUI,bindHeaderModeAvailability,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -81,7 +82,7 @@ import {bindRequirementsPanel,runRequirementsRequest,type RequirementsCatalogVie
 import type {RequirementsRequest} from '../src/requirements.ts';
 import {patchRoute} from '../src/retune-route.ts';
 import {appliedCheckRefusal,type CheckSummary} from '../src/applied-context.ts';
-import {dropNoticeForPanel,recordBlock,type RebuildPanelKind} from '../src/applied-blocks.ts';
+import {dropNoticeForPanel,type RebuildPanelKind} from '../src/applied-blocks.ts';
 import {bindPhysicsPanel,type PhysicsPanel} from './physics-panel.ts';
 import {bindIdlePanel,type BoneSetup,type IdlePanel} from './idle-panel.ts';
 import {composeAdjust,PhysicsPreview} from './preview.ts';
@@ -1534,7 +1535,7 @@ function bind(): void {
    token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
   viewDisposers.push(()=>meshPanel?.dispose());
   // #173: the density strip beside the Mesh panel's density field.
-  densityStrip=bindDensityStrip({part:()=>meshPanel?.part()??null,entry:()=>meshPanel?.entry()??null,build:buildDensityStrip,load:async i=>{await loadStripRow(i);},back:stripBack,close:closeDensityStrip});
+  densityStrip=bindDensityStrip({part:()=>meshPanel?.part()??null,entry:()=>meshPanel?.entry()??null,build:buildDensityStrip,load:async i=>{await stageLoadStripRow(rigStageJobs, i);},back:()=>stageStripBack(rigStageJobs),close:closeDensityStrip});
   idlePanel=bindIdlePanel({apply:async(ops,keys)=>{await applyIdle(ops,keys);},reset:resetIdleBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
    preview:fn=>{idleAdjust=fn;setAdjust();},
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name);out.set(name,project(b.x,b.y));}catch{/* a bone this model lacks has no handle */}}return out;}});
@@ -1650,7 +1651,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';sourceFiles.parentElement!.hidden=!data.manifest.authoring.length;
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(rigDifference){leaveRigDifference();renderLayout();}const part=parts?.value();if(!stageCorrectionRebinding&&(previous?.side!==part?.side||previous?.slot!==part?.slot||previous?.mode!==part?.mode))stageDraftRequestToken++;if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);if(host)chestEditor?.sync();else if(part&&!stageCorrectionRebinding)void openStageCorrection({part:part.slot,instrument:'selection'});requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();}); animationPanel=new AnimationInspectionPanel({hideGateBanner:!!host?.direction,readOnlyReason:sealedRecordRigReadOnly,hasTurnDial:()=>inspectionSourceState==='ready'?!!turnPad:undefined,host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){if(activeScene())seek(time);else{player.seek(time);drawRig(()=>player!.draw());}}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(rigDifference){leaveRigDifference();renderLayout();}const part=parts?.value();if(!stageCorrectionRebinding&&(previous?.side!==part?.side||previous?.slot!==part?.slot||previous?.mode!==part?.mode))stageDraftRequestToken++;if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);if(host)chestEditor?.sync();else if(part&&!stageCorrectionRebinding)void openStageCorrection({part:part.slot,instrument:'selection'});requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();}); animationPanel=new AnimationInspectionPanel({hideGateBanner:!!host?.direction,readOnlyReason:sealedRecordRigReadOnly,hasTurnDial:()=>inspectionSourceState==='ready'?!!turnPad:undefined,host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){if(activeScene())seek(time);else{player.seek(time);drawRig(()=>player!.draw());}}},apply:ops=>stageApplyAnimation(rigStageJobs, ops),reset:()=>stageResetAnimation(rigStageJobs),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     if(!host&&!data.capabilities.preRig)renderPendingSubjects([]);
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
@@ -2835,67 +2836,11 @@ async function exportMesh(doc:MeshEditDocument):Promise<void>{
   complete:count=>message(`Downloaded mesh-edit.json (${count} ops) and mesh-edit.binding.json. The delta is review evidence, not an approval; the package is unchanged and the producer retriangulates.`),
  });
 }
-/**
- * Retarget Apply (#114): `{retarget: {sequence, map, flags, configHash}}` to `/api/rebuild`, where the server runs the
- * installed `rig-pose clean` and `rig-pose retarget` and the shared tail into scratch. On a built job the scratch build
- * replaces the drawn rig in place, the new animation is chosen and the sequence is shown as the reference beside it; the
- * draft keeps the record (map by content, flags and their argv), the producer's line, the motion summary and the lines.
- * A refusal leaves the stage as it was and shows every FAIL line verbatim.
- */
 async function applyRetarget(body:{sequence:string;map:PoseMap;flags:RetargetFlags}):Promise<RetargetJobView|RebuildRefusal|null> {
- if(rebuildBusy){retargetPanel?.status('REBUILD_BUSY: an Apply is still running',true);return null;}
- if(readOnly){retargetPanel?.status(readOnly,true);return null;}
- const status=rebuildStatus??await loadRebuildStatus();
- if(!status?.inputs){retargetPanel?.status(status?.reason??'REBUILD_STATUS_UNAVAILABLE',true);return null;}
- const request:RetargetRequestBody={retarget:{...body,configHash:status.inputs.configHash}},world=stageWorld();
- rebuildBusy=true;rebuildState();retargetPanel?.busy(true);retargetPanel?.result(null);
- retargetPanel?.status(`Retargeting ${body.sequence} as "${body.flags.animation}" with ${status.retarget?.producer?.package??'@rig-c/pose'} ${status.retarget?.producer?.version??''}: ${body.flags.clean?'clean, ':''}retarget, compile…`,false);
- try{
-  const {result,outcome,next}=await runRebuildApply(request,{api,path:'/api/rebuild',formatOutcome:retargetOutcomeLine,onLine:text=>retargetPanel?.line(text)});
-  retargetPanel?.result(result);retargetPanel?.status(outcome.text,outcome.error);
-  if(!next){message(outcome.text,true);return result;}
-  await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
-  // The new animation's own clock (the run's report frameTimes), bound to this build: the transport counter and the rig pane read it.
-  stageClock=retargetStage(next.job,next.hash)?.clock??null;
-  appliedOnStage=retargetAppliedRecord(next.job);stageCheck=null;stageChanged({kind:'apply',via:'retarget'});
-  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
-  // The new animation plays against the reference: choose it, and show the sequence it was made from beside it.
-  const name=next.job.request.record.flags.animation;if(assets?.animations.some(clip=>clip.name===name))chooseAnimation(name);
-  const ref=next.job.request.record.sequence.reference;if(data.manifest.references.some(r=>r.id===ref)&&select('reference-select').value!==ref){select('reference-select').value=ref;await showReference(ref);}
-  message(outcome.text,outcome.error);
-  return result;
- }catch(error){const text=`REBUILD_FAILED: ${errorText(error)}`;retargetPanel?.status(text,true);message(text,true);return {status:'refused',error:text,producerLine:null};}
- finally{rebuildBusy=false;rebuildState();retargetPanel?.busy(false);}
+ return stageApplyRetarget(rigStageJobs,body);
 }
-/**
- * Edit Mesh's Apply · Rebuild (#135): `{part, delta, configHash}` to `/api/rebuild`, where the server runs
- * `rig-parts remesh --delta` and the shared tail; on a built job the revision replaces the drawn rig in place under the
- * same world, and the draft keeps the applied delta (by content and hash), the producer's line, op "remesh", the
- * per-file diff and the part's counts. A refusal leaves the stage as it was and returns the producer's line verbatim.
- */
 async function applyMeshDelta(doc:MeshEditDocument,line:(text:string)=>void):Promise<{built:boolean;text:string;error:boolean}> {
- if(rebuildBusy)return {built:false,text:'REBUILD_BUSY: an Apply is still running',error:true};
- if(readOnly)return {built:false,text:readOnly,error:true};
- if(!inspectedModel&&appliedOnStage)return {built:false,text:MESH_DELTA_APPLIED_SOURCE,error:true};
- const status=rebuildStatus??await loadRebuildStatus();
- if(!inspectedModel&&appliedOnStage)return {built:false,text:MESH_DELTA_APPLIED_SOURCE,error:true};
- if(!status?.inputs)return {built:false,text:status?.reason??'REBUILD_STATUS_UNAVAILABLE',error:true};
- const body:DeltaRequestBody={part:doc.slot,delta:doc,configHash:status.inputs.configHash},world=stageWorld();
- const priorBuildId=appliedOnStage?.buildId??'inspected',priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
- rebuildBusy=true;rebuildState();
- try{
-  const {outcome,next}=await runRebuildApply(body,{api,path:'/api/rebuild',formatOutcome:deltaOutcomeLine,onLine:text=>line(text)});
-  if(!next){message(outcome.text,true);return {built:false,text:outcome.text,error:true};}
-  if(inspectedModel)await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
-  else{const target=draftScratchTarget(next.id,next.url,next.hash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart},world});}
-  appliedOnStage=deltaAppliedRecord(next.job);stageCheck=null;stageChanged({kind:'apply',via:'delta'});
-  if(!inspectedModel)refreshStageParts?.();
-  meshEditor?.setStatusNote(outcome.text,false);
-  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
-  message(outcome.text);
-  return {built:true,text:outcome.text,error:false};
- }catch(error){const text=`REBUILD_FAILED: ${errorText(error)}`;message(text,true);return {built:false,text,error:true};}
- finally{rebuildBusy=false;rebuildState();}
+ return stageApplyMeshDelta(rigStageJobs,doc,line);
 }
 let chestFormPart:string|null=null;
 const chestPartDrafts=new Map<string,Record<string,{value:string;checked?:boolean}>>();
@@ -2976,16 +2921,98 @@ function renderDropNotices():void {
  }
 }
 let readoutStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation|null=null;
-function readAppliedStage(){
- return {
+const rigStageJobState={
+  get inspectedModel(){return inspectedModel;},
+  get stageSource(){return stageSource;},
+  get stageModelHash(){return stageModelHash;},
+  get rebuildStatus(){return rebuildStatus;},
   get appliedOnStage(){return appliedOnStage;},
+  set appliedOnStage(next){appliedOnStage=next;},
+  get stageCheck(){return stageCheck;},
+  set stageCheck(next){stageCheck=next;},
   get appliedHistory(){return appliedHistory;},
+  set appliedHistory(next){appliedHistory=next;},
   get readoutStage(){return readoutStage;},
   set readoutStage(next){readoutStage=next;},
   get stripPending(){return stripPending;},
   set stripPending(next){stripPending=next;},
- };
-}
+  get stripView(){return stripView;},
+};
+const rigStageDraft:NonNullable<StageJobScreen['draft']>={
+ canManage:canManageApplied,
+ deltaRefusal:()=>!inspectedModel&&appliedOnStage?MESH_DELTA_APPLIED_SOURCE:null,
+ begin(kind){
+  const transition={kind,priorBuildId:appliedOnStage?.buildId??'inspected',
+   priorPart:stageCorrectionPart??stageDraftSelection?.part??null,token:++stageDraftRequestToken};
+  return async(next,world)=>{
+   const target=next?draftScratchTarget(next.id,next.url,next.hash):draftInspectedTarget();
+   await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition,world});
+  };
+ },
+ refresh:refreshRigDraft,
+ regionStatus:loaded=>loaded?chestStatusForPart(loaded,stageCorrectionPart??chestFormPart):loaded,
+ regionRefusal:()=>stageCorrectionPart&&(parts?.value()?.slot??stageDraftSelection?.slot??null)!==stageCorrectionPart?'STAGE_DRAFT_MISMATCH':null,
+};
+function refreshRigDraft():void {if(!inspectedModel)refreshStageParts?.();}
+const rigChestOutput={
+ progress:(write:()=>void)=>write(),
+ notice:(text:string,error:boolean,lines?:readonly string[])=>chestEditor?.notify(text,error,lines),
+ message:(text:string,error?:boolean)=>message(text,error),
+};
+const rigStageJobs:StageJobScreen={
+ state:rigStageJobState,api:(path,init)=>api(path,init),path:'/api/rebuild',
+ draft:rigStageDraft,readOnly:()=>readOnly,loadStatus:loadRebuildStatus,selected:()=>true,
+ busy:()=>rebuildBusy,setBusy:setRigRebuildBusy,setScopedBusy:setRigRebuildBusy,
+ world:()=>stageWorld(),swap:({url,prefix,hash},world)=>swapRig(url,prefix,hash,world),
+ target:(next,stripId)=>({url:new URL(access.route(next.url),location.href).href,
+  prefix:access.route(stripId?`/density-strip/${stripId}/${next.id}/`:`/rebuild/${next.id}/`),hash:next.hash}),
+ changed:stageChanged,message:(text,error)=>message(text,error),
+ writeDraft:()=>writeRebuildDraft(el<HTMLTextAreaElement>('rebuild-applied'),appliedOnStage),
+ chest:()=>chestEditor,chestField:(name)=>chestField(name),mesh:()=>meshPanel,
+ meshNote:text=>meshEditor?.setStatusNote(text,false),animation:()=>animationPanel,retarget:()=>retargetPanel,
+ schedule:()=>useWorld()?worldFor(checkAnimation()):null,
+ chestOutput:()=>rigChestOutput,
+ patchStart:patch=>`Applying patch (${patch.op.cmd}, ${patch.ops.length} op(s))…`,
+ resetNote:'Reset: the inspected build is on the stage. The draft keeps the last applied state.',
+ resetMessage:'Reset to the inspected build.',
+ undoStatus:(text,error)=>appliedStatus(text,error),
+ undoText:result=>{
+  const inspectedHash=inspectedModel?.sha256??data.reviewedSource.rig?.sha256??data.sourceHash;
+  return `Undid ${result.undone.slice(0,12)}… · the stage is ${result.status==='inspected'?`the inspected build (model ${inspectedHash.slice(0,12)}…)`:`record ${result.history.depth} (model ${stageModelHash?.slice(0,12)}…)`} · ${result.history.depth} applied record(s) left`;
+ },
+ restoreUndoRetarget:retarget=>{
+  stageClock=retarget?.clock??null;
+  if(retarget&&assets?.animations.some(clip=>clip.name===retarget.animation))chooseAnimation(retarget.animation);
+ },
+ finishUndo:job=>renderAppliedBlocks(job),
+ undoReadouts:(cuts,cloth)=>{cutsPanel?.shown(cuts);clothPanel?.shown(cloth);},
+ redrawUndo:()=>redrawOverlay(true),
+ setRetargetClock:(job,hash)=>{stageClock=retargetStage(job,hash)?.clock??null;},
+ selectRetargetPlayback:job=>{
+  const name=job.request.record.flags.animation;
+  if(assets?.animations.some(clip=>clip.name===name))chooseAnimation(name);
+  const ref=job.request.record.sequence.reference;
+  if(data.manifest.references.some(r=>r.id===ref)&&select('reference-select').value!==ref){
+   select('reference-select').value=ref;return showReference(ref);
+  }
+ },
+ redrawStripBack:()=>redrawOverlay(true),renderStrip:()=>renderStrip(),reportStrip:(text,error)=>densityLine(text,error),
+ animationApplyText:(path,count)=>`Applying ${count} animation op(s) on ${path} (rig-parts rig → rigc build → rig-parts check)…`,
+ animationResetText:'Reset: the inspected build is on the stage; no pending animation ops.',
+ resetForAnimation:()=>resetRebuild(stageWorld()),
+ stripLoad:{
+  densityBusy:()=>densityBusy,
+  draw:()=>{
+   if(!layers.mesh){layers.mesh=true;input('layer-mesh').checked=true;}
+   if(player)drawRig(()=>player!.draw());redrawOverlay(true);
+  },
+  triangles:part=>lastOverlay?.meshTriangles[part]??null,
+  pendingCount:(view,row)=>`${view.field} ${row.value} · ${row.counts?`v ${row.counts.vertices} · t ${row.counts.triangles}`:'no counts'} (remesh.json) — not applied`,
+  pendingStatus:(view,row,index,agreement)=>`Pending on the stage: ${view.part} ${view.field} ${row.value} (strip row ${index+1}) — not applied. The Mesh panel's Apply applies it; Back returns the stage. ${agreement}`,
+ },
+};
+function setRigRebuildBusy(value:boolean):void {rebuildBusy=value;rebuildState();}
+function readAppliedStage(){return rigStageJobState;}
 function renderAppliedBlocks(restoredJob:AnyJobView|null=null):void {
  reconcileAppliedBlocks(readAppliedStage(),{
   chestEditor,meshEditor,meshPanel,bonesPanel,rigFieldsPanel,cutsPanel,clothPanel,physicsPanel,idlePanel,retargetPanel,animationPanel,
@@ -2995,113 +3022,14 @@ function renderApplied():void {
  renderAppliedPanel(renderAppliedBlocks,readAppliedStage,()=>rebuildBusy||!!readOnly,el,document);
 }
 function appliedStatus(text:string,error=false):void {setAppliedStatus(el('applied-status'),text,error);}
-/**
- * #166: Undo last Apply — the last record leaves the server's stack and the stage returns to its predecessor's build
- * (kept on disk, or re-run from its record when evicted) or to the inspected build, under the same world. The feedback
- * context then carries the post-undo record (or null), never the reverted one. A refusal leaves the stage as it was.
- */
 async function undoApply():Promise<UndoView|null> {
- const from=appliedOnStage?.buildId;
- if(rebuildBusy||readOnly||!from||!canManageApplied())return null;
- const world=stageWorld(),priorBuildId=from,priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
- rebuildBusy=true;rebuildState();appliedStatus('Undoing the last Apply…');
- try{
-  const result=await runRebuildUndo(from,{api,path:'/api/rebuild',onLine:appliedStatus});
-  if(result.status==='refused'){appliedStatus(result.error,true);message(result.error,true);return result;}
-  if(result.status==='inspected'){
-   if(inspectedModel)await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);
-   else{const target=draftInspectedTarget();await prepareStageDraftBuild('inspected',target.sha256,{target,transition:{kind:'undo',token,priorBuildId,priorPart},world});}
-   appliedOnStage=null;stageCheck=null;
-  }
-  else{
-   const job=result.job;if(!job.build)throw new Error('the restored job carries no build');
-   if(inspectedModel)await swapRig(new URL(access.route(job.build.modelUrl),location.href).href,access.route(`/rebuild/${job.id}/`),job.build.modelHash,world);
-   else{const target=draftScratchTarget(job.id,job.build.modelUrl,job.build.modelHash);await prepareStageDraftBuild(job.id,target.sha256,{target,transition:{kind:'undo',token,priorBuildId,priorPart},world});}
-   appliedOnStage=recordFor(job);stageCheck=(job as PatchJobView).kind==='patch'?{lines:[...job.lines],check:(job as PatchJobView).check}:null;
-   // #186: a restored retarget build gets what its Apply set — its own clock, then its animation selected.
-   const retarget=retargetStage(job,job.build.modelHash);stageClock=retarget?.clock??null;
-   if(retarget&&assets?.animations.some(clip=>clip.name===retarget.animation))chooseAnimation(retarget.animation);
-  }
-  if(!inspectedModel)refreshStageParts?.();
-  stageChanged({kind:'undo'});
-  // The panels mark the ops the stage's build applied; the pending edits stay as they are.
-  renderAppliedBlocks(result.status==='built'?result.job:null);
-  // #172: the Cuts and Cloth readouts show the restored build's job when it is theirs, else nothing (never the reverted one).
-  const restored=result.status==='built'&&isPatchJob(result.job)?result.job:null,block=recordBlock(appliedOnStage);
-  cutsPanel?.shown(block==='cuts'?restored:null);clothPanel?.shown(block==='cloth'?restored:null);
-  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=appliedOnStage?JSON.stringify(appliedOnStage):'';draft.dispatchEvent(new Event('input',{bubbles:true}));
-  appliedHistory=result.history;
-  const inspectedHash=inspectedModel?.sha256??data.reviewedSource.rig?.sha256??data.sourceHash;
-  const text=`Undid ${result.undone.slice(0,12)}… · the stage is ${result.status==='inspected'?`the inspected build (model ${inspectedHash.slice(0,12)}…)`:`record ${result.history.depth} (model ${stageModelHash?.slice(0,12)}…)`} · ${result.history.depth} applied record(s) left`;
-  appliedStatus(text);message(text);redrawOverlay(true);
-  return result;
- }catch(error){const text=`UNDO_FAILED: ${errorText(error)}`;appliedStatus(text,true);message(text,true);return {status:'refused',error:text,producerLine:null};}
- finally{rebuildBusy=false;rebuildState();}
+ return stageUndoApply(rigStageJobs);
 }
-/** Apply · Rebuild: the rows go to the installed producer; on success its scratch build replaces the drawn rig in place. */
 async function applyRebuild():Promise<void> {
- if(rebuildBusy)return;
- if(readOnly){chestEditor?.notify(readOnly,true);return;}
- const loadedStatus=rebuildStatus??await loadRebuildStatus();
- const status=loadedStatus?chestStatusForPart(loadedStatus,stageCorrectionPart??chestFormPart):loadedStatus;
- const selectedSlot=parts?.value()?.slot??stageDraftSelection?.slot??null;
- if(stageCorrectionPart&&selectedSlot!==stageCorrectionPart){chestEditor?.notify('STAGE_DRAFT_MISMATCH',true);return;}
- if(!status||!status.available||!status.inputs){const noContour=status?noContourReason(status):null,reason=noContour?.text??status?.reason??'REBUILD_STATUS_UNAVAILABLE';chestEditor?.notify(reason,!noContour,noContour?.lines??[reason]);message(reason,!noContour);return;}
- let part:string,body:RebuildRequestBody;const lines:string[]=[];
- if(chestEditor?.mode()==='landmarks'){
-  // #105: refused here, before anything is sent, when a point is missing or the circles would not clear.
-  const request=landmarksRequest(status,chestEditor.landmarks());if('error' in request){chestEditor.notify(request.error,true,[request.error]);message(request.error,true);return;}
-  ({part,body}=request);
- }else{
-  const designated=designatedRegions(chestField,chestSeed(status));if('error' in designated){chestEditor?.notify(designated.error,true);return;}
-  const picked=pickPart(status,designated.regions);if(!picked){chestEditor?.notify(`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the designated bones name none of them alone`,true);return;}
-  part=picked;body={part,regions:designated.regions,configHash:status.inputs.configHash};
- }
- const priorBuildId=appliedOnStage?.buildId??'inspected',priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
- rebuildBusy=true;rebuildState();chestEditor?.notify(`Rebuilding ${part} with ${status.producer?.package} ${status.producer?.version}…`,false,[]);
- try{
-  const {outcome,next}=await runRebuildApply(body,{api,path:'/api/rebuild',formatOutcome:outcomeLine,
-   onLine:line=>{lines.push(line);chestEditor?.notify(line.trim()||'…',false,lines.slice(-6));}});
-  // A refusal stays readable in full: the bar's status line is one line, so the log ends with the producer's line verbatim.
-  if(!next){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return;}
-  if(inspectedModel)await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash);
-  else{const target=draftScratchTarget(next.id,next.url,next.hash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart}});}
-  appliedOnStage=appliedRecord(next.job);stageCheck=null;stageChanged({kind:'apply',via:'regions'});
-  if(!inspectedModel)refreshStageParts?.();
-  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
-  // The log closes on success so nothing floats over the rebuilt stage; a refusal keeps it open.
-  chestEditor?.notify(outcome.text,false,[]);message(outcome.text);
- }catch(error){chestEditor?.notify(`REBUILD_FAILED: ${errorText(error)}`,true);message(`REBUILD_FAILED: ${errorText(error)}`,true);}
- finally{rebuildBusy=false;rebuildState();}
+ return stageApplyRebuild(rigStageJobs);
 }
-/**
- * Apply a config patch (#102): the same stream, in-place reload and Reset as a region Apply. The patch goes to the
- * installed producer through `POST /api/rebuild {patch}`; on a built job the scratch build replaces the drawn rig with
- * the same camera, animation, time, set and environment, and the draft keeps the patch, its hash, the producer's line
- * and check's summary. A refusal leaves the stage as it was and shows the producer's line verbatim. No editing UI calls
- * this yet (#103+); `window.rigReviewEditor.applyPatch` is its entry point.
- */
 async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<PatchJobView|RebuildRefusal> {
- if(rebuildBusy)return {status:'refused',error:'REBUILD_BUSY: an Apply is still running',producerLine:null};
- if(readOnly){chestEditor?.notify(readOnly,true);return {status:'refused',error:readOnly,producerLine:null};}
- const lines:string[]=[],priorBuildId=appliedOnStage?.buildId??'inspected',priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
- rebuildBusy=true;rebuildState();chestEditor?.notify(`Applying patch (${patch.op.cmd}, ${patch.ops.length} op(s))…`,false,[]);
- try{
-  // #112: with "Use for readings" on, Apply's check reads the exported schedule of the clip check renders (its idle).
-  const scheduled=useWorld()?worldFor(checkAnimation()):null;
-  if(scheduled&&'error' in scheduled){chestEditor?.notify(scheduled.error,true);message(scheduled.error,true);return {status:'refused',error:scheduled.error,producerLine:scheduled.error};}
-  const {result,outcome,next}=await runRebuildApply({patch,...(scheduled?{environment:scheduled.schedule}:{})},{api,path:'/api/rebuild',formatOutcome:patchOutcomeLine,
-   onLine:line=>{lines.push(line);chestEditor?.notify(line.trim()||'…',false,lines.slice(-6));}});
-  if(!next){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return result;}
-  if(inspectedModel)await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
-  else{const target=draftScratchTarget(next.id,next.url,next.hash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart},world});}
-  appliedOnStage=patchAppliedRecord(next.job);stageCheck={lines:[...next.job.lines],check:next.job.check};stageChanged({kind:'apply',via:'patch'});
-  if(!inspectedModel)refreshStageParts?.();
-  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
-  chestEditor?.notify(outcome.text,outcome.error,[]);message(outcome.text,outcome.error);
-  return result;
- }catch(error){const text=`REBUILD_FAILED: ${errorText(error)}`;chestEditor?.notify(text,true);message(text,true);return {status:'refused',error:text,producerLine:null};}
- finally{rebuildBusy=false;rebuildState();}
+ return stageApplyPatch(rigStageJobs,patch,world);
 }
 /** The client's edit entry point for automation and the edit cards to come: apply a patch, return to the inspected build, read the stage. */
 (window as unknown as {rigReviewEditor:unknown}).rigReviewEditor=publicEditor={
@@ -3155,7 +3083,7 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   precheck:()=>meshPanel?.precheck()??[],apply:()=>{const part=meshPanel?.part(),entry=meshPanel?.entry();return part&&entry?applyMesh(part,entry):Promise.resolve(null);},reset:()=>resetMeshBuild(),folds:()=>meshFolds(),
   overlayTriangles:(slot:string)=>lastOverlay?.meshTriangles[slot]??null,status:()=>el('mesh-status').textContent,counts:()=>[...document.querySelectorAll('#mesh-counts code')].map(c=>c.textContent),readout:()=>[...document.querySelectorAll('#mesh-readout code')].map(c=>c.textContent),pending:()=>input('mesh-pending').value,lastPatch:()=>lastMeshPatch?JSON.parse(JSON.stringify(lastMeshPatch)):null,
   /** #173: the density strip — build N values, the view, load a row as pending, back, close. */
-  strip:{build:(values:number[])=>buildDensityStrip(values),view:()=>stripView?JSON.parse(JSON.stringify(stripView)):null,load:(i:number)=>loadStripRow(i),back:()=>stripBack(),close:()=>closeDensityStrip(),pending:()=>stripPending?{index:stripPending.index,candidate:stripPending.candidate}:null,
+  strip:{build:(values:number[])=>buildDensityStrip(values),view:()=>stripView?JSON.parse(JSON.stringify(stripView)):null,load:(i:number)=>stageLoadStripRow(rigStageJobs, i),back:()=>stageStripBack(rigStageJobs),close:()=>closeDensityStrip(),pending:()=>stripPending?{index:stripPending.index,candidate:stripPending.candidate}:null,
    applied:()=>appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,stageHash:()=>stageModelHash}},
  /** #115: the Cuts block — its handles as client pixels (for a real-pointer drag), its ops, Apply and Reset. */
  cuts:{source:()=>cutsPanel?.source()??null,ops:()=>cutsPanel?.ops()??[],handles:()=>cutsPanel?.handles()??[],active:()=>cutsPanel?.active()??false,setActive:(on:boolean)=>cutsPanel?.setActive(on),
@@ -3208,8 +3136,8 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   clearPending:()=>animationPanel?.clearPending(),
   zoom:()=>animationPanel?.zoomLevel()??1,
   setZoom:(z:number)=>animationPanel?.setZoom(z),
-  apply:()=>applyAnimation(animationPanel?.ops()??[]),
-  reset:()=>resetAnimationBuild(),
+  apply:()=>stageApplyAnimation(rigStageJobs,animationPanel?.ops()??[]),
+  reset:()=>stageResetAnimation(rigStageJobs),
   status:()=>document.querySelector('[data-animation-editor-status]')?.textContent??'',
  },
  stage:()=>({modelHash:stageModelHash,inspectedHash:inspectedModel?.sha256??null,applied:appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,animation,time:player?.time??time,playing,busy:rebuildBusy}),
@@ -3336,70 +3264,6 @@ const applyIdle=panelRebuilds.apply.bind(null,'idle');
 /** Idle Reset: the preview cleared, no pending op, and the inspected build back under the same world. */
 const resetIdleBuild=panelRebuilds.reset.bind(null,'idle');
 /**
- * Keyed animation Apply (#235): sends the entire cumulative pending op list with the handoff's `configHash` and
- * `animationsFromHash` to `POST /api/rebuild {animation}`. A second Apply sends the first edits too. On a built job the
- * scratch build reloads in place under the same world and the pending preview is cleared; a refusal leaves the stage and
- * the pending op list as they were and shows the producer/compiler refusal verbatim.
- */
-async function applyAnimation(ops:readonly AnimationSourceOp[]):Promise<AnimationJobView|RebuildRefusal|null> {
- if(rebuildBusy){animationPanel?.setEditorStatus('REBUILD_BUSY: an Apply is still running',true);return null;}
- if(readOnly){animationPanel?.setEditorStatus(readOnly,true);return null;}
- if(!ops.length){animationPanel?.setEditorStatus('ANIMATION_OPS_EMPTY: no pending animation ops to apply',true);return null;}
- const status=rebuildStatus??await loadRebuildStatus();
- if(!status?.inputs){const r=status?.reason??'REBUILD_STATUS_UNAVAILABLE';animationPanel?.setEditorStatus(r,true);return null;}
- const animSource=status.animations;
- if(!animSource?.available||!animSource.sha256){
-  const r=animSource?.reason??'ANIMATION_SOURCE_MISSING: config.json does not declare an "animations_from" motion spec file.';
-  animationPanel?.setEditorStatus(r,true);return null;
- }
- const scheduled=useWorld()?worldFor(checkAnimation()):null;
- if(scheduled&&'error' in scheduled){animationPanel?.setEditorStatus(scheduled.error,true);message(scheduled.error,true);return {status:'refused',error:scheduled.error,producerLine:scheduled.error};}
- const keying=status.idle?.keying,keys=keying&&'keys' in keying?keying.keys:null;
- const request:AnimationRequestBody={
-  animation:{
-   configHash:status.inputs.configHash,
-   animationsFromHash:animSource.sha256,
-   ops:[...ops],
-   ...(keys?{args:['--idle-keys',keys]}:{}),
-  },
-  ...(scheduled?{environment:scheduled.schedule}:{}),
- };
- const world=stageWorld();
- rebuildBusy=true;rebuildState();animationPanel?.busy(true);
- animationPanel?.setEditorStatus(`Applying ${ops.length} animation op(s) on ${animSource.path??'animations_from'} (rig-parts rig → rigc build → rig-parts check)…`,false);
- try{
-  const {result,outcome,next}=await runRebuildApply(request,{
-   api,path:'/api/rebuild',formatOutcome:animationOutcomeLine,
-   onLine:line=>animationPanel?.setEditorStatus(line.trim()||'…',false),
-  });
-  if(!next){
-   animationPanel?.setEditorStatus(outcome.text,true);
-   message(outcome.text,true);
-   return result;
-  }
-  animationPanel?.markApplied(ops,outcome.text,outcome.error);
-  await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
-  appliedOnStage=animationAppliedRecord(next.job);stageCheck={lines:[...next.job.lines],check:next.job.check};stageChanged({kind:'apply',via:'animation'});
-  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
-  animationPanel?.setEditorStatus(outcome.text,outcome.error);
-  message(outcome.text,outcome.error);
-  return result;
- }catch(error){
-  const text=`REBUILD_FAILED: ${errorText(error)}`;
-  animationPanel?.setEditorStatus(text,true);
-  message(text,true);
-  return {status:'refused',error:text,producerLine:null};
- }finally{
-  rebuildBusy=false;rebuildState();animationPanel?.busy(false);
- }
-}
-/** Animation Reset: clears pending ops and preview, and restores the inspected build on stage. */
-async function resetAnimationBuild():Promise<void> {
- animationPanel?.resetEdits();
- if(appliedOnStage){animationPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{animationPanel?.busy(false);animationPanel?.resetEdits();}}
- animationPanel?.setEditorStatus('Reset: the inspected build is on the stage; no pending animation ops.',false);
-}
-/**
  * Inspection only (#104 bar 1): pause, reopen the track at 0 and step it `n` times by `dt`, reading `bone`'s locals on
  * every pose after the timelines and the preview's adjust (when one is set) — what the pose holds before constraints.
  */
@@ -3414,16 +3278,7 @@ function sampleLocals(bone:string,dt:number,n:number):{t:number;rotation:number;
  return [...rows.values()].sort((a,b)=>a.t-b.t);
 }
 async function resetRebuild(world:StageWorld|null=null):Promise<void> {
- if(rebuildBusy||(!appliedOnStage&&!stripPending)||!canManageApplied())return;
- const priorBuildId=appliedOnStage?.buildId??'inspected',priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
- rebuildBusy=true;rebuildState();
- try{
-  if(inspectedModel)await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);
-  else{const target=draftInspectedTarget();await prepareStageDraftBuild('inspected',target.sha256,{target,transition:{kind:'reset',token,priorBuildId,priorPart},world});}
-  appliedOnStage=null;stageCheck=null;stageChanged({kind:'reset'});if(!inspectedModel)refreshStageParts?.();animationPanel?.reconcileStageApplied(null);chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');
- }
- catch(error){chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`,true);}
- finally{rebuildBusy=false;rebuildState();}
+ return stageResetRebuild(rigStageJobs,world);
 }
 /**
  * Replace the drawn rig in place: the new model loads first (a failure leaves the stage as it was), then the player is
@@ -3525,48 +3380,11 @@ const densityLine=(text:string,error=false)=>{densityStrip?.status(text,error);i
 const renderStrip=()=>densityStrip?.show(stripView,stripPending&&stripView?.id===stripPending.id?stripPending.index:null,densityBusy||rebuildBusy||!!readOnly);
 const {refresh:refreshDensityStrip,build:buildDensityStrip,close:closeDensityStrip}=bindDensityStripJobs({
  api,path:'/api/density-strip',ui:directJobUiSink,view:()=>stripView,save:next=>{stripView=next;},render:renderStrip,
- busy:()=>densityBusy,setBusy:value=>{densityBusy=value;},pendingId:()=>stripPending?.id,back:stripBack,panel:()=>densityStrip,
+ busy:()=>densityBusy,setBusy:value=>{densityBusy=value;},pendingId:()=>stripPending?.id,back:()=>stageStripBack(rigStageJobs),panel:()=>densityStrip,
  footer:text=>message(text,true),readOnly:()=>readOnly,status:()=>rebuildStatus,loadStatus:loadRebuildStatus,mesh:()=>meshPanel,
  initial:(part,values)=>`Building a strip of ${values.length} on ${part}: ${values.join(', ')} — remesh, compile and remesh's own check per value…`,
  summary:(view,passing)=>`Strip of ${view.rows.length} on ${view.part} settled in ${((view.wallMs??0)/1000).toFixed(1)} s (at most ${view.concurrency} at once): ${passing} passing, ${view.rows.length-passing} refused or failing. Labels only — nothing is applied; Load puts a row on the stage as pending.`,
 });
-async function loadStripRow(index:number):Promise<{line:string;ok:boolean}|{error:string}>{
- const view=stripView,row=view?.rows[index];
- if(!view||!row)return {error:'DENSITY_STRIP_NOT_FOUND'};
- if(!row.modelUrl||!row.modelHash){const t=`DENSITY_STRIP_ROW_NOT_LOADABLE: ${row.value} — ${row.applied?'applied already':row.verdict}`;densityLine(t,true);return {error:t};}
- if(rebuildBusy||densityBusy)return {error:'REBUILD_BUSY'};
- const back=stripPending?.back??{url:stageSource?.url??inspectedModel!.url,prefix:stageSource?.prefix??inspectedModel!.prefix,hash:stageSource?.hash??inspectedModel!.sha256,applied:appliedOnStage,check:stageCheck};
- rebuildBusy=true;rebuildState();
- try{
-  await swapRig(new URL(access.route(row.modelUrl),location.href).href,access.route(`/density-strip/${view.id}/${row.id}/`),row.modelHash,stageWorld());
-  stripPending={index,id:view.id,candidate:row.id,back};
-  // Pending, not applied: no record, no undo entry; the feedback context names no applied state while it is on the stage.
-  appliedOnStage=null;stageCheck=null;
-  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value='';draft.dispatchEvent(new Event('input',{bubbles:true}));
-  meshPanel?.setEntry(row.entry as MeshEntry);
-  if(!layers.mesh){layers.mesh=true;input('layer-mesh').checked=true;}
-  if(player)drawRig(()=>player!.draw());redrawOverlay(true);
-  const c=row.counts?{vertices:row.counts.vertices,triangles:row.counts.triangles,hull:0}:null;
-  const agree=triangleAgreement(c?{part:view.part,before:c,after:c}:null,row.modelTriangles,lastOverlay?.meshTriangles[view.part]??null);
-  meshPanel?.counts([{label:'PENDING',text:`${view.field} ${row.value} · ${row.counts?`v ${row.counts.vertices} · t ${row.counts.triangles}`:'no counts'} (remesh.json) — not applied`},{label:agree.ok?'AGREE':'DIFFER',text:agree.line,error:!agree.ok}]);
-  const line=`Pending on the stage: ${view.part} ${view.field} ${row.value} (strip row ${index+1}) — not applied. The Mesh panel's Apply applies it; Back returns the stage. ${agree.line}`;
-  densityLine(line,!agree.ok);
-  return {line:agree.line,ok:agree.ok};
- }catch(error){const t=`DENSITY_STRIP_LOAD_FAILED: ${errorText(error)}`;densityLine(t,true);return {error:t};}
- finally{rebuildBusy=false;rebuildState();renderStrip();}
-}
-async function stripBack():Promise<void>{
- const pending=stripPending;if(!pending||rebuildBusy)return;
- rebuildBusy=true;rebuildState();
- try{
-  await swapRig(pending.back.url,pending.back.prefix,pending.back.hash,stageWorld());
-  appliedOnStage=pending.back.applied;stageCheck=pending.back.check;stripPending=null;
-  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=appliedOnStage?JSON.stringify(appliedOnStage):'';draft.dispatchEvent(new Event('input',{bubbles:true}));
-  meshPanel?.counts([]);redrawOverlay(true);
-  densityLine(`Back: the stage shows ${appliedOnStage?`the last applied record (model ${pending.back.hash.slice(0,12)}…)`:`the inspected build (model ${pending.back.hash.slice(0,12)}…)`}.`);
- }catch(error){densityLine(`DENSITY_STRIP_BACK_FAILED: ${errorText(error)}`,true);}
- finally{rebuildBusy=false;rebuildState();renderStrip();}
-}
 const meshFolds=bindMeshFolds(directJobUiSink,()=>animation||'(no animation)',runReadings,()=>meshPanel);
 void start();
 
