@@ -44,6 +44,7 @@ export class TurnState {
  readonly targets:Partial<Record<TurnAxis,number>>={};private springs=new Map<TurnAxis,{x:number;v:number}>();
  private active=false;
  private releaseSpring:{x:number;v:number}|null=null;
+ private lastSteered:Partial<Record<TurnAxis,number>>|null=null;
  get engaged():boolean {return this.active;}
  get releasing():boolean {return this.releaseSpring!==null;}
  constructor(readonly dials:readonly TurnDial[]){for(const d of dials){this.values[d.axis]=0;this.targets[d.axis]=0;this.springs.set(d.axis,{x:0,v:0});}}
@@ -52,18 +53,24 @@ export class TurnState {
   const entered=!this.active;
   this.active=true;
   this.releaseSpring=null;
+  this.lastSteered=null;
   for(const d of this.dials)this.targets[d.axis]=normalizedDial(d.axis==='pitch'?y:x,d);
   return entered;
  }
  leave():boolean {
   if(!this.active||this.held)return false;
-  if(!this.smoothing){this.clear();return true;}
+  this.lastSteered={...this.values};
+  if(!this.smoothing){this.clearPose();return true;}
   this.active=false;
   this.releaseSpring={x:1,v:0};
   for(const d of this.dials)this.targets[d.axis]=0;
   return true;
  }
  clear():void {
+  this.lastSteered=null;
+  this.clearPose();
+ }
+ private clearPose():void {
   this.held=false;
   this.active=false;
   this.releaseSpring=null;
@@ -78,7 +85,7 @@ export class TurnState {
    const before=this.releaseSpring.x;
    springStep(this.releaseSpring,0,dt,this.smoothing);
    const weight=this.releaseSpring.x;
-   if(!this.smoothing||weight<1e-6){this.clear();return true;}
+   if(!this.smoothing||weight<1e-6){this.clearPose();return true;}
    if(weight===before)return false;
    for(const d of this.dials){
     this.values[d.axis]!*=weight/before;
@@ -98,8 +105,20 @@ export class TurnState {
   }
   return changed;
  }
- hold(value:boolean):void {this.active=true;this.releaseSpring=null;this.held=value;for(const d of this.dials){const x=this.values[d.axis]!;this.targets[d.axis]=x;Object.assign(this.springs.get(d.axis)!,{x:normalizedValue(x,d),v:0});}}
- exact(axis:TurnAxis,value:number):void {const d=this.dials.find(d=>d.axis===axis);if(!d||!finite(value)||value<d.min||value>d.max)throw new Error('TURN_VALUE_OUT_OF_RANGE');this.hold(true);this.values[axis]=value;this.targets[axis]=value;Object.assign(this.springs.get(axis)!,{x:normalizedValue(value,d),v:0});}
+ hold(value:boolean):void {
+  // Reaching the Hold button takes the pointer outside the viewport.
+  if(value&&this.lastSteered)Object.assign(this.values,this.lastSteered);
+  this.lastSteered=null;
+  this.active=true;
+  this.releaseSpring=null;
+  this.held=value;
+  for(const d of this.dials){
+   const x=this.values[d.axis]!;
+   this.targets[d.axis]=x;
+   Object.assign(this.springs.get(d.axis)!,{x:normalizedValue(x,d),v:0});
+  }
+ }
+ exact(axis:TurnAxis,value:number):void {const d=this.dials.find(d=>d.axis===axis);if(!d||!finite(value)||value<d.min||value>d.max)throw new Error('TURN_VALUE_OUT_OF_RANGE');this.lastSteered=null;this.hold(true);this.values[axis]=value;this.targets[axis]=value;Object.assign(this.springs.get(axis)!,{x:normalizedValue(value,d),v:0});}
  reset():void {this.hold(true);for(const d of this.dials)this.exact(d.axis,0);}
  snapshot():TurnSnapshot{return {schema:'rig-review-turn/1',values:{...this.values},held:this.held,smoothing:this.smoothing};}
  validate(value:unknown):TurnSnapshot {const v=parseTurnSnapshot(value);if(Object.keys(v.values).length!==this.dials.length||this.dials.some(d=>!finite(v.values[d.axis])||v.values[d.axis]!<d.min||v.values[d.axis]!>d.max))throw new Error('TURN_STATE_MODEL_MISMATCH');return v;}

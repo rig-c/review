@@ -43,6 +43,62 @@ test('exact entry holds, reset is exact zero, snapshot copies, restoration valid
  const snapshot=state.snapshot();snapshot.values.yaw=100;expect(state.values.yaw).toBe(7.125);expect(()=>state.restore(snapshot)).toThrow();expect(()=>parseTurnSnapshot({schema:'rig-review-turn/1',values:{yaw:Infinity},held:true,smoothing:20})).toThrow();state.reset();expect(state.values.yaw).toBe(0);
 });
 
+for(const smoothing of [0,20])test(`#1287 Hold after pointer leave keeps the last steered angle (smoothing ${smoothing})`,()=>{
+ const state=new TurnState(discoverTurnDials(model([slider('yaw_dial'),slider('pitch_dial')])));
+ state.smoothing=smoothing;
+ state.pointer(.75,-.5);state.step(.1);
+ const steered={...state.values};
+ expect(steered.yaw).toBeGreaterThan(0);
+ expect(steered.pitch).toBeLessThan(0);
+ expect(state.leave()).toBe(true);
+ state.step(.05);
+ expect(state.values).not.toEqual(steered);
+ state.hold(true);
+ expect(state.engaged).toBe(true);
+ expect(state.releasing).toBe(false);
+ expect(state.values).toEqual(steered);
+ expect(state.targets).toEqual(steered);
+ state.hold(false);state.step(.05);
+ expect(state.values.yaw).toBeCloseTo(steered.yaw!,12);
+});
+
+test('#1287 Hold after a completed release keeps the last steered angle',()=>{
+ const state=new TurnState(discoverTurnDials(model([slider('yaw_dial')])));
+ state.pointer(.75,0);state.step(.1);
+ const steered=state.values.yaw;
+ expect(steered).toBeGreaterThan(0);
+ state.leave();state.step(1);
+ expect(state.engaged).toBe(false);
+ expect(state.releasing).toBe(false);
+ expect(state.values.yaw).toBe(0);
+ state.hold(true);
+ expect(state.values.yaw).toBe(steered);
+});
+
+test('#1287 re-entry discards the remembered angle before Hold',()=>{
+ const state=new TurnState(discoverTurnDials(model([slider('yaw_dial')])));
+ state.pointer(.75,0);state.step(.1);
+ const steered=state.values.yaw!;
+ state.leave();state.step(.05);
+ state.pointer(-.5,0);state.step(.1);
+ const live=state.values.yaw!;
+ expect(steered).toBeGreaterThan(0);
+ expect(live).toBeLessThan(0);
+ state.hold(true);
+ expect(state.values.yaw).toBe(live);
+});
+
+test('#1287 clearing the pad discards the remembered angle before Hold',()=>{
+ const state=new TurnState(discoverTurnDials(model([slider('yaw_dial')])));
+ state.smoothing=0;
+ state.pointer(.75,0);state.step(0);
+ expect(state.values.yaw).toBeGreaterThan(0);
+ state.leave();
+ state.clear();
+ state.hold(true);
+ expect(state.values.yaw).toBe(0);
+});
+
 test('#289: reserved width derives from each dial range and precision, keeps exact values on number/dataset, and planted unreserved mutant fails',async()=>{
  const yawMax='29.999995200000384';
  const ranges=[
