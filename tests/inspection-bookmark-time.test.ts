@@ -4,15 +4,16 @@ import {parseBookmark,encodeBookmark,decodeBookmark} from '../web/inspection-per
 const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
 const serializer=source.slice(source.indexOf('function inspectionBookmark()'),source.indexOf('async function restoreInspection('));
 const binding={mode:'single' as const,sourceHash:'a'.repeat(64),rigs:['b'.repeat(64)]};
-function snapshot(time:number,runtime:number|null,inspection:{mode:string|null;inspector:string|null}={mode:'playback',inspector:'playback'},rigDifference:{bookmark:unknown}|null=null){
+function snapshot(time:number,runtime:number|null,inspection:{mode:string|null;inspector:string|null}={mode:'playback',inspector:'playback'},rigDifference:{bookmark:unknown}|null=null,authoredTime?:number){
  const document={querySelector:(selector:string)=>{if(selector!=='[data-mode][aria-pressed="true"]')throw new Error('Unexpected inspection mode query: '+selector);return inspection.mode===null?null:{dataset:{mode:inspection.mode}};}};
- const body=`const {time,player,binding,document,inspector,rigDifference}=deps,animation='idle',appearance=null,layers={images:true,mesh:true,bones:false},turnPad=null,parts=null,view='rig',checkpoint=null,selectedPerson='',axisInspection=false;const inspectionBinding=()=>binding,numericView=()=>({schema:'rig-review-view/1',cameras:{rig:null,a:null,b:null,reference:null}}),selectedInspector=()=>inspector,select=()=>({value:'',disabled:true});${serializer};return inspectionBookmark();`;
- return new Function('deps',new Bun.Transpiler({loader:'ts'}).transformSync(body))({time,player:runtime===null?null:{time:runtime},binding,document,inspector:inspection.inspector,rigDifference});
+ const body=`const {time,player,binding,document,inspector,rigDifference,authoredTime}=deps,animation='idle',appearance=null,layers={images:true,mesh:true,bones:false},turnPad=null,parts=null,view='rig',checkpoint=null,selectedPerson='',axisInspection=false;const heldSceneCamera=()=>authoredTime===undefined?null:{frame:{authoredSeconds:authoredTime}},inspectionBinding=()=>binding,numericView=()=>({schema:'rig-review-view/1',cameras:{rig:null,a:null,b:null,reference:null}}),selectedInspector=()=>inspector,select=()=>({value:'',disabled:true});${serializer};return inspectionBookmark();`;
+ return new Function('deps',new Bun.Transpiler({loader:'ts'}).transformSync(body))({time,player:runtime===null?null:{time:runtime},binding,document,inspector:inspection.inspector,rigDifference,authoredTime});
 }
 test('looped bookmark serializes inspected seconds independently of accumulated runtime',()=>{
  // Explicit domain control: the third loop is showing .25s while the runtime is at 3.25s.
  const result=parseBookmark(snapshot(.25,3.25),binding);
  expect(result.time).toBe(.25);expect(decodeBookmark(encodeBookmark(result),binding)).toEqual(result);
+ expect(parseBookmark(snapshot(.25,3.25,undefined,null,.2),binding).time).toBe(.2);
 });
 test('zero, clip endpoint and reference-only inspection preserve exact seconds',()=>{
  for(const [time,runtime] of [[0,4],[1,5],[.375,null]] as const)expect(parseBookmark(snapshot(time,runtime),binding).time).toBe(time);

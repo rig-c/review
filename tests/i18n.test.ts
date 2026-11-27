@@ -77,6 +77,11 @@ for(const [language,catalog] of [['en',enCatalog],['ko',koCatalog]] as const){
  });
 }
 
+test('Korean catalogue calls a comment 코멘트 everywhere and never 댓글',()=>{
+ expect(Object.values(koCatalog).filter(value=>value.includes('댓글'))).toEqual([]);
+ expect(Object.values({...koCatalog,planted:'이 댓글'}).filter(value=>value.includes('댓글'))).toEqual(['이 댓글']);
+});
+
 test('Bar 1: English and Korean catalogues hold the exact same key and placeholder set, and a planted missing key fails it',()=>{
  expect(()=>assertCatalogParity(enCatalog,koCatalog)).not.toThrow();
  expect(Object.keys(enCatalog).length).toBe(Object.keys(koCatalog).length);

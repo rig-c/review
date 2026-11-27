@@ -3,6 +3,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { cp, mkdtemp, writeFile, readFile, rm, symlink, mkdir, readdir, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SCENE_CAMERA_REPORT_MAX_BYTES } from '@rig-c/play/composed-take';
 import { FRAMES_DURATION_TOLERANCE, loadReview, packagePath, parseManifest } from '../src/manifest.ts';
 import { feedbackLastFrame } from '../src/feedback-validation.ts';
 import { freshSession, readSession, saveSession, sessionFile } from '../src/session.ts';
@@ -16,6 +17,158 @@ test('path refusal covers literal and encoded traversal and URL schemes',()=>{
 test('manifest names missing checkpoint reference rather than accepting an orphan',()=>{expect(()=>parseManifest({schema:'rig-review/1',id:'x',title:'X',revision:'1',checkpoints:[{id:'bad',title:'Bad',reference:'missing'}]})).toThrow('declared reference id');});
 test('symlink escaping package is refused',async()=>{const f=await fixture();const outside=await mkdtemp(join(tmpdir(),'review-outside-'));dirs.push(outside);await writeFile(join(outside,'art.svg'),'outside');await rm(join(f.root,'source.svg'));await symlink(join(outside,'art.svg'),join(f.root,'source.svg'));await expect(loadReview(f.path)).rejects.toThrow('symlinks may not escape');});
 test('declared missing files are refused',async()=>{const f=await fixture();await rm(join(f.root,'source.svg'));await expect(loadReview(f.path)).rejects.toThrow();});
+
+test('#1316 omission preserves the base package hash and file set', async () => {
+ const p = await loadReview('tests/fixtures/viewport-387/package/review.json', {handoff: false});
+ expect(p.sourceHash).toBe('7e095240763ae30a8a592f2e5ae180b9a0900b1beed89777df89cdb07077f4e4');
+ expect([...p.files].sort()).toEqual(['mesh.png', 'report.json', 'review.json', 'rigid.png', 'skeleton.model.json']);
+ expect(Object.hasOwn(p.manifest, 'sceneReport')).toBe(false);
+});
+
+test('#1316 sceneReport pointer requires a model and a closed literal path/digest pair', async () => {
+ const f = await fixture();
+ const sceneReport = {path: 'scene.json', sha256: 'a'.repeat(64)};
+ expect(() => parseManifest({...f.input, sceneReport})).toThrow('SCENE_CAMERA_MODEL_MISMATCH');
+ for (const bad of [null, [], {path: 'scene.json'}, {...sceneReport, spec: '/1'},
+   {...sceneReport, path: '../scene.json'}, {...sceneReport, path: 'a/%2e%2e/scene.json'},
+   {...sceneReport, sha256: 'A'.repeat(64)}]) {
+   expect(() => parseManifest({...f.input, model: 'skeleton.model.json', sceneReport: bad})).toThrow('SCENE_SOURCE_MISMATCH');
+ }
+});
+
+test('#1316 admits the exact Play report cap and refuses one extra byte by name', async () => {
+ const f = await fixture();
+ const model = 'skeleton.model.json';
+ const path = 'camera.json';
+ for (const file of [model, 'rigid.png', 'mesh.png'])
+   await cp(join('tests/fixtures/viewport-387/package', file), join(f.root, file));
+ const report = Buffer.alloc(SCENE_CAMERA_REPORT_MAX_BYTES + 1, ' ');
+ report.write('{"spec":"spine-parts-scene-report/1"}');
+ const install = async (bytes: Buffer) => {
+   await writeFile(join(f.root, path), bytes);
+   const sha256 = createHash('sha256').update(bytes).digest('hex');
+   await writeFile(f.path, JSON.stringify({...f.input, model, sceneReport: {path, sha256}}));
+ };
+ await install(report.subarray(0, SCENE_CAMERA_REPORT_MAX_BYTES));
+ expect((await loadReview(f.path)).sceneCamera).toBeUndefined();
+ await install(report);
+ await expect(loadReview(f.path)).rejects.toMatchObject({
+   code: 'SCENE_CAMERA_REPORT_TOO_LARGE',
+   message: expect.stringContaining(path),
+ });
+});
+
+test.each([
+ ['missing', null, '{}', 'SCENE_REQUIRED'],
+ ['escaping', null, '{}', 'SCENE_SOURCE_MISMATCH'],
+ ['wrong digest before invalid JSON', 'malformed', '{}', 'SCENE_SOURCE_MISMATCH'],
+ ['malformed JSON', 'malformed', 'malformed', 'SCENE_CAMERA_REPORT_INVALID'],
+ ['invalid UTF-8', Buffer.from([0xff]), Buffer.from([0xff]), 'SCENE_CAMERA_REPORT_INVALID'],
+ ['unknown spec', '{"spec":"spine-parts-scene-report/3"}', '{"spec":"spine-parts-scene-report/3"}', 'SCENE_CAMERA_REPORT_INVALID'],
+ ['malformed /2', '{"spec":"spine-parts-scene-report/2","camera":{}}', '{"spec":"spine-parts-scene-report/2","camera":{}}', 'SCENE_CAMERA_REPORT_INVALID'],
+] as const)('#1316 refuses sceneReport with %s', async (kind, bytes, declaredBytes, code) => {
+ const f = await fixture();
+ const model = 'skeleton.model.json';
+ const path = kind === 'malformed JSON' ? 'report.json' : 'scene.json';
+ const scene = join(f.root, path);
+ for (const file of [model, 'rigid.png', 'mesh.png'])
+   await cp(join('tests/fixtures/viewport-387/package', file), join(f.root, file));
+ const sha256 = createHash('sha256').update(declaredBytes).digest('hex');
+ const authoring = path === 'report.json' ? [{label: 'Parts scene report', path}] : undefined;
+ await writeFile(f.path, JSON.stringify({...f.input, model, authoring, sceneReport: {path, sha256}}));
+ if (bytes !== null) await writeFile(scene, bytes);
+ if (kind === 'escaping') {
+   const outside = await fixture();
+   await symlink(join(outside.root, 'source.svg'), scene);
+ }
+ await expect(loadReview(f.path)).rejects.toThrow(code);
+});
+
+test.each([
+ ['matching @3', 3, 'idle', 0.8, 0.75, true, ''],
+ ['matching current @4', 4, 'idle', 0.8, 0.75, true, ''],
+ ['unkeyed idle', 3, 'inspect', 1, 1, false, ''],
+ ['raw model digest', 3, 'idle', 0.8, 0.75, true, 'SCENE_CAMERA_MODEL_MISMATCH'],
+ ['unknown clip', 3, 'unknown', 0.8, 0.75, true, 'SCENE_CAMERA_CLIP_MISMATCH'],
+ ['wrong compiled duration', 3, 'idle', 0.75, 0.75, true, 'SCENE_CAMERA_CLIP_MISMATCH'],
+ ['@3 duration', 3, 'idle', 0.8, 0.7500000000000001, true, 'DIRECTION_TAKE_MISMATCH'],
+ ['@4 loop', 4, 'idle', 0.8, 0.75, false, 'DIRECTION_TAKE_MISMATCH'],
+] as const)('#1316 Play binds exact model bytes and checks the composed take for %s', async (kind, version, clip, compiled, duration, loop, refusal) => {
+ const f = await fixture();
+ const model = 'skeleton.model.json';
+ const source = 'tests/fixtures/viewport-387/package';
+ const packed = JSON.parse(await readFile(join(source, model), 'utf8'));
+ const idle = packed.animations.find((animation: {name: string}) => animation.name === 'short');
+ idle.name = 'idle';
+ // Play reads the f32 last key (0.8), even if the packed JSON declares a different duration.
+ idle.duration = 3;
+ packed.editorOrder.animations[packed.editorOrder.animations.indexOf('short')] = 'idle';
+ for (const page of packed.pages) await cp(join(source, page.name), join(f.root, page.name));
+ const serialized = JSON.stringify(packed);
+ const modelBytes = serialized + '\n';
+ const sha = (bytes: string) => createHash('sha256').update(bytes).digest('hex');
+ await writeFile(join(f.root, model), modelBytes);
+ const {width, height} = packed.stage;
+ const bytes = JSON.stringify({spec: 'spine-parts-scene-report/2', canvas: {width, height}, camera: {
+   backdrop: 'synthetic', fps: 12, model_sha256: sha(kind === 'raw model digest' ? serialized : modelBytes),
+   coverage: {status: 'PASS', max_edge_overrun_px: 0, nonopaque_source_texels: 0, nonopaque_output_pixels: 0},
+   tracks: {[clip]: {duration: 0.75, compiled_duration: Math.fround(compiled), loop: true,
+     keys: [{t: 0, pan: [0, 0], zoom: 1}, {t: 0.75, pan: [0, 0], zoom: 1}], frames: []}},
+ }});
+ const sceneReport = {path: 'camera.json', sha256: sha(bytes)};
+ await writeFile(join(f.root, sceneReport.path), bytes);
+ const direction = 'direction.json';
+ await writeFile(join(f.root, direction), JSON.stringify({schema: `rig-create/direction@${version}`,
+   model: {path: model, sha256: sha(modelBytes)}, rig: {version: 1}, take: {duration, loop}}));
+ await writeFile(f.path, JSON.stringify({...f.input, model, direction, sceneReport}));
+ const selector = version === 4 ? {kind: 'current', output: 'direction', record: '0'.repeat(64)} as const : undefined;
+ if (refusal === 'DIRECTION_TAKE_MISMATCH') {
+   const isLoop = kind === '@4 loop';
+   const field = isLoop ? 'loop' : 'duration';
+   const found = isLoop ? loop : duration;
+   const track = JSON.parse(bytes).camera.tracks.idle;
+   expect(found).not.toBe(track[field]);
+   await expect(loadReview(f.path, {selector})).rejects.toMatchObject({
+     code: refusal,
+     message: `DIRECTION_TAKE_MISMATCH: ${direction} take.${field} is ${found}; the idle track in ${sceneReport.path} has ${field} ${track[field]}.`,
+   });
+ }
+ else if (refusal) await expect(loadReview(f.path, {selector})).rejects.toMatchObject({code: refusal});
+ else {
+   const p = await loadReview(f.path, {selector});
+   expect(p.direction?.take).toEqual({duration, loop});
+   expect(p.manifest.sceneReport).toEqual(sceneReport);
+ }
+});
+
+test('#1316 a declared /1 changes source identity without changing inspection metadata', async () => {
+ const f = await fixture();
+ const model = 'skeleton.model.json';
+ const posePath = 'pose/report.json';
+ const manifest = {...f.input, model, authoring: [{label: 'Pose report', path: posePath}]};
+ await mkdir(join(f.root, 'pose'));
+ await writeFile(join(f.root, posePath), '{"spec":"rig-pose-report/1","animation":"idle"}');
+ await writeFile(join(f.root, model), '{"spec":"rigc-compiled/3","pages":[]}');
+ await writeFile(f.path, JSON.stringify(manifest));
+ const base = await loadReview(f.path);
+ expect(base.report?.path).toBe(posePath);
+ const path = 'report.json';
+ let previousHash = base.sourceHash;
+ for (const bytes of ['{"spec":"spine-parts-scene-report/1"}', '{"spec":"spine-parts-scene-report/1"}\n']) {
+   const sceneReport = {path, sha256: createHash('sha256').update(bytes).digest('hex')};
+   await writeFile(join(f.root, path), bytes);
+   await writeFile(f.path, JSON.stringify({...manifest, sceneReport}));
+   const p = await loadReview(f.path);
+   expect(p.manifest.sceneReport).toEqual(sceneReport);
+   expect([...p.files].sort()).toEqual([...base.files, path].sort());
+   expect(p.sourceHash).not.toBe(previousHash);
+   previousHash = p.sourceHash;
+   expect(p.reviewedSource).toEqual(base.reviewedSource);
+   expect(p.feedbackCatalog).toEqual(base.feedbackCatalog);
+   expect(p.report).toEqual(base.report);
+   expect(p.scene).toBeUndefined();
+ }
+});
 test('opening starts pending; explicit state persists separately from source',async()=>{const f=await fixture();const p=await loadReview(f.path);const state=join(f.root,'user-state');const before=await Bun.file(f.path).text();expect((await readSession(p,state)).status).toBe('pending');const session=freshSession(p);session.status='approved';session.checkpoints.shape={outcome:'pass',note:'Contour accepted'};const saved=await saveSession(p,session,state);expect(saved.updatedAt).toBeString();expect((await readSession(p,state)).status).toBe('approved');expect(await Bun.file(f.path).text()).toBe(before);});
 test('asset changes invalidate approval even without revision bump',async()=>{const f=await fixture();const original=await loadReview(f.path);const state=join(f.root,'state');const session=freshSession(original);session.status='approved';await saveSession(original,session,state);await writeFile(join(f.root,'source.svg'),'<svg><!-- changed --></svg>');const changed=await loadReview(f.path);expect(changed.sourceHash).not.toBe(original.sourceHash);expect(sessionFile(changed,state)).not.toBe(sessionFile(original,state));expect((await readSession(changed,state)).status).toBe('pending');await expect(saveSession(changed,session,state)).rejects.toThrow('sourceHash');});
 test('session rejects foreign binding, unknown checkpoint and invalid feedback target',async()=>{const f=await fixture();const p=await loadReview(f.path);const state=join(f.root,'state');await expect(saveSession(p,{...freshSession(p),id:'other'},state)).rejects.toThrow('session.id');await expect(saveSession(p,{...freshSession(p),checkpoints:{unknown:{outcome:'pass',note:''}}},state)).rejects.toThrow('unknown checkpoint');await expect(saveSession(p,{...freshSession(p),feedback:[{id:'x',frameStart:0,frameEnd:1,target:{kind:'command',name:'x'},category:'defect',summary:'x'}]},state)).rejects.toThrow('feedback.target.kind');});
