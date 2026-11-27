@@ -386,6 +386,220 @@ test('#1285 slice 4 shared rebuild commits density pending before refresh and le
   expect(b.stripPending).toBe(row);
 });
 
+type JobSide = 'a' | 'b';
+
+function compareJobUi() {
+  let selected: JobSide = 'a';
+  const visible = new Map<string, { text: string; error: boolean }>();
+  const ui = rebuildClient.createJobUiState<JobSide>(() => selected);
+  return {
+    ui, visible,
+    select(side: JobSide, hydrate = () => {}) {
+      ui.leave(selected);
+      selected = side;
+      hydrate();
+      ui.enter(side);
+    },
+    report(side: JobSide, key: string, text: string, error = false) {
+      ui.outcome(side, key, () => visible.set(key, { text, error }), () => visible.delete(key));
+    },
+  };
+}
+
+test('#1285 slice 5 gates synchronous status, busy, render and display polling by origin', () => {
+  const { ui, select } = compareJobUi();
+  const a = ui.sink('a'), b = ui.sink('b');
+  const events: string[] = [];
+  select('b');
+  for (const kind of ['status', 'busy', 'render', 'poll'] as const) {
+    a[kind](() => events.push('a ' + kind));
+    b[kind](() => events.push('b ' + kind));
+    rebuildClient.directJobUiSink[kind](() => events.push('direct ' + kind));
+    events.push('after ' + kind);
+  }
+  select('a');
+  expect(events).toEqual([
+    'b status', 'direct status', 'after status', 'b busy', 'direct busy', 'after busy',
+    'b render', 'direct render', 'after render', 'b poll', 'direct poll', 'after poll',
+  ]);
+  a.status(() => events.push('a returned'));
+  expect(events.at(-1)).toBe('a returned');
+});
+
+test('#1285 slice 5 projects all busy keys after hydration and records an offside unlock', () => {
+  const { ui, select } = compareJobUi();
+  const events: string[] = [];
+  const bones = (value: boolean) => events.push('bones ' + value);
+  const readings = (value: boolean) => events.push('readings ' + value);
+  ui.busy('a', 'bones', true, bones);
+  ui.busy('b', 'readings', true, readings);
+  expect(events).toEqual(['bones true']);
+
+  select('b', () => events.push('hydrate b'));
+  expect(events.slice(1)).toEqual(['hydrate b', 'bones false', 'readings true']);
+  ui.busy('b', 'bones', true, bones);
+  ui.busy('a', 'bones', false, bones);
+  expect(events.slice(4)).toEqual(['bones true']);
+
+  select('a', () => events.push('hydrate a'));
+  expect(events.slice(5)).toEqual(['hydrate a', 'bones false', 'readings false']);
+  select('b');
+  expect(events.slice(8)).toEqual(['bones true', 'readings true']);
+});
+
+test('#1285 slice 5 preserves the originating refusal and the other side’s footer', () => {
+  const { ui, select, report, visible } = compareJobUi();
+  select('b');
+  report('b', 'message', 'Build B applied');
+  const refusal = 'REBUILD_BUSY';
+  report('a', 'message', refusal, true);
+  expect(visible.get('message')).toEqual({ text: 'Build B applied', error: false });
+
+  select('a', () => {
+    expect(visible.has('message')).toBe(false);
+    visible.set('message', { text: 'hydrated', error: false });
+  });
+  expect(visible.get('message')).toEqual({ text: refusal, error: true });
+  ui.leave('b');
+  expect(visible.get('message')).toEqual({ text: refusal, error: true });
+  select('b');
+  expect(visible.get('message')).toEqual({ text: 'Build B applied', error: false });
+});
+
+test('#1285 slice 5 restores an error after required polling and the origin cache update', async () => {
+  const { ui, select, report, visible } = compareJobUi();
+  const pollCalls: JobSide[] = [];
+  const cache: Partial<Record<JobSide, string>> = {};
+  const failure = 'ENVIRONMENT_CHECK_FAILED: connection closed';
+  const run = async (side: JobSide) => {
+    const sink = ui.sink(side);
+    await Promise.resolve();
+    pollCalls.push(side);
+    cache[side] = failure;
+    sink.poll(() => pollCalls.push('b'));
+    report(side, 'environment-check', failure, true);
+  };
+  const running = run('a');
+  select('b');
+  await running;
+  expect(pollCalls).toEqual(['a']);
+  expect(cache).toEqual({ a: failure });
+  expect(visible.has('environment-check')).toBe(false);
+
+  select('a');
+  expect(visible.get('environment-check')).toEqual({ text: failure, error: true });
+});
+
+test('#1285 slice 5 restores densityLine in the strip and footer after switching back', () => {
+  const { select, report, visible } = compareJobUi();
+  select('b');
+  const error = 'DENSITY_STRIP_LOAD_FAILED: missing row';
+  report('a', 'density', error, true);
+  report('a', 'message', error, true);
+  report('b', 'density', 'Strip of 3 on topwear settled: 3 passing.');
+  expect([...visible.values()]).toEqual([{ text: 'Strip of 3 on topwear settled: 3 passing.', error: false }]);
+
+  select('a');
+  expect([...visible]).toEqual([
+    ['density', { text: error, error: true }],
+    ['message', { text: error, error: true }],
+  ]);
+  select('b');
+  expect(visible.has('message')).toBe(false);
+  expect(visible.get('density')?.error).toBe(false);
+});
+
+test('#1285 slice 5 clears only the next dispatch’s owned key and side', () => {
+  const { ui, select, report, visible } = compareJobUi();
+  report('a', 'bones', 'A failed', true);
+  report('a', 'message', 'A footer');
+  select('b');
+  report('b', 'bones', 'B applied');
+  ui.clearOutcome('a', 'bones');
+  expect(visible.get('bones')).toEqual({ text: 'B applied', error: false });
+  select('a');
+  expect(visible.has('bones')).toBe(false);
+  expect(visible.get('message')).toEqual({ text: 'A footer', error: false });
+  ui.clearOutcome('a', 'message');
+  expect(visible.size).toBe(0);
+
+  select('b');
+  expect(visible.get('bones')).toEqual({ text: 'B applied', error: false });
+  select('a');
+  expect(visible.size).toBe(0);
+});
+
+test('#1285 slice 5 replays the latest success after busy projection and clears its own display once', () => {
+  const { ui, select } = compareJobUi();
+  const events: string[] = [];
+  ui.busy('a', 'bones', true, value => events.push('busy ' + value));
+  ui.outcome('a', 'bones', () => events.push('first'), () => events.push('clear first'));
+  ui.outcome('a', 'bones', () => events.push('latest'), () => events.push('clear latest'));
+  select('b');
+  ui.leave('a');
+  select('a', () => events.push('hydrate a'));
+  ui.busy('a', 'bones', false, value => events.push('busy ' + value));
+  ui.clearOutcome('a', 'bones');
+  ui.clearOutcome('a', 'bones');
+
+  expect(events).toEqual([
+    'busy true', 'first', 'latest', 'clear latest', 'busy false',
+    'hydrate a', 'busy true', 'latest', 'busy false', 'clear latest',
+  ]);
+});
+
+test('#1285 slice 5 releases an idle busy key after its last tracked busy paint is cleared', () => {
+  const { ui, select } = compareJobUi();
+  const writes: boolean[] = [];
+  let panelBusy = false;
+  const write = (value: boolean) => { writes.push(value); panelBusy = value; };
+
+  ui.busy('a', 'bones', true, write);
+  select('b', () => {
+    ui.busy('a', 'bones', false, write);
+    expect(writes).toEqual([true]);
+  });
+  expect(writes).toEqual([true, false]);
+
+  select('a', () => { panelBusy = true; });
+  expect(panelBusy).toBe(true);
+  expect(writes).toEqual([true, false]);
+
+  ui.busy('a', 'bones', true, write);
+  ui.busy('a', 'bones', false, write);
+  select('b', () => { panelBusy = true; });
+  expect(panelBusy).toBe(true);
+  expect(writes).toEqual([true, false, true, false]);
+});
+
+test('#1285 slice 5 clears transient progress on leave and never replays it', () => {
+  const { ui, select, report, visible } = compareJobUi();
+  const key = 'bones';
+  const cleared: string[] = [];
+  const progress = (text: string) => ui.transient('a', key,
+    () => visible.set(key, { text, error: false }),
+    () => { visible.delete(key); cleared.push(text); },
+  );
+
+  report('a', key, 'A failed', true);
+  progress('A working');
+  select('b', () => expect(visible.has(key)).toBe(false));
+  report('b', key, 'B applied');
+  progress('A still working');
+  expect(visible.get(key)).toEqual({ text: 'B applied', error: false });
+  select('a');
+  expect(visible.get(key)).toEqual({ text: 'A failed', error: true });
+
+  ui.clearOutcome('a', key);
+  progress('A retrying');
+  expect(visible.get(key)?.text).toBe('A retrying');
+  select('b', () => expect(visible.has(key)).toBe(false));
+  expect(visible.get(key)?.text).toBe('B applied');
+  select('a');
+  expect(visible.has(key)).toBe(false);
+  expect(cleared).toEqual(['A working', 'A retrying']);
+});
+
 test('#250 condition 1: every panel kind shows a plain-words statement beside its Apply button before the click when another panel is applied, none on initial/same-panel second Apply, no modal, and refuses unknown records by name (with failing control)', () => {
   const indexHtml = (rigWorkspaceMarkup+rigReviewDialogMarkup);
   const compareHtml = renderCompareHtml(undefined, indexHtml);

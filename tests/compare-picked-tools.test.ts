@@ -313,8 +313,11 @@ test('#1304: Compare populateChestBones keeps selected and disabled-seeded row b
 });
 
 test('#1305: Compare refreshPhysics tells the Idle panel why a side without a producer handoff is unavailable', () => {
+  const physicsEnd = comparePickedSource.includes('  function renderHandoff(')
+    ? '  function renderHandoff('
+    : '  function chestPartForNotice(';
   const physicsCode = transpiler.transformSync(
-    sliceBetween(comparePickedSource, '  function refreshPhysics()', '  function renderHandoff('),
+    sliceBetween(comparePickedSource, '  function refreshPhysics()', physicsEnd),
   );
   const makeFns = new Function('scope', `with (scope) { ${physicsCode}; return { refreshPhysics, refreshIdle }; }`);
 
