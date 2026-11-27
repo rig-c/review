@@ -876,7 +876,6 @@ export interface JobStatus {
   readonly publication: JobPublication | null;
   readonly pending: readonly JobPendingAsk[];
   readonly cursor: JobCursor | null;
-  readonly enabledActKinds: readonly JobEnabledActKind[];
 }
 
 interface JobRequestBase {

@@ -91,6 +91,7 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | Fresh `review-verdict` and `parts-verdict` asks | #1232 | Fresh asks refuse with `JOB_ASK_INVALID`. Send comments on the displayed publication produces an act@10. |
 | Fresh verdict submissions | #1233 | Stored verdict acts retain their readers and replay behavior. |
 | Standalone parts verdict and package session writers | #1233 | `POST /api/parts/verdict`, `PUT /api/session` and the parts CLI's `RIG_REVIEW_PARTS_SAVED` stdout records are retired. Send comments writes local feedback. Historical verdict and session exports remain supported. |
+| `enabledActKinds` on `JobStatus` and `JobStatusV3` | 5.0.0 (#1319) | Submit through the existing page port `commitUIAct` (`POST /jobs/<jobId>/ui/acts`) and inspect the reply for the submitted act or the [named refusal code](REVIEW_PACKAGE.md#owner-submit-refusals). |
 
 ## History
 
@@ -831,7 +832,7 @@ values from the frozen semantic contract.
 - `JOB_RECORD_READER_ID`
 - `JOB_PARTS_ENUMERATOR_RANGE`
 - `JOB_PREVIOUS_DRAFT_SCHEMA`
-- `JOB_ENABLED_ACT_KINDS`
+- `JOB_ENABLED_ACT_KINDS` (stable public tuple since #506, retained in its original order for historical package compatibility)
 - `JOB_RESERVED_ACT_KINDS`
 - `JOB_PLAN_BOUND_SIGNOFF_STAGES` (read-only compatibility: retained for historical package `signoff` act decoders, #1227)
 - `JOB_CONSUMER_AUTH_MODE`
@@ -857,7 +858,7 @@ without aliases or copied wire shapes.
 - `JobActWaitOutcome`
 - `JobPublicationReader`
 - `JobPublishedContext`
-- `JobEnabledActKind`
+- `JobEnabledActKind` (member of the public historical package tuple `JOB_ENABLED_ACT_KINDS`)
 - `JobReservedActKind`
 - `JobActKind`
 - `JobSha256`
@@ -912,8 +913,8 @@ without aliases or copied wire shapes.
 - `JobInterviewDiagnostics`
 - `JobPublication`
 - `JobPublicationV3`
-- `JobStatus`
-- `JobStatusV3`
+- `JobStatus` (package-only in-process status, with `enabledActKinds` removed in 5.0.0)
+- `JobStatusV3` (record-capable in-process status, with the same removal)
 - `JobPublishRequest`
 - `JobPublishRequestV3`
 - `JobPublishResultV3`

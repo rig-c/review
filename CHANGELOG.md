@@ -24,6 +24,7 @@
 
 * Fresh `parts-verdict` and `review-verdict` job submissions refuse with `JOB_ACT_KIND_DISABLED`. A committed submission still replays its stored act (#1233).
 * Retired standalone parts verdict and package session writes, including the parts CLI's durable save notifications. Send comments saves feedback locally, and existing verdicts and sessions remain readable (#1233).
+* **Breaking in 5.0.0.** In-process job status drops `enabledActKinds` from `JobStatus` and `JobStatusV3` with no replacement field. The public historical tuple `JOB_ENABLED_ACT_KINDS` and its member type `JobEnabledActKind` remain available (#1319).
 
 ## 4.24.0
 
