@@ -580,11 +580,17 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       list.replaceChildren();
       for (const name of bones ?? []) list.append(option(name, name));
     }
+    const status = currentState().rebuildStatus, seeded = status ? chestSeed(status) : null;
     for (const row of chestRegionRows) {
-      const node = document.getElementById(chestRowId(row, 'bone')) as HTMLSelectElement | null;
+      const id = chestRowId(row, 'bone'), nameId = chestRowId(row, 'name');
+      const node = document.getElementById(id) as HTMLSelectElement | null;
       if (!node) continue;
+      const current = node.value, seededRow = seeded?.rows.find(r => r.row === row);
+      const rowName = (document.getElementById(nameId) as HTMLInputElement | null)?.value.trim() ?? '';
+      const keep = current || (node.disabled && rowName && rowName === (seededRow?.fields[nameId] ?? '').trim() ? (seededRow?.fields[id] ?? '').trim() : '');
       node.replaceChildren(option('', bones ? 'Select bone' : 'No model bones'));
       for (const name of bones ?? []) node.append(option(name, name));
+      if (bones && keep && bones.includes(keep)) node.value = keep;
       node.disabled = !bones;
     }
   }
@@ -2502,9 +2508,9 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         st.inspectedDocumentReason = `PHYSICS_TUNING_UNAVAILABLE: ${errorText(error)}`;
         if (side === pickedSide) refreshPhysics();
       });
+      if (side === pickedSide) populateChestBones();
       updateChestMapping(side);
       if (side === pickedSide) {
-        populateChestBones();
         refreshAnimationInspection();
         weightsView?.refresh();
       }

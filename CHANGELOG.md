@@ -5,6 +5,7 @@
 ### Fixed
 
 * Compare refuses a reading seek past the shared clip instead of seeking to a different time (#1302).
+* Compare keeps the selected chest-row bones when Apply, Undo or Reset reloads the picked build (#1304).
 
 ## 4.24.0
 
