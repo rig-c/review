@@ -5,11 +5,31 @@
  * tick a button that seeks to its frame's time. The server runs `rigc render`; this draws what came back.
  */
 import {panelNode as node,panelMake as make} from './view-controls.ts';
-import {readingTicks,ticksOnClip,TICK_EDGE,worstLine,type ReadingBuild,type ReadingRequest,type ReadingResult,type ReadingTick} from '../src/readings.ts';
+import {readingTicks,ticksOnClip,TICK_EDGE,worstLine,READINGS_SCHEMA,type ReadingsContext,type ReadingBuild,type ReadingRequest,type ReadingResult,type ReadingTick} from '../src/readings.ts';
 import {scrubBox} from './scrub-box.ts';
 
 export interface ReadingsJobView {id:string;status:'running'|'done'|'failed';error:string|null;request:{animation:string;readings:ReadingRequest[];environment:import('../src/readings.ts').ReadingsRequest['environment']};environment:{requested:boolean;flag:boolean;passed:boolean};compiler:{package:string;version:string};runs:{build:ReadingBuild;id:string;modelHash:string;results:ReadingResult[]}[]}
 export interface ReadingsRefusal {status:'refused';error:string}
+
+/** `context.readings`: the last finished run's pairs and builds, or null when none ran. */
+export function readingsContext(job:ReadingsJobView|null):ReadingsContext|null {
+ if(!job)return null;
+ const ticks=(build:ReadingBuild)=>{
+  const run=job.runs.find(r=>r.build===build);
+  return run?run.results.reduce((n,r)=>n+r.frames.length,0):null;
+ };
+ return {
+  schema:READINGS_SCHEMA,
+  animation:job.request.animation,
+  requests:job.request.readings,
+  environment:job.request.environment,
+  environmentPassed:job.environment.passed,
+  builds:{inspected:job.runs.find(r=>r.build==='inspected')?.modelHash??'',scratch:job.runs.find(r=>r.build==='scratch')?.id??null},
+  compiler:job.compiler,
+  ticks:{inspected:ticks('inspected')??0,scratch:ticks('scratch')},
+ };
+}
+
 export interface ReadingsPanel {
  catalog(slots:readonly string[],bones:readonly string[]):void;
  /** The readings the pickers name, or the line saying what is missing. */

@@ -7,10 +7,35 @@ import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
 import {READINGS_COMPILER_NOT_INSTALLED} from '../src/producer.ts';
-import {ticksOnClip,environmentSchedule,parseReadingsContext,parseReadingsRequest,readingRefusal,readingResult,readingTicks,renderArgs,worstLine,READINGS_SCHEMA,ReadingsError,type ReadingRequest} from '../src/readings.ts';
+import {ticksOnClip,environmentSchedule,parseReadingsContext,parseReadingsRequest,readingRefusal,readingResult,readingTicks,renderArgs,worstLine,READINGS_SCHEMA,ReadingsError,type ReadingRequest,type ReadingResult} from '../src/readings.ts';
 import {readoutRows,beforeLine,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {checkSummary} from '../src/applied-context.ts';
 import {validatePackageFeedback} from '../src/session.ts';
+import * as readingsPanel from '../web/readings-panel.ts';
+
+test('#1285 slice 4: readings context carries the first run identity and every result frame for each build',()=>{
+ const reading={kind:'folds'} as const;
+ const result:ReadingResult={reading,label:'folds',status:'read',fps:12,frames:[1,4],source:'json',worst:null,
+  items:[],lines:[],refusal:null,exitCode:0,wallMs:10};
+ const environment={wind:[2,0] as [number,number],gravity:[0,1] as [number,number]};
+ const inspected={build:'inspected',id:'inspected-id',modelHash:'inspected-hash',
+  results:[{...result,frames:[1,4]},{...result,frames:[4]}]} satisfies readingsPanel.ReadingsJobView['runs'][number];
+ const scratch={build:'scratch',id:'scratch-id',modelHash:'scratch-hash',
+  results:[{...result,frames:[]}]} satisfies readingsPanel.ReadingsJobView['runs'][number];
+ const job:readingsPanel.ReadingsJobView={id:'reading-job',status:'done',error:null,
+  request:{animation:'bow',readings:[reading],environment},environment:{requested:true,flag:true,passed:true},
+  compiler:{package:'@rig-c/rig-c',version:'2.64.1'},runs:[scratch,inspected,{...inspected,modelHash:'later-hash',results:[]}]};
+ const context={schema:READINGS_SCHEMA,animation:'bow',requests:[reading],environment,environmentPassed:true,
+  compiler:job.compiler,builds:{inspected:'inspected-hash',scratch:'scratch-id'},ticks:{inspected:3,scratch:0}};
+ expect(readingsPanel.readingsContext(null)).toBeNull();
+ expect(readingsPanel.readingsContext(job)).toEqual(context);
+ expect(readingsPanel.readingsContext({...job,runs:[inspected]})).toEqual({
+  ...context,builds:{inspected:'inspected-hash',scratch:null},ticks:{inspected:3,scratch:null},
+ });
+ expect(readingsPanel.readingsContext({...job,runs:[scratch]})).toEqual({
+  ...context,builds:{inspected:'',scratch:'scratch-id'},ticks:{inspected:0,scratch:0},
+ });
+});
 
 // ---- Shapes as rig-c 2.64.1 writes them (trimmed from a real render of a 41-frame idle at 12 fps) ----
 const seamJson={spec:'rigc-seam/1',animation:'idle',fps:12,pairs:[{a:'topwear',b:'bottomwear',drawn:41,banded:41,status:'read',opens:[0,1,2,7,8,9,10,24],maxPx:678,

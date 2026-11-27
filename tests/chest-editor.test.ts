@@ -1,12 +1,110 @@
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
+import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
+import {deriveBust,type BustSpec} from '../src/chest-landmarks.ts';
+import {buildChestRegions,serializeChestRegions,type CropWorldMapping} from '../src/chest-regions.ts';
+import {MeshEditSession,meshEditDocument,meshEditText} from '../src/mesh-edit.ts';
 import {bindChestEditor,bustInputId,bustLabel,canvasToCrop,chestEditVisible,chestField,chestMarkers,chestPoseOffset,circleFields,dragBust,editorStatus,hitBustHandle,mirrorBust,posedChestMapping,rowCircle,settleBust,type BustDrag} from '../web/chest-editor.ts';
+import * as chestExports from '../web/chest-editor.ts';
+import * as meshExports from '../web/mesh-editor.ts';
 import {chestRowId,type ChestFieldValue} from '../web/chest-regions-tool.ts';
 import {seedFields} from '../web/rebuild-client.ts';
 
 const html=()=>(rigWorkspaceMarkup.replace('<div data-workspace-view-tools></div>',sharedViewToolsMarkup)+rigReviewDialogMarkup);
 const between=(text:string,start:string,end:string)=>{const a=text.indexOf(start),b=text.indexOf(end,a);if(a<0||b<a)throw new Error(`missing ${start} … ${end}`);return text.slice(a,b+end.length);};
+
+test('#1285 slice 4: chest overlays retain manual ellipse geometry and landmark refusal colors',()=>{
+ const mapping={available:true as const,crop:{w:100,h:100},basis:'posed',toWorld:(x:number,y:number)=>({x:x+10,y:101-y})};
+ const right={cx:20,cy:35,r:8,ry:5,clip:24,band:4},left={cx:33,cy:35,r:7,band:3};
+ const fields={...circleFields(0,right),...circleFields(1,left)};
+ const read=(id:string)=>fields[id]===undefined?undefined:{value:fields[id]!};
+ const manual={active:()=>true,mode:()=>'circles' as const,flashing:(side:string)=>side==='r',landmarks:()=>{throw new Error('manual circles read landmarks');}};
+ const globals=globalThis as Record<string,unknown>;
+ const previousDocument=globals.document,previousStyle=globals.getComputedStyle;
+ globals.document={documentElement:{}};
+ globals.getComputedStyle=()=>({getPropertyValue:(name:string)=>` ${name} `});
+ try{
+  expect(chestExports.chestCircles(mapping,{...manual,active:()=>false},read)).toEqual([]);
+  expect(chestExports.chestCircles({available:false,reason:'no mapping'},manual,read)).toEqual([]);
+  const colors={stroke:'--rv-bust-overlap',fill:'--rv-bust-overlap-fill',handle:'--rv-bust-handle',ink:'--rv-bust-ink',labelBg:'--rv-bust-label-bg',flash:'--rv-bust-flash'};
+  expect(chestExports.chestCircles(mapping,manual,read)).toEqual([
+   {center:{x:30,y:66},r:8,ry:5,clipX:34,band:4,label:'R (20,35) r:8×5 b:4',labelRow:0,handles:true,flash:true,colors},
+   {center:{x:43,y:66},r:7,band:3,label:'L (33,35) r:7 b:3',labelRow:1,handles:true,flash:false,colors},
+  ]);
+  // Touching cores use the side colors.
+  fields[chestRowId(1,'cx')]='35';
+  expect(chestExports.chestCircles(mapping,manual,read).map(circle=>circle.colors.stroke)).toEqual(['--rv-bust-r','--rv-bust-l']);
+  const landmarks={...manual,mode:()=>'landmarks' as const,flashing:()=>{throw new Error('landmarks read handles');}};
+  const noRows=()=>{throw new Error('landmarks read manual rows');};
+  expect(chestExports.chestCircles(mapping,{...landmarks,landmarks:()=>({error:'missing'})},noRows)).toEqual([]);
+  const spec:BustSpec={apex_r:[20,35],apex_l:[40,35],cleavage:[20,35],alpha:0.5,clearance:0};
+  expect(chestExports.chestCircles(mapping,{...landmarks,landmarks:()=>({spec,derived:deriveBust(spec)})},noRows)).toEqual([
+   {center:{x:50,y:66},r:10,band:10,label:'bust_l r:10 b:10',labelRow:0,handles:false,colors},
+  ]);
+ }finally{
+  globals.document=previousDocument;
+  globals.getComputedStyle=previousStyle;
+ }
+});
+
+function editExportFixture(){
+ const events:string[]=[],files:{name:string;text:string;mime:string}[]=[];
+ const a={sourceHash:'package-a',reviewedSource:{viewerVersion:'1',runtimeVersion:'2',rig:{sha256:'model-a'},motion:null}};
+ const b={sourceHash:'package-b',reviewedSource:{viewerVersion:'3',runtimeVersion:'4',rig:{sha256:'model-b'},motion:{sha256:'motion-b'}}};
+ let source=a as typeof a|typeof b;
+ let mapping:CropWorldMapping={available:false,reason:'mapping unavailable'};
+ const host={
+  source:()=>{events.push('source');return {...source,mapping};},
+  download:(name:string,text:string,mime:string)=>{events.push(name);files.push({name,text,mime});},
+ };
+ return {host,files,events,useB:(nextMapping:CropWorldMapping)=>{source=b;mapping=nextMapping;}};
+}
+
+test('#1285 slice 4: chest export refuses before reading provenance and binds the exact bytes after hashing',async()=>{
+ const {host,files,events,useB}=editExportFixture();
+ const status={refused:(error:string)=>events.push(`refused: ${error}`),complete:()=>events.push('complete')};
+ await chestExports.exportChest({ok:false,error:'CHEST_REGIONS_GENERATOR_MISSING'},{...host,...status});
+ expect(events.splice(0)).toEqual(['refused: CHEST_REGIONS_GENERATOR_MISSING']);
+ const document=buildChestRegions({
+  crop:{w:100,h:100},generator:'https://example.test/generator',contour:{tolerance:2,margin:2,spacing:10,bridges:false},
+  regions:[{name:'bust_r',bone:'chest',center:[30,40],semiAxes:[8,8],spacing:10,band:4}],
+ });
+ const raw=serializeChestRegions(document);
+ const pending=chestExports.exportChest({ok:true,document,text:raw},{...host,...status});
+ expect(events).toEqual([]);
+ useB({available:true,crop:{w:100,h:100},basis:'setup B',toWorld:(x,y)=>({x,y})});
+ await pending;
+ expect(events).toEqual(['source','chest-regions.json','chest-regions.binding.json','complete']);
+ expect(files[0]).toEqual({name:'chest-regions.json',text:raw,mime:'application/json'});
+ expect(files[1]?.mime).toBe('application/json');
+ expect(files[1]?.text.endsWith('\n')).toBe(true);
+ expect(JSON.parse(files[1]!.text)).toMatchObject({
+  schema:'rig-review-chest-regions-binding/1',file:{name:'chest-regions.json',sha256:createHash('sha256').update(raw).digest('hex')},
+  package:'package-b',model:'model-b',motion:'motion-b',mapping:'setup B',tools:{viewerVersion:'3',runtimeVersion:'4'},
+ });
+});
+
+test('#1285 slice 4: mesh export binds the serialized delta and reports its op count after both downloads',async()=>{
+ const {host,files,events,useB}=editExportFixture();
+ const session=new MeshEditSession({slot:'topwear',skin:'default',attachment:'shirt',hash:'attachment-hash',vertices:[[0,0],[10,0],[0,10]],triangles:[0,1,2],hull:3});
+ const doc=meshEditDocument(session);
+ doc.ops.push({op:'move',id:0,from:[0,0],to:[1,1]});
+ const raw=meshEditText(doc);
+ const pending=meshExports.exportMesh(doc,{...host,complete:count=>events.push(`complete: ${count}`)});
+ expect(events).toEqual([]);
+ useB({available:false,reason:'mapping B unavailable'});
+ await pending;
+ expect(events).toEqual(['source','mesh-edit.json','mesh-edit.binding.json','complete: 1']);
+ expect(files[0]).toEqual({name:'mesh-edit.json',text:raw,mime:'application/json'});
+ expect(files[1]?.mime).toBe('application/json');
+ expect(files[1]?.text.endsWith('\n')).toBe(true);
+ expect(JSON.parse(files[1]!.text)).toMatchObject({
+  schema:'rig-review-mesh-edit-binding/1',file:{name:'mesh-edit.json',sha256:createHash('sha256').update(raw).digest('hex')},
+  package:'package-b',model:'model-b',motion:'motion-b',mapping:'mapping B unavailable',tools:{viewerVersion:'3',runtimeVersion:'4'},
+  attachment:{slot:'topwear',skin:'default',name:'shirt',sha256:'attachment-hash'},
+ });
+});
 
 test('#1285 slice 3: landmark markers use the supplied mapping and retain apex guides',()=>{
  const values:Record<string,string>={

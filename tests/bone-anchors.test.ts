@@ -6,13 +6,45 @@ import {tmpdir} from 'node:os';
 import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
-import {applyConfigPatch,assertOpNames,CONFIG_PATCH_SCHEMA,jsonDiff,type ConfigPatch,type JsonValue} from '../src/config-patch.ts';
+import {applyConfigPatch,assertOpNames,CONFIG_PATCH_SCHEMA,jsonDiff,type ConfigPatch,type JsonValue,type PatchOp} from '../src/config-patch.ts';
 import {anchorAt,boneAnchors,boneOps,bonesApplyEnabled,compareOrigins,configBones,dragAnchor,draftEdits,draftText,movedRows,proposeLines,setAnchor,type BoneEdit} from '../src/bone-anchors.ts';
 import {BONES_SOURCE_UNAVAILABLE,type BonesCheckResult} from '../src/bones-check.ts';
 import {cropWorldMapping} from '../src/chest-regions.ts';
 import {canvasToCrop} from '../web/chest-editor.ts';
-import {hitAnchor,anchorLines} from '../web/bones-panel.ts';
+import * as bonesPanel from '../web/bones-panel.ts';
 import {patchOutcomeLine,type PatchJobView} from '../web/rebuild-client.ts';
+
+const {hitAnchor,anchorLines}=bonesPanel;
+
+test('#1285 slice 4: Bones Check posts the exact handoff hash and returns either refusal form verbatim',async()=>{
+ const ops:PatchOp[]=[{op:'replace',path:'/bones/0/at',value:[1,2]}],configHash='c'.repeat(64);
+ const status={inputs:{config:'config.json',parts:null,rig:null,configHash},reason:null};
+ const refusal={status:'refused',error:'BONES_SOURCE_UNAVAILABLE: the source painting is missing'} as const;
+ const post={method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ops,configHash})};
+ const calls:[string,RequestInit|undefined][]=[];
+ const host={
+  async api<T>(path:string,init?:RequestInit):Promise<T>{
+   expect(this).toBe(host);
+   calls.push([path,init]);
+   return refusal as T;
+  },
+ };
+ const rig={path:'/api/bones-check',api:host.api.bind(host)};
+ expect(await bonesPanel.requestBonesCheck(ops,null,rig)).toEqual({status:'refused',error:'REBUILD_STATUS_UNAVAILABLE'});
+ expect(await bonesPanel.requestBonesCheck(ops,{inputs:null,reason:'handoff unavailable'},rig)).toEqual({status:'refused',error:'handoff unavailable'});
+ expect(calls).toEqual([]);
+ expect(await bonesPanel.requestBonesCheck(ops,status,rig)).toBe(refusal);
+ const compare={path:'/api/compare/b/bones-check',api:host.api.bind(host)};
+ expect(await bonesPanel.requestBonesCheck(ops,status,compare)).toBe(refusal);
+ expect(calls).toEqual([[rig.path,post],[compare.path,post]]);
+ for(const [failure,error] of [
+  [new Error('400: {"error":"BONES_INVALID: verbatim"}'),'BONES_INVALID: verbatim'],
+  ['403: plain text','plain text'],
+ ] as const){
+  const api=async()=>{throw failure;};
+  expect(await bonesPanel.requestBonesCheck(ops,status,{...rig,api})).toEqual({status:'refused',error});
+ }
+});
 
 /** The real config's `bones` shapes: single bones (one with a tip), a chain with integer points and one with decimals. */
 const bones=[

@@ -10,7 +10,59 @@ import {freshSession} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
 import {KIND_FIELDS,parseRequirementsContext,readRequirements,rowOf,REQUIREMENT_KINDS,REQUIREMENTS_CONTEXT_SCHEMA,requirementEntry,requirementsDocument,requirementsFileText,worstFrame,type Requirement} from '../src/requirements.ts';
 import type {RequirementsJob} from '../src/requirements-run.ts';
-import {defaultTargetBone,kindUnavailable,readyCatalog,requirementName,selfTargetRefusal} from '../web/requirements-panel.ts';
+import * as requirementsPanel from '../web/requirements-panel.ts';
+
+const {defaultTargetBone,kindUnavailable,readyCatalog,requirementName,selfTargetRefusal}=requirementsPanel;
+
+test('#1285 slice 4: Requirements Check posts, polls at 800 ms and refreshes on every outcome',async()=>{
+ const body={fps:12,build:'scratch' as const,requirements:[{name:'AIM_CHEST',kind:'aim'}]};
+ const post={method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)};
+ const terminal:requirementsPanel.RequirementsJobView={
+  id:'job',status:'checked',build:'scratch',buildId:'scratch',file:{sha256:'a'.repeat(64),size:2,text:'{}'},
+  producer:{package:'@rig-c/parts',version:'2.61.0'},exitCode:0,wallMs:1,rows:[],summary:'checked',
+  checkLine:null,refusals:[],problems:[],error:null,lines:[],
+ };
+ const calls:unknown[]=[];
+ const opts={
+  path:'/api/compare/a/requirements',
+  sleep:async(ms:number)=>{calls.push(['sleep',ms]);},
+  refresh:()=>{calls.push('refresh');return new Promise<void>(()=>{});},
+ };
+ const host={
+  async api<T>(path:string,init?:RequestInit):Promise<T>{
+   expect(this).toBe(host);
+   calls.push([path,init]);
+   if(init)return {...terminal,status:'running'} as T;
+   if(calls.length===3)return {...terminal,id:'next-job',status:'running'} as T;
+   return terminal as T;
+  },
+ };
+ expect(await requirementsPanel.runRequirementsRequest(body,{...opts,api:host.api.bind(host)})).toBe(terminal);
+ expect(calls.splice(0)).toEqual([
+  [opts.path,post],['sleep',800],[`${opts.path}/job`,undefined],['sleep',800],[`${opts.path}/next-job`,undefined],'refresh',
+ ]);
+ const direct={status:'refused',error:'REQUIREMENTS_UNAVAILABLE: no rig spec'} as const;
+ const rig='/api/requirements';
+ const refusedApi=async<T>(path:string,init?:RequestInit)=>{
+  calls.push([path,init]);return direct as T;
+ };
+ expect(await requirementsPanel.runRequirementsRequest(body,{...opts,path:rig,api:refusedApi})).toBe(direct);
+ expect(calls.splice(0)).toEqual([[rig,post],'refresh']);
+ const brokenPoll=async<T>(path:string,init?:RequestInit)=>{
+  calls.push([path,init]);
+  if(init)return {...terminal,status:'running'} as T;
+  throw new Error('409: {"error":"REQUIREMENTS_BUILD_MISSING: exact line"}');
+ };
+ expect(await requirementsPanel.runRequirementsRequest(body,{...opts,path:rig,api:brokenPoll}))
+  .toEqual({status:'refused',error:'REQUIREMENTS_BUILD_MISSING: exact line'});
+ expect(calls.splice(0)).toEqual([[rig,post],['sleep',800],[`${rig}/job`,undefined],'refresh']);
+ const brokenPost=async<T>(path:string,init?:RequestInit):Promise<T>=>{
+  calls.push([path,init]);throw '403: Same-origin Origin required';
+ };
+ expect(await requirementsPanel.runRequirementsRequest(body,{...opts,path:rig,api:brokenPost}))
+  .toEqual({status:'refused',error:'Same-origin Origin required'});
+ expect(calls).toEqual([[rig,post],'refresh']);
+});
 
 /**
  * #113. A stand-in `rig-parts check --requirements` that reads the file by the producer reader's own rules, written out

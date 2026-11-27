@@ -4,7 +4,8 @@
  * "Check under this world" rows (each readout bar under the default world beside the same bar under this one).
  */
 import { scheduleSummary, scheduleText, sha256Hex, SCHEDULE_CONTEXT_SCHEMA, windSchedule, ScheduleError, type EnvironmentSchedule, type ScheduleContext, type WindScheduleExport } from '../src/environment-schedule.ts';
-import type { JoltStep, WindModel, WindSnapshot, WindState } from '../src/environment.ts';
+import { dueJolts, environmentFor, type JoltStep, type WindModel, type WindSnapshot, type WindState } from '../src/environment.ts';
+import type { RigPlayer } from '@rig-c/play';
 import type { CheckSummary } from '../src/applied-context.ts';
 import { READOUT_BARS } from '../src/physics-tuning.ts';
 
@@ -13,7 +14,7 @@ export interface StageWorld { wind: WindState; jolts: JoltStep[]; applied: boole
 
 export function bindEnvironmentInputs(
   input: (id: string) => Pick<HTMLInputElement, 'checked' | 'value'>,
-  wind: Pick<WindModel, 'snapshot' | 'state'>,
+  wind: Pick<WindModel, 'snapshot' | 'state' | 'advance' | 'read'>,
   readJolts: () => readonly JoltStep[],
   renderEnvironment: () => void,
 ) {
@@ -38,7 +39,27 @@ export function bindEnvironmentInputs(
     input('wind-gust-duration').value = String(s.gustDuration);
     renderEnvironment();
   }
-  return { environmentApplied, gravityValue, useWorld, stageWorld, syncEnvironmentInputs };
+  /** Called from `tick` right before the fixed playback steps (#346): the gust clock is the stepped time, so a paused player freezes it. */
+  function stepEnvironment(
+    dt: number,
+    readPlayer: () => Pick<RigPlayer, 'moved' | 'environment'> | null | undefined,
+    writeJolts: (pending: JoltStep[]) => void,
+  ): void {
+    if (!readPlayer()) return;
+    wind.advance(dt);
+    const { due, pending } = dueJolts(readJolts(), wind.read().time);
+    writeJolts(pending);
+    // Rig reads its live player for each call; Compare supplies the player it picked for the step.
+    for (const step of due) readPlayer()!.moved({ x: step.x, y: step.y });
+    if (environmentApplied()) readPlayer()!.environment(environmentFor(wind.read(), gravityValue()));
+    renderEnvironment();
+  }
+  return { environmentApplied, gravityValue, useWorld, stageWorld, syncEnvironmentInputs, stepEnvironment };
+}
+
+/** The clip `rig-parts check` poses its idle readings over: `idle` when the rig has one, else the drawn clip. */
+export function checkAnimation(animations: readonly { name: string }[] | undefined, drawnClip: () => string): string {
+  return animations?.some(item => item.name === 'idle') ? 'idle' : drawnClip();
 }
 
 export const ENVIRONMENT_NOT_APPLIED = 'ENVIRONMENT_NOT_APPLIED: the player stands at the runtime start values (wind [1, 0], gravity [0, 1]), which check and render read without --environment; move a control first';

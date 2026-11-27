@@ -34,6 +34,7 @@ import {
   animationOutcomeLine,
   patchAppliedRecord,
   patchOutcomeLine,
+  parseApplied,
   recordFor,
   restoredOutcomeForJob,
   type AnimationJobView,
@@ -42,6 +43,7 @@ import {
   type RebuildStatusView,
   type UndoView,
 } from '../web/rebuild-client.ts';
+import * as rebuildClient from '../web/rebuild-client.ts';
 
 const sha256 = (s: string | Uint8Array) => createHash('sha256').update(s).digest('hex');
 const hex = (c: string) => c.repeat(64);
@@ -233,6 +235,156 @@ const sampleRecords: Record<RebuildPanelKind, { record: unknown; part?: string; 
     expectedSummary: 'Animation set_key_value breath chest',
   },
 };
+
+
+test('#1285 slice 4 shared rebuild reconciles panels in order and reads the live density and stage state', () => {
+  const physics = parseApplied(JSON.stringify(sampleRecords.physics.record))!;
+  const cuts = parseApplied(JSON.stringify(sampleRecords.cuts.record))!;
+  const cloth = parseApplied(JSON.stringify(sampleRecords.cloth.record))!;
+  const stage = { appliedOnStage: physics, readoutStage: cuts, stripPending: null as { index: number } | null };
+  const reads: string[] = [];
+  const meshStatus = { textContent: 'Remeshed topwear: v 40 → v 42' };
+  const physicsStatus = { textContent: 'Applied patch 123' };
+  const doc = {
+    getElementById: (id: string) => (id === 'mesh-status' ? meshStatus : id === 'physics-apply-status' ? physicsStatus : null) as HTMLElement | null,
+    querySelector: () => null,
+  };
+  const panels = {
+    cutsPanel: { applied: () => reads.push('cuts:applied'), status: () => {}, shown: () => reads.push('cuts:shown') },
+    clothPanel: { applied: () => reads.push('cloth:applied'), status: () => {}, shown: () => reads.push('cloth:shown') },
+    physicsPanel: {
+      applied: (ops: readonly PatchOp[] | null) => {
+        expect(ops?.map(op => op.path)).toEqual(['/constraints/0/damping']);
+        reads.push('physics:applied');
+      },
+      status: () => reads.push('physics:status'),
+      readout: () => reads.push('physics:readout'),
+    },
+    bonesPanel: { applied: () => reads.push('bones:applied'), status: () => {} },
+    idlePanel: {
+      applied: (_ops: unknown, check?: string) => reads.push('idle:applied:' + check),
+      status: () => {},
+      readout: () => {},
+    },
+    rigFieldsPanel: { applied: () => reads.push('fields:applied'), status: () => {}, readout: () => {} },
+    animationPanel: {
+      reconcileStageApplied: (...args: unknown[]) => {
+        expect(args).toEqual([null, null]);
+        reads.push('animation:applied');
+      },
+    },
+    meshPanel: {
+      status: (text: string, error: boolean) => {
+        expect([text, error]).toEqual(['', false]);
+        meshStatus.textContent = text;
+        stage.stripPending = { index: 1 };
+        reads.push('mesh:status');
+      },
+      counts: () => reads.push('mesh:counts'),
+      readout: () => reads.push('mesh:readout'),
+    },
+  };
+
+  rebuildClient.renderAppliedBlocks(stage, panels, () => {
+    reads.push('drop');
+    stage.appliedOnStage = cloth;
+  }, null, doc);
+
+  expect(reads).toEqual([
+    'cuts:applied', 'cloth:applied', 'physics:applied', 'bones:applied', 'idle:applied:unavailable',
+    'fields:applied', 'animation:applied', 'mesh:status', 'drop', 'cuts:shown',
+  ]);
+  expect(stage.readoutStage).toBe(cloth);
+
+  reads.length = 0;
+  stage.appliedOnStage = physics;
+  stage.stripPending = null;
+  meshStatus.textContent = 'Remeshed topwear: v 40 → v 42';
+  rebuildClient.renderAppliedBlocks(stage, {
+    ...panels,
+    meshPanel: { ...panels.meshPanel, status: () => reads.push('mesh:status') },
+  }, () => reads.push('drop'), null, doc);
+  expect(reads.slice(-6)).toEqual(['mesh:status', 'mesh:counts', 'mesh:readout', 'drop', 'cuts:shown', 'cloth:shown']);
+  expect(stage.readoutStage).toBe(physics);
+});
+
+test('#1285 slice 4 shared rebuild renders history before reading the Undo state', () => {
+  const events: string[] = [];
+  const applied = parseApplied(JSON.stringify(sampleRecords.physics.record))!;
+  const record: AppliedHistoryView['records'][number] = {
+    id: applied.buildId, kind: 'patch', op: 'rig', what: 'Physics', modelHash: applied.modelHash, kept: true,
+  };
+  const stage = { appliedHistory: null as AppliedHistoryView | null, appliedOnStage: null as typeof applied | null };
+  const section = { hidden: true };
+  const undo = { textContent: '', disabled: false, title: '' };
+  const toggles: [string, boolean][] = [];
+  const list = {
+    ownerDocument: {
+      createElement: () => ({
+        dataset: {}, classList: { toggle: (name: string, on: boolean) => toggles.push([name, on]) }, append: () => {},
+      }),
+    },
+    replaceChildren: () => {
+      events.push('history');
+      stage.appliedOnStage = null;
+    },
+  };
+  const el = <T extends HTMLElement>(id: string): T => {
+    events.push(id);
+    return (id === 'applied-list' ? list : undo) as unknown as T;
+  };
+  const doc = { getElementById: () => section as HTMLElement };
+  rebuildClient.renderApplied(
+    () => {
+      events.push('blocks');
+      stage.appliedHistory = { schema: 'rig-review-applied-history/1', depth: 1, records: [record] };
+      stage.appliedOnStage = applied;
+    },
+    () => { events.push('stage'); return stage; },
+    () => { events.push('busy'); return false; },
+    el, doc,
+  );
+
+  expect(events).toEqual(['blocks', 'stage', 'applied-list', 'history', 'busy', 'applied-undo']);
+  expect(toggles).toEqual([['on-stage', true]]);
+  expect(section.hidden).toBe(false);
+  expect(undo.textContent).toBe('Undo last Apply (1 deep)');
+  expect(undo.disabled).toBe(true);
+  expect(undo.title).toContain('The stage does not show the last Apply');
+});
+
+test('#1285 slice 4 shared rebuild writes applied status and returns the check from the supplied status', () => {
+  const errors: [string, boolean][] = [];
+  const node = { textContent: '', classList: { toggle: (name: string, on: boolean) => errors.push([name, on]) } };
+  rebuildClient.appliedStatus(node as unknown as HTMLElement, 'refused', true);
+  expect(node.textContent).toBe('refused');
+  rebuildClient.appliedStatus(node as unknown as HTMLElement, 'ready');
+  expect(node.textContent).toBe('ready');
+  expect(errors).toEqual([['error', true], ['error', false]]);
+
+  const check = { status: 'running', lines: [], check: null, line: 'checking' } as const;
+  const status = { inspectedCheck: { ...check, lines: [] } };
+  expect(rebuildClient.inspectedCheckView(null)).toBeNull();
+  expect(rebuildClient.inspectedCheckView({})).toBeNull();
+  expect(rebuildClient.inspectedCheckView(status)).toBe(status.inspectedCheck);
+});
+
+test('#1285 slice 4 shared rebuild commits density pending before refresh and leaves the other stage alone', () => {
+  const row = { index: 1 };
+  const a = { stripPending: row as typeof row | null };
+  const b = { stripPending: row as typeof row | null };
+  const refreshed: (typeof row | null)[] = [];
+  const refresh = async () => { refreshed.push(a.stripPending); };
+
+  rebuildClient.stageChanged(a, { kind: 'refused' }, refresh);
+  rebuildClient.stageChanged(a, { kind: 'load', row }, refresh);
+  expect(refreshed).toEqual([]);
+  rebuildClient.stageChanged(a, { kind: 'apply', via: 'animation' }, refresh);
+  rebuildClient.stageChanged(a, { kind: 'undo' }, refresh);
+  expect(refreshed).toEqual([null]);
+  expect(a.stripPending).toBeNull();
+  expect(b.stripPending).toBe(row);
+});
 
 test('#250 condition 1: every panel kind shows a plain-words statement beside its Apply button before the click when another panel is applied, none on initial/same-panel second Apply, no modal, and refuses unknown records by name (with failing control)', () => {
   const indexHtml = (rigWorkspaceMarkup+rigReviewDialogMarkup);

@@ -16,6 +16,7 @@ import {readStoredSetupMesh,setupModel} from '../src/setup-mesh.ts';
 import {
  MESH_EDIT_CODES,MESH_EDIT_NO_MESH,MESH_EDIT_PREVIEW_NOTE,MESH_EDIT_RIG_UNAVAILABLE,MESH_EDIT_SELECT_SLOT,MeshEditSession,affineOf,applyAffine,applyMeshOps,attachmentHashText,draftOps,hitMesh,
  draftKey,invertAffine,meshEditActValue,meshEditDocument,parseMeshDraft,screenDeltaToCrop,verticesInBox,writeMeshDraft,type MeshEditDocument,type MeshEditResult,type MeshOp,type MeshSource,
+ meshEditBinding,meshEditText,
  type MeshEditDraft,type MeshView,type ScreenPoint,type Vec,
 } from '../src/mesh-edit.ts';
 import type {OverlayMeshEdit,OverlayPoint,OverlayProject} from './rig-overlays.ts';
@@ -84,6 +85,25 @@ export function meshEditSource(input:{slot:string|null;model:unknown;pose:(slot:
 /** Apply · Rebuild with an empty delta: nothing is sent. */
 export const MESH_EDIT_NOTHING_PENDING='MESH_EDIT_NOTHING_PENDING: the delta holds no op; nothing is sent';
 export async function sha256Hex(text:string):Promise<string> {return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))].map(b=>b.toString(16).padStart(2,'0')).join('');}
+
+export interface EditExportHost {
+ /** Read original provenance and the screen's setup mapping after the file bytes have been hashed. */
+ source:()=>Pick<Parameters<typeof meshEditBinding>[0],'sourceHash'|'reviewedSource'>&{mapping:CropWorldMapping};
+ download:(name:string,content:string,mime:string)=>void;
+}
+
+/** Setup's mesh edit: the selected slot's actual mesh as a typed delta. A two-file client download; nothing reaches the session or the package. */
+export async function exportMesh(doc:MeshEditDocument,host:EditExportHost&{complete:(opCount:number)=>void}):Promise<void> {
+ const text=meshEditText(doc),digest=await sha256Hex(text);
+ const {sourceHash,reviewedSource,mapping}=host.source();
+ const binding=meshEditBinding({
+  fileSha256:digest,sourceHash,reviewedSource,exportedAt:new Date().toISOString(),mapping:mapping.available?mapping.basis:mapping.reason,
+  attachment:{slot:doc.slot,skin:doc.skin,name:doc.attachment,sha256:doc.source.hash},
+ });
+ host.download('mesh-edit.json',text,'application/json');
+ host.download('mesh-edit.binding.json',JSON.stringify(binding,null,2)+'\n','application/json');
+ host.complete(doc.ops.length);
+}
 
 export interface MeshEditorHost {
  pane:HTMLElement;canvas:HTMLElement;

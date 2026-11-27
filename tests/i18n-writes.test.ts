@@ -200,7 +200,8 @@ test('#448 the real pending row renders passed, failed and unavailable states in
 
 test('#448 Compare renders every applied check in its actual history list',async()=>{
  const compare=await readFile(new URL('../web/compare-picked-tools.ts',import.meta.url),'utf8');
- expect(compare).toContain('renderAppliedHistory(list, h, state.appliedOnStage?.buildId ?? null)');
+ expect(compare).toContain('renderApplied as renderAppliedPanel');
+ expect(compare).toContain('renderAppliedPanel(renderAppliedBlocks, currentState, () => rebuildBusy || !!host.readOnly(), el, document)');
  const base={id:'',kind:'patch',op:'rig',what:'replace /motion/tracks/0/amp',modelHash:'0123456789abcdef',kept:true} as const;
  const check={schema:'rig-review-check-summary/1',pass:true,exitCode:0,line:'check: PASS',bars:{},gate:true} as const;
  const records:AppliedHistoryView['records']=[

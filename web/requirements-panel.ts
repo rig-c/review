@@ -9,14 +9,37 @@
  * reason. Scene targets, stage-point targets, the part exception lists and waivers (`may_fold`) are not written here.
  */
 import {panelNode as node,panelMake as make,labelledControl as labelled} from './view-controls.ts';
-import {KIND_FIELDS,REQUIREMENT_KINDS,REQUIREMENT_NAME,REQUIREMENTS_CONTEXT_SCHEMA,requirementEntry,requirementsDocument,requirementsFileText,type BonePoint,type Requirement,type RequirementKind,type RequirementRow,type RequirementsBuild,type RequirementsContext} from '../src/requirements.ts';
+import {jsonPost,requestRefusalText} from './rebuild-client.ts';
+import {KIND_FIELDS,REQUIREMENT_KINDS,REQUIREMENT_NAME,REQUIREMENTS_CONTEXT_SCHEMA,requirementEntry,requirementsDocument,requirementsFileText,type BonePoint,type Requirement,type RequirementKind,type RequirementRow,type RequirementsBuild,type RequirementsContext,type RequirementsRequest} from '../src/requirements.ts';
 
 export interface RequirementsCatalogView {status:'ready'|'unavailable';reason:string|null;bones:string[];slots:string[];meshes:Record<string,string[]>;slotBones:Record<string,string>;constraints:{name:string;type:'ik'|'transform';bones:string[];drives:string[]}[];animations:{name:string;duration:number|null}[];scratch:string|null}
 export interface RequirementsJobView {id:string;status:'running'|'checked'|'refused'|'failed';build:RequirementsBuild;buildId:string|null;file:{sha256:string;size:number;text:string};producer:{package:string;version:string};exitCode:number|null;wallMs:number|null;rows:RequirementRow[];summary:string|null;checkLine:string|null;refusals:string[];problems:string[];error:string|null;lines:string[]}
 export interface RequirementsRefusal {status:'refused';error:string}
+
+/** Requirements Check (#113): typed requirements to `POST /api/requirements`, then its job until it settles; a refusal is shown verbatim. */
+export async function runRequirementsRequest(body:RequirementsRequest,{
+ path,api,refresh,sleep=ms=>new Promise<void>(resolve=>setTimeout(resolve,ms)),
+}:{
+ path:string;
+ api:<T>(path:string,init?:RequestInit)=>Promise<T>;
+ refresh:()=>void;
+ sleep?:(ms:number)=>Promise<void>;
+}):Promise<RequirementsJobView|RequirementsRefusal> {
+ try{
+  let job=await api<RequirementsJobView|RequirementsRefusal>(path,jsonPost(body));
+  while('id' in job&&job.status==='running'){
+   await sleep(800);
+   job=await api<RequirementsJobView>(`${path}/${job.id}`);
+  }
+  return job;
+ }catch(error){
+  return {status:'refused',error:requestRefusalText(error)};
+ }finally{void refresh();}
+}
+
 export interface RequirementsPanelDeps {
  /** Runs the check of this file text's requirements; the panel shows what comes back. */
- check:(body:{fps:number;build:RequirementsBuild;requirements:Record<string,unknown>[]})=>Promise<RequirementsJobView|RequirementsRefusal|null>;
+ check:(body:RequirementsRequest)=>Promise<RequirementsJobView|RequirementsRefusal|null>;
  seek:(animation:string,frame:number,time:number|null,label:string)=>void;
  /** The drawn animation and the slot picked on the stage. */
  animation:()=>string;slot:()=>string|null;

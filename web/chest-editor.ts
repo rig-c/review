@@ -4,12 +4,13 @@
  * draft, export and binding are the detail block's. Review builds no mesh itself: Apply · Rebuild hands the rows to the
  * host, which sends them to the installed producer (#99); this module never reaches a process or the server.
  */
-import {clampNonOverlapping,CHEST_CIRCLE_LIMITS,type ChestCircle,type CropWorldMapping} from '../src/chest-regions.ts';
+import {chestRegionsBinding,clampNonOverlapping,CHEST_CIRCLE_LIMITS,type ChestCircle,type CropWorldMapping} from '../src/chest-regions.ts';
 import {BUST_DEFAULTS,deriveBust,parseBustSpec,type BustDerivation,type BustLandmarks,type BustSpec,type RigPoint} from '../src/chest-landmarks.ts';
 import type {JobChestLandmarkValue,JobPublishedChestLandmark} from '../src/job-contract.ts';
 import {canonicalJson} from '../src/canonical-json.ts';
-import {chestRowId,type ChestFieldReader,type ChestFieldValue} from './chest-regions-tool.ts';
-import {projectCircle,type OverlayMarker,type OverlayPoint,type OverlayProject} from './rig-overlays.ts';
+import {chestRowId,type ChestEvaluation,type ChestFieldReader,type ChestFieldValue} from './chest-regions-tool.ts';
+import {sha256Hex,type EditExportHost} from './mesh-editor.ts';
+import {projectCircle,type OverlayCircle,type OverlayMarker,type OverlayPoint,type OverlayProject} from './rig-overlays.ts';
 import {textEntryFocused} from './view-controls.ts';
 import {onLanguageChange,setSourceAttribute,setSourceText,t,tr} from './i18n.ts';
 
@@ -144,6 +145,32 @@ export type ChestMode='circles'|'landmarks';
 export const LANDMARKS=[{key:'apex_r',tag:"Right apex (character's right, image left)"},{key:'apex_l',tag:"Left apex (character's left, image right)"},{key:'cleavage',tag:'Cleavage'}] as const;
 export type LandmarkKey=typeof LANDMARKS[number]['key'];
 export const landmarkInputId=(key:LandmarkKey,axis:'x'|'y')=>`lm-${key}-${axis}`;
+/** Circle regions, only while the toggle is on (#345): the editor's circles straight from the fields (handles and labels), or the landmarks' derivation. */
+export function chestCircles(mapping:CropWorldMapping,chestEditor:Pick<ChestEditor,'active'|'mode'|'landmarks'|'flashing'>|null,read:ChestFieldReader):OverlayCircle[]{
+ if(!mapping.available||!chestEditor?.active())return [];
+ const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim();
+ const colors=(row:number,overlap:boolean)=>({
+  stroke:token(overlap?'--rv-bust-overlap':row?'--rv-bust-l':'--rv-bust-r'),
+  fill:token(overlap?'--rv-bust-overlap-fill':row?'--rv-bust-l-fill':'--rv-bust-r-fill'),
+  handle:token('--rv-bust-handle'),ink:token('--rv-bust-ink'),labelBg:token('--rv-bust-label-bg'),flash:token('--rv-bust-flash'),
+ });
+ if(chestEditor.mode()==='landmarks'){
+  // #105: the producer's derivation drawn live; a CONFIG_BUST_CLEARANCE refusal turns both to the overlap colour.
+  const result=chestEditor.landmarks();if(!('derived' in result))return [];
+  const refused=!!result.derived.refusal;
+  return result.derived.regions.filter(r=>r.r>0&&r.band>=0).map((r,row)=>({
+   center:mapping.toWorld(r.cx,r.cy),r:r.r,band:r.band,label:`${r.name} r:${r.r} b:${r.band}`,labelRow:row,handles:false,colors:colors(row,refused),
+  }));
+ }
+ const rows=bustSides.map(({side,row})=>({side,row,circle:rowShape(read,row)})),[r,l]=[rows[0]!.circle,rows[1]!.circle];
+ // As in the example, overlapping cores turn both circles to the overlap colour.
+ const overlap=!!r&&!!l&&r.r+l.r>Math.hypot(l.cx-r.cx,l.cy-r.cy);
+ return rows.flatMap(({side,row,circle})=>circle?[{
+  center:mapping.toWorld(circle.cx,circle.cy),r:circle.r,
+  ...(circle.ry===undefined?{}:{ry:circle.ry}),...(circle.clip===undefined?{}:{clipX:mapping.toWorld(circle.clip,circle.cy).x}),
+  band:circle.band,label:bustLabel(side,circle),labelRow:row,handles:true,flash:chestEditor.flashing(side),colors:colors(row,overlap),
+ }]:[]);
+}
 /** Landmark markers (#105) in Landmarks mode: apexes in the R / L colours, the cleavage with guides to both apexes. */
 export function chestMarkers(mapping:CropWorldMapping,chestEditor:Pick<ChestEditor,'active'|'mode'|'armed'>|null,input:(id:string)=>Pick<HTMLInputElement,'value'>):OverlayMarker[]{
  if(!mapping.available||!chestEditor?.active()||chestEditor.mode()!=='landmarks')return [];
@@ -158,6 +185,19 @@ export function chestMarkers(mapping:CropWorldMapping,chestEditor:Pick<ChestEdit
   const stroke=token(key==='apex_r'?'--rv-bust-r':key==='apex_l'?'--rv-bust-l':'--rv-landmark');
   return [{at:p,tag,active:armed===key,colors:{stroke,fill:stroke,ink:token('--rv-landmark-ink'),labelBg:token('--rv-bust-label-bg')},...(key==='cleavage'?{guideTo:apexes}:{})}];
  });
+}
+
+/** The designation and its binding are a two-file client download. */
+export async function exportChest(value:ChestEvaluation,host:EditExportHost&{refused:(error:string)=>void;complete:()=>void}):Promise<void> {
+ if(!value.ok){host.refused(value.error);return;}
+ const digest=await sha256Hex(value.text);
+ const {sourceHash,reviewedSource,mapping}=host.source();
+ const binding=chestRegionsBinding({
+  fileSha256:digest,sourceHash,reviewedSource,exportedAt:new Date().toISOString(),mapping:mapping.available?mapping.basis:mapping.reason,
+ });
+ host.download('chest-regions.json',value.text,'application/json');
+ host.download('chest-regions.binding.json',JSON.stringify(binding,null,2)+'\n','application/json');
+ host.complete();
 }
 /** Slider ranges; the producer's defaults sit inside them. */
 export const LANDMARK_SLIDERS={alpha:{min:0.05,max:0.95,step:0.01},clearance:{min:0,max:40,step:0.1}} as const;

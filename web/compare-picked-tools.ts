@@ -15,15 +15,15 @@ import { AnimationInspectionPanel, type AnimationSideState } from './animation-i
 import type { AnimationSourceOp } from '../src/animation-ops.ts';
 import { partBounds, type PartExplorer } from './part-selection.ts';
 import { bindInspectorBlocks, activeBlocksUI, restoreActiveBlocksUI, type InspectorBlocks } from './inspector-blocks.ts';
-import { sourceTextContent, tr } from './i18n.ts';
-import { bindChestEditor, canvasToCrop, bustLabel, bustSides, chestField, chestMarkers as readChestMarkers, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, rowShape, type ChestEditor } from './chest-editor.ts';
+import { tr } from './i18n.ts';
+import { bindChestEditor, canvasToCrop, chestField, chestCircles as readChestCircles, exportChest as exportChestFiles, chestMarkers as readChestMarkers, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, type ChestEditor } from './chest-editor.ts';
 import { chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from './chest-regions-tool.ts';
-import { chestRegionsBinding, cropWorldMapping, type CropWorldMapping } from '../src/chest-regions.ts';
-import { bindMeshEditor, meshEditSource, sha256Hex, type MeshEditor } from './mesh-editor.ts';
-import { meshEditBinding, meshEditText, type MeshEditDocument } from '../src/mesh-edit.ts';
+import { cropWorldMapping, type CropWorldMapping } from '../src/chest-regions.ts';
+import { bindMeshEditor, exportMesh as exportMeshFiles, meshEditSource, sha256Hex, type MeshEditor } from './mesh-editor.ts';
+import type { MeshEditDocument } from '../src/mesh-edit.ts';
 import { bindWeightsView, setupPoseMesh, type WeightsView } from './weights-view.ts';
 import { readSetupPose } from './setup-pose.ts';
-import { bindBonesPanel, type BonesPanel, type BonesCheckView } from './bones-panel.ts';
+import { bindBonesPanel, requestBonesCheck, type BonesPanel, type BonesCheckView } from './bones-panel.ts';
 import { bindCutsPanel, type CutsPanel } from './cuts-panel.ts';
 import { bindClothPanel, type ClothPanel } from './cloth-panel.ts';
 import { bindMeshPanel, type MeshPanel } from './mesh-panel.ts';
@@ -36,16 +36,18 @@ import { bindIdlePanel, type BoneSetup, type IdlePanel } from './idle-panel.ts';
 import { IDLE_READOUT_BARS, type LocalChannel } from '../src/idle-tracks.ts';
 import { bindRigFieldsPanel, type RigFieldsPanel } from './rig-fields-panel.ts';
 import { assertRigFieldOps, RIG_FIELDS_READOUT_BARS, TURN_BONE } from '../src/rig-fields.ts';
-import { bindReadingsPanel, type ReadingsJobView, type ReadingsPanel, type ReadingsRefusal } from './readings-panel.ts';
-import { READINGS_SCHEMA, readingSeekTime, worstLine, type ReadingsContext } from '../src/readings.ts';
-import { bindRequirementsPanel, type RequirementsCatalogView, type RequirementsJobView, type RequirementsPanel, type RequirementsRefusal } from './requirements-panel.ts';
+import { bindReadingsPanel, readingsContext as buildReadingsContext, type ReadingsJobView, type ReadingsPanel, type ReadingsRefusal } from './readings-panel.ts';
+import { readingSeekTime, worstLine, type ReadingsContext } from '../src/readings.ts';
+import { bindRequirementsPanel, runRequirementsRequest, type RequirementsCatalogView, type RequirementsJobView, type RequirementsPanel, type RequirementsRefusal } from './requirements-panel.ts';
+import type { RequirementsRequest } from '../src/requirements.ts';
 import { bindRetargetPanel, type PoseMap, type RetargetPanel } from './retarget-panel.ts';
 import type { RetargetFlags } from '../src/retarget.ts';
 import {
-  appliedCheckState, renderAppliedHistory, isPatchJob, recordFor, restoredOutcomeForJob, retargetStage, undoControl,
+  appliedStatus as setAppliedStatus, inspectedCheckView as readInspectedCheck, renderApplied as renderAppliedPanel,
+  renderAppliedBlocks as reconcileAppliedBlocks, isPatchJob, recordFor, retargetStage,
   animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, chestSeed, designatedRegions, handoffText,
   landmarksRequest, noContourReason, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
-  pickBustPart, pickPart, runRebuildApply, runRebuildUndo, runReadingsRequest, seedFields, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
+  pickBustPart, pickPart, runRebuildApply, runRebuildUndo, runReadingsRequest, seedFields, retargetAppliedRecord, retargetOutcomeLine, stageChanged as updateDensityPending,
   type AnimationJobView, type AnimationRequestBody, type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
   type AppliedRecord, type AppliedRetarget, type DeltaRequestBody, type ConfigPatch,
   type PatchJobView, type RebuildRefusal, type RebuildRequestBody, type RebuildStatusView,
@@ -53,14 +55,14 @@ import {
 } from './rebuild-client.ts';
 import { patchRoute } from '../src/retune-route.ts';
 import type { CheckSummary } from '../src/applied-context.ts';
-import { appliedBuildOwner, appliedPanelOps, dropNoticeForPanel, reconcilePanelStatuses, recordBlock, staleReadouts, type RebuildPanelKind } from '../src/applied-blocks.ts';
+import { dropNoticeForPanel, recordBlock, type RebuildPanelKind } from '../src/applied-blocks.ts';
 import { compareSeekStep } from '../src/compare-playhead.ts';
 import { composeAdjust, PhysicsPreview } from './preview.ts';
 import {
-  createWindModel, environmentFor, windReadout, RUNTIME_START_READOUT, joltPacket, dueJolts,
+  createWindModel, environmentFor, windReadout, RUNTIME_START_READOUT, joltPacket,
   loadModelDocument, environmentContext, environmentJson, type JoltStep, type WindSnapshot,
 } from '../src/environment.ts';
-import { bindEnvironmentInputs, environmentCheckRows, restartsWindClock, scheduleContext, worldExport, type ClipMove, type EnvironmentCheckView, type StageWorld, type WorldExport } from './environment-world.ts';
+import { bindEnvironmentInputs, checkAnimation as selectCheckAnimation, environmentCheckRows, restartsWindClock, scheduleContext, worldExport, type ClipMove, type EnvironmentCheckView, type StageWorld, type WorldExport } from './environment-world.ts';
 import type { OverlayCircle, OverlayMarker, OverlayRegion, OverlaySnapshot } from './rig-overlays.ts';
 import type { PatchOp } from '../src/config-patch.ts';
 
@@ -269,7 +271,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   const wind = createWindModel();
   let joltQueue: JoltStep[] = [];
-  const { environmentApplied, gravityValue, useWorld, stageWorld, syncEnvironmentInputs } =
+  const { environmentApplied, gravityValue, useWorld, stageWorld, syncEnvironmentInputs, stepEnvironment: stepWorldEnvironment } =
     bindEnvironmentInputs(input, wind, () => joltQueue, renderEnvironment);
   let environmentNote = '';
   let steppedLive = false;
@@ -645,54 +647,22 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     }));
   }
 
-  function chestCircles(): OverlayCircle[] {
-    const mapping = activeChestMapping();
-    if (!mapping.available || !chestEditor?.active()) return [];
-    const style = getComputedStyle(document.documentElement), token = (name: string) => style.getPropertyValue(name).trim();
-    const colors = (row: number, overlap: boolean) => ({
-      stroke: token(overlap ? '--rv-bust-overlap' : row ? '--rv-bust-l' : '--rv-bust-r'),
-      fill: token(overlap ? '--rv-bust-overlap-fill' : row ? '--rv-bust-l-fill' : '--rv-bust-r-fill'),
-      handle: token('--rv-bust-handle'),
-      ink: token('--rv-bust-ink'),
-      labelBg: token('--rv-bust-label-bg'),
-      flash: token('--rv-bust-flash'),
-    });
-    if (chestEditor?.active() && chestEditor.mode() === 'landmarks') {
-      const read = chestEditor.landmarks();
-      if (!('derived' in read)) return [];
-      const refused = !!read.derived.refusal;
-      return read.derived.regions.filter(r => r.r > 0 && r.band >= 0).map((r, row) => ({
-        center: mapping.toWorld(r.cx, r.cy), r: r.r, band: r.band, label: `${r.name} r:${r.r} b:${r.band}`, labelRow: row, handles: false, colors: colors(row, refused),
-      }));
-    }
-    if (chestEditor?.active()) {
-      const rows = bustSides.map(({ side, row }) => ({ side, row, circle: rowShape(chestField, row) })), [r, l] = [rows[0]!.circle, rows[1]!.circle];
-      const overlap = !!r && !!l && r.r + l.r > Math.hypot(l.cx - r.cx, l.cy - r.cy);
-      return rows.flatMap(({ side, row, circle }) => circle ? [{
-        center: mapping.toWorld(circle.cx, circle.cy), r: circle.r, ...(circle.ry === undefined ? {} : { ry: circle.ry }), ...(circle.clip === undefined ? {} : { clipX: mapping.toWorld(circle.clip, circle.cy).x }), band: circle.band, label: bustLabel(side, circle), labelRow: row, handles: true, flash: chestEditor!.flashing(side), colors: colors(row, overlap),
-      }] : []);
-    }
-    return [];
-  }
+  function chestCircles(): OverlayCircle[] { return readChestCircles(activeChestMapping(), chestEditor, chestField); }
 
   function chestMarkers() { return readChestMarkers(activeChestMapping(), chestEditor, input); }
 
+  function editExportSource() {
+    const sideData = currentSideData(), mapping = currentState().chestMapping;
+    return { sourceHash: sideData.sourceHash, reviewedSource: sideData.reviewedSource, mapping };
+  }
+
   async function exportChest(): Promise<void> {
-    const value = chestEvaluation();
-    if (!value.ok) { host.message(`Chest regions not exported: ${value.error}`, true); return; }
-    const digest = await sha256Hex(value.text);
-    const sideData = currentSideData();
-    const mapping = currentState().chestMapping;
-    const binding = chestRegionsBinding({
-      fileSha256: digest,
-      sourceHash: sideData.sourceHash,
-      reviewedSource: sideData.reviewedSource,
-      exportedAt: new Date().toISOString(),
-      mapping: mapping.available ? mapping.basis : mapping.reason,
+    return exportChestFiles(chestEvaluation(), {
+      source: editExportSource,
+      download: (name, content, mime) => host.download(name, content, mime),
+      refused: error => host.message(`Chest regions not exported: ${error}`, true),
+      complete: () => host.message(`Downloaded chest-regions.json and chest-regions.binding.json for Build ${pickedSide.toUpperCase()}.`),
     });
-    host.download('chest-regions.json', value.text, 'application/json');
-    host.download('chest-regions.binding.json', JSON.stringify(binding, null, 2) + '\n', 'application/json');
-    host.message(`Downloaded chest-regions.json and chest-regions.binding.json for Build ${pickedSide.toUpperCase()}.`);
   }
 
   function meshSource() {
@@ -709,19 +679,11 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   async function exportMesh(doc: MeshEditDocument): Promise<void> {
-    const raw = meshEditText(doc), digest = await sha256Hex(raw);
-    const sideData = currentSideData(), mapping = currentState().chestMapping;
-    const binding = meshEditBinding({
-      fileSha256: digest,
-      sourceHash: sideData.sourceHash,
-      reviewedSource: sideData.reviewedSource,
-      exportedAt: new Date().toISOString(),
-      mapping: mapping.available ? mapping.basis : mapping.reason,
-      attachment: { slot: doc.slot, skin: doc.skin, name: doc.attachment, sha256: doc.source.hash },
+    return exportMeshFiles(doc, {
+      source: editExportSource,
+      download: (name, content, mime) => host.download(name, content, mime),
+      complete: count => host.message(`Downloaded mesh-edit.json (${count} ops) and mesh-edit.binding.json for Build ${pickedSide.toUpperCase()}.`),
     });
-    host.download('mesh-edit.json', raw, 'application/json');
-    host.download('mesh-edit.binding.json', JSON.stringify(binding, null, 2) + '\n', 'application/json');
-    host.message(`Downloaded mesh-edit.json (${doc.ops.length} ops) and mesh-edit.binding.json for Build ${pickedSide.toUpperCase()}.`);
   }
 
   function refreshAnimationInspection(): void {
@@ -810,84 +772,13 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function renderAppliedBlocks(restoredJob: AnyJobView | null = null): void {
-    const state = currentState();
-    const on = appliedPanelOps(state.appliedOnStage);
-    cutsPanel?.applied(on.cuts); clothPanel?.applied(on.cloth);
-    physicsPanel?.applied(on.physics); bonesPanel?.applied(on.bones);
-    const applied = state.appliedOnStage;
-    idlePanel?.applied(on.idle, appliedCheckState(applied && 'check' in applied ? applied.check : null));
-    rigFieldsPanel?.applied(on['rig-fields']);
-    const restored = restoredJob ? restoredOutcomeForJob(restoredJob) : null;
-    animationPanel?.reconcileStageApplied(
-      state.appliedOnStage?.schema === 'rig-review-applied/5' ? state.appliedOnStage : null,
-      restored?.panel === 'animation' ? { text: restored.text, error: restored.error } : null,
-    );
-    const statusText = (id: string) => sourceTextContent(document.getElementById(id));
-    const reconciled = reconcilePanelStatuses(
-      {
-        chest: chestEditor?.noticeText() ?? '',
-        'mesh-edit': meshEditor?.statusNote() ?? '',
-        mesh: statusText('mesh-status'),
-        bones: statusText('bones-status'),
-        'rig-fields': statusText('rig-fields-status'),
-        cuts: statusText('cuts-status'),
-        cloth: statusText('cloth-status'),
-        physics: statusText('physics-apply-status'),
-        idle: statusText('idle-apply-status'),
-        retarget: statusText('retarget-status'),
-        animation: sourceTextContent(document.querySelector('[data-animation-editor-status]')),
-      },
-      state.appliedOnStage,
-      restored,
-    );
-    const owner = appliedBuildOwner(state.appliedOnStage);
-    if (owner?.panel !== 'chest') {
-      if (reconciled.chest !== (chestEditor?.noticeText() ?? '')) chestEditor?.notify(null, false, []);
-    } else if (restored?.panel === 'chest') {
-      chestEditor?.notify(restored.text, restored.error, []);
-    }
-    if (owner?.panel !== 'mesh-edit') {
-      if (reconciled['mesh-edit'] !== (meshEditor?.statusNote() ?? '')) meshEditor?.setStatusNote('', false);
-    } else if (restored?.panel === 'mesh-edit') {
-      meshEditor?.setStatusNote(restored.text, restored.error);
-    }
-    const syncPanelStatus = (panel: RebuildPanelKind, id: string, set: (t: string, e: boolean) => void, clearExtra?: () => void) => {
-      const cur = statusText(id), next = reconciled[panel];
-      if (owner?.panel !== panel) {
-        if (next !== cur) { set('', false); clearExtra?.(); }
-      } else if (restored?.panel === panel) {
-        set(restored.text, restored.error);
-      }
-    };
-    syncPanelStatus('mesh', 'mesh-status', (t, e) => meshPanel?.status(t, e), () => { if (!state.stripPending) { meshPanel?.counts([]); meshPanel?.readout([]); } });
-    syncPanelStatus('bones', 'bones-status', (t, e) => bonesPanel?.status(t, e));
-    syncPanelStatus('rig-fields', 'rig-fields-status', (t, e) => rigFieldsPanel?.status(t, e), () => rigFieldsPanel?.readout([]));
-    syncPanelStatus('cuts', 'cuts-status', (t, e) => cutsPanel?.status(t, e));
-    syncPanelStatus('cloth', 'cloth-status', (t, e) => clothPanel?.status(t, e));
-    syncPanelStatus('physics', 'physics-apply-status', (t, e) => physicsPanel?.status(t, e), () => physicsPanel?.readout([]));
-    syncPanelStatus('idle', 'idle-apply-status', (t, e) => idlePanel?.status(t, e), () => idlePanel?.readout([]));
-    syncPanelStatus('retarget', 'retarget-status', (t, e) => retargetPanel?.status(t, e), () => retargetPanel?.result(null));
-    if (restored?.panel === 'retarget' && restoredJob && (restoredJob as RetargetJobView).kind === 'retarget') {
-      retargetPanel?.result(restoredJob as RetargetJobView);
-    }
-    renderDropNotices();
-    for (const block of staleReadouts(state.readoutStage, state.appliedOnStage)) {
-      (block === 'cuts' ? cutsPanel : clothPanel)?.shown(null);
-    }
-    state.readoutStage = state.appliedOnStage;
+    reconcileAppliedBlocks(currentState(), {
+      chestEditor, meshEditor, meshPanel, bonesPanel, rigFieldsPanel, cutsPanel, clothPanel, physicsPanel, idlePanel, retargetPanel, animationPanel,
+    }, renderDropNotices, restoredJob, document);
   }
 
   function renderApplied(): void {
-    renderAppliedBlocks();
-    const section = document.getElementById('applied-records');
-    if (!section) return;
-    const state = currentState(), h = state.appliedHistory;
-    section.hidden = !h || h.depth === 0;
-    const list = el('applied-list');
-    renderAppliedHistory(list, h, state.appliedOnStage?.buildId ?? null);
-    const control = undoControl(h, state.appliedOnStage?.buildId ?? null, rebuildBusy || !!host.readOnly());
-    const undo = button('applied-undo');
-    undo.textContent = control.label; undo.disabled = !control.enabled; undo.title = control.title;
+    renderAppliedPanel(renderAppliedBlocks, currentState, () => rebuildBusy || !!host.readOnly(), el, document);
   }
 
   async function refreshApplied(side: Side = pickedSide): Promise<void> {
@@ -984,8 +875,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function checkAnimation(side: Side = pickedSide): string {
-    const sideAssets = host.assets[side];
-    return sideAssets?.animations.some(item => item.name === 'idle') ? 'idle' : host.data().animation;
+    return selectCheckAnimation(host.assets[side]?.animations, () => host.data().animation);
   }
 
   function clipDuration(name: string, side: Side = pickedSide): number {
@@ -998,13 +888,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   function stepEnvironment(dt: number): void {
     const player = currentPlayer();
-    if (!player) return;
-    wind.advance(dt);
-    const { due, pending } = dueJolts(joltQueue, wind.read().time);
-    joltQueue = pending;
-    for (const step of due) player.moved({ x: step.x, y: step.y });
-    if (environmentApplied()) player.environment(environmentFor(wind.read(), gravityValue()));
-    renderEnvironment();
+    stepWorldEnvironment(dt, () => player, pending => { joltQueue = pending; });
   }
 
   function applyEnvironment(): void {
@@ -1171,11 +1055,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function stageChanged(side: Side, change: StageChange<NonNullable<SideBuildState['stripPending']>>): void {
-    const state = sides[side];
-    const next = stripPendingAfter(state.stripPending, change);
-    if (next === state.stripPending) return;
-    state.stripPending = next;
-    void refreshDensityStrip(side);
+    updateDensityPending(sides[side], change, () => refreshDensityStrip(side));
   }
 
   async function swapPickedSide(side: Side, modelUrl: string, prefix: string, sha256: string, clipName?: string): Promise<void> {
@@ -1394,7 +1274,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function appliedStatus(msg: string, error = false): void {
-    const node = el('applied-status'); node.textContent = msg; node.classList.toggle('error', error);
+    setAppliedStatus(el('applied-status'), msg, error);
   }
 
   async function undoApply(): Promise<UndoView | null> {
@@ -1448,7 +1328,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function inspectedCheckView(side: Side = pickedSide): InspectedCheckView | null {
-    return sides[side].rebuildStatus?.inspectedCheck ?? null;
+    return readInspectedCheck(sides[side].rebuildStatus);
   }
 
   async function followInspectedCheck(show: () => void, side: Side = pickedSide): Promise<void> {
@@ -1628,9 +1508,9 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   async function checkBones(ops: PatchOp[]): Promise<BonesCheckView> {
     const side = pickedSide, status = sides[side].rebuildStatus ?? await loadRebuildStatus(side);
-    if (!status?.inputs) return { status: 'refused', error: status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE' };
-    try { return await host.api<BonesCheckView>(`${sideApiPrefix(side)}/bones-check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ops, configHash: status.inputs.configHash }) }); }
-    catch (error) { const raw = errorText(error).replace(/^\d+: /, ''); try { return { status: 'refused', error: (JSON.parse(raw) as { error?: string }).error ?? raw }; } catch { return { status: 'refused', error: raw }; } }
+    return requestBonesCheck(ops, status, {
+      api: (path, init) => host.api(path, init), path: `${sideApiPrefix(side)}/bones-check`,
+    });
   }
 
   async function applyBones(ops: PatchOp[]): Promise<PatchJobView | RebuildRefusal | null> {
@@ -1924,22 +1804,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function readingsContext(): ReadingsContext | null {
-    const job = currentState().readingsJob;
-    if (!job) return null;
-    const ticks = (build: 'inspected' | 'scratch') => {
-      const run = job.runs.find(r => r.build === build);
-      return run ? run.results.reduce((n, r) => n + r.frames.length, 0) : null;
-    };
-    return {
-      schema: READINGS_SCHEMA,
-      animation: job.request.animation,
-      requests: job.request.readings,
-      environment: job.request.environment,
-      environmentPassed: job.environment.passed,
-      builds: { inspected: job.runs.find(r => r.build === 'inspected')?.modelHash ?? '', scratch: job.runs.find(r => r.build === 'scratch')?.id ?? null },
-      compiler: job.compiler,
-      ticks: { inspected: ticks('inspected') ?? 0, scratch: ticks('scratch') },
-    };
+    return buildReadingsContext(currentState().readingsJob);
   }
 
   async function meshFolds(): Promise<string[]> {
@@ -1957,18 +1822,12 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     return lines;
   }
 
-  async function runRequirements(body: { fps: number; build: 'inspected' | 'scratch'; requirements: Record<string, unknown>[] }): Promise<RequirementsJobView | RequirementsRefusal | null> {
+  function runRequirements(body: RequirementsRequest): Promise<RequirementsJobView | RequirementsRefusal | null> {
     const side = pickedSide;
-    const unwrap = (error: unknown) => { const raw = errorText(error).replace(/^\d+: /, ''); try { return (JSON.parse(raw) as { error?: string }).error ?? raw; } catch { return raw; } };
-    try {
-      let job = await host.api<RequirementsJobView | RequirementsRefusal>(`${sideApiPrefix(side)}/requirements`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      while ('id' in job && job.status === 'running') {
-        await new Promise(resolve => setTimeout(resolve, 800));
-        job = await host.api<RequirementsJobView>(`${sideApiPrefix(side)}/requirements/${job.id}`);
-      }
-      return job;
-    } catch (error) { return { status: 'refused', error: unwrap(error) }; }
-    finally { void loadRequirements(side); }
+    return runRequirementsRequest(body, {
+      api: (path, init) => host.api(path, init),
+      path: `${sideApiPrefix(side)}/requirements`, refresh: () => loadRequirements(side),
+    });
   }
 
   async function runEnvironmentCheck(): Promise<EnvironmentCheckView | { status: 'refused'; error: string } | null> {
