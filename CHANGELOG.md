@@ -1,5 +1,27 @@
 # Changelog
 
+## 4.24.0
+
+The turn pad now leaves the animation alone until you use it. While you have not touched the pad, the clip drives the dials. When the pointer leaves the viewport, an unheld pad eases back to the clip. Hold still keeps the angle you steered to. A `current` direction publication now takes Create's `rig-create/direction@4`. Compare in the owner workspace uses the same shell as the other owner screens.
+
+**Read before upgrading:**
+
+* **The turn pad no longer overrides an untouched clip.** Earlier versions set every pad axis to 0 on load and wrote it over the clip's keyed values on every frame. Now an untouched pad writes nothing and the clip's keyed turn plays. Moving the pointer over the viewport engages the pad. Leaving the viewport releases an unheld pad back to the clip: smoothing eases the release, and with smoothing off it is immediate. A held pad does not release, and Hold pressed after leaving keeps the last steered angle. In Compare, each pane returns to its own clip.
+* **An absent `turn` now means "the clip drives".** View links, local drafts, bookmarks and comments made while the pad is untouched carry no `turn`. Restoring a view without `turn` hands the dials to the clip. Earlier versions restored it as a held 0. Records that carry `turn` restore exactly as before. Readers that need a pad value must treat a missing `turn` as "no override", not as an error or 0.
+* **A `current` direction publication accepts only `rig-create/direction@4`.** It reads `schema`, `take.duration` (above 0) and `take.loop`. It binds the manifest `model` without comparing it to `rig.model`. On `current` these refuse `JOB_SOURCE_MISMATCH`: any other direction schema (including @1 to @3), a missing or invalid `take`, a declared manifest `scene`, and a direction file over 256 KiB. Numbered selectors (`draft`, `rig`, `post`) are unchanged. `JOB_ERROR_CODES` and the exported types are unchanged.
+
+### Changed
+
+* The turn pad leaves untouched dials to the clip, releases on pointer leave, keeps the steered angle for Hold, and saves no `turn` while untouched (#1287, closes #1283).
+* `current` direction publications read Create's `rig-create/direction@4`. On `current` the direction panel's authored row drops the rig version: "Authored direction · {file} · SHA-256 {hash}" (#1286, closes #1280).
+* Compare in the owner workspace uses the shared owner shell, which carries its header and actions (#1281, refs #655). The owner review shell is one shared component (#1277, refs #655).
+
+### Internal
+
+* Tests write working output under cleaned temporary directories (#1278, closes #1270).
+* A test checks the error-code list in docs/REVIEW_PACKAGE.md against `JOB_ERROR_CODES` (#1279, closes #1273).
+* docs/SCREENS.md records Compare's path to the single entry (#1284, refs #655).
+
 ## 4.23.0
 
 A producer can publish its current output for review without numbering it. The new `current` selector opens the Parts, rig or direction screen for that output. Comments sent on it still reach the producer while the producer keeps writing its project record. The owner workspace now loads the same `main.js` as every other screen.
