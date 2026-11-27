@@ -1,10 +1,11 @@
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
 import {partsIssueSubmission} from './helpers/parts-comments-package.ts';
-import {afterEach, expect, test} from 'bun:test';
+import {afterAll, afterEach, expect, test} from 'bun:test';
 import {createHash} from 'node:crypto';
 import {mkdir, mkdtemp, open, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
+import {tmpdir} from 'node:os';
 import {resolve, join, dirname} from 'node:path';
 import {loadPartsView, readVerdict, saveVerdict, saveVerdictWithReceipt, exportPartsVerdict} from '../src/parts-view.ts';
 import {startPartsServer, type PartsSavedEvent, type PartsServerOptions} from '../src/parts-server.ts';
@@ -12,7 +13,9 @@ import {writePartsPackage} from './helpers/parts-package.ts';
 
 const roots: string[] = [];
 const children = new Set<ChildProcessWithoutNullStreams>();
-const receiptDirectory = resolve('.review-568-result/implementation/continuation-v4/children', `${Date.now()}-${process.pid}`);
+const scratchRoot = await realpath(await mkdtemp(join(tmpdir(), 'review-568-')));
+const receiptDirectory = join(scratchRoot, 'children', `${Date.now()}-${process.pid}`);
+await mkdir(receiptDirectory, {recursive: true});
 let childSequence = 0;
 const input = {status: 'approved', issues: []};
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -23,11 +26,12 @@ afterEach(async () => {
   children.clear();
   for (const root of roots.splice(0)) await rm(root, {recursive: true, force: true});
 });
+afterAll(async () => {
+  await rm(scratchRoot, {recursive: true, force: true});
+});
 async function fixture() {
-  const base = resolve('.review-568-input');
-  await mkdir(base, {recursive: true});
   await mkdir(receiptDirectory, {recursive: true});
-  const root = await mkdtemp(join(await realpath(base), 'provenance-'));
+  const root = await mkdtemp(join(scratchRoot, 'provenance-'));
   roots.push(root);
   await writePartsPackage(root);
   return loadPartsView(root);
@@ -206,7 +210,7 @@ test('#568 --by rejects duplicate, missing, blank, export and correction conflic
     ['--by', 'A', '--part-note', 'part'],
   ];
   for (const args of cases) {
-    const result = await cli([resolve('.review-568-input/does-not-exist'), ...args]);
+    const result = await cli([join(scratchRoot, 'does-not-exist'), ...args]);
     expect({exit: result.exit, stdout: result.stdout}).toEqual({exit: 1, stdout: ''});
     expect(result.stderr).toContain('--by');
     expect(result.stderr).not.toContain('PARTS_VIEW_INPUT_MISSING');
