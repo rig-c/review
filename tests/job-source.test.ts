@@ -54,6 +54,35 @@ const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
 async function fixture(options?: Parameters<typeof jobFixture>[0]) { const f = await jobFixture(options); fixtures.push(f); return f; }
 
+test('#1316 a report must be admitted before publication and is served from the retained seal', async () => {
+  const f = await fixture();
+  const manifestPath = join(f.root, 'out/review.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  const path = 'producer-scene.json';
+  const bytes = '{"spec":"spine-parts-scene-report/1"}\n';
+  const sceneReport = {path, sha256: jobHash(bytes)};
+  await writeFile(manifestPath, JSON.stringify({...manifest, sceneReport}));
+  const missing = await (await f.call(await f.publishRequest())).json();
+  expect(missing).toMatchObject({ok: false, generation: 0, error: {code: 'SCENE_REQUIRED'}});
+
+  const liveReport = join(f.root, 'out', path);
+  await writeFile(liveReport, bytes);
+  const publication = await f.publish();
+  const retained = f.session.retainedSource(publication.publicationId);
+  expect(retained.seals).toContainEqual({path: 'out/' + path, sha256: sceneReport.sha256});
+  await writeFile(liveReport, 'changed after publication');
+  await writeFile(join(retained.snapshotRoot, 'out/undeclared-scene.json'), bytes);
+  const route = retainedPublicationRoutes(f.session);
+  const fetch = (asset: string) => route(f.session.jobId, publication.publicationId, publication.instanceKey,
+    asset, new Request(f.origin + '/' + asset));
+  const metadata = await fetch('api/review');
+  expect((await metadata.json()).manifest.sceneReport).toEqual(sceneReport);
+  const report = await fetch('assets/' + path);
+  expect(report.status).toBe(200);
+  expect(await report.text()).toBe(bytes);
+  expect((await fetch('assets/undeclared-scene.json')).status).toBe(404);
+});
+
 // A synthetic installed producer above each cwd exercises parser discovery, not
 // arbitrary config discovery: the package's own handoff remains authoritative.
 async function cwdProducer(base: string, includeMotion: boolean) {

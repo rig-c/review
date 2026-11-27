@@ -16,6 +16,71 @@ test('path refusal covers literal and encoded traversal and URL schemes',()=>{
 test('manifest names missing checkpoint reference rather than accepting an orphan',()=>{expect(()=>parseManifest({schema:'rig-review/1',id:'x',title:'X',revision:'1',checkpoints:[{id:'bad',title:'Bad',reference:'missing'}]})).toThrow('declared reference id');});
 test('symlink escaping package is refused',async()=>{const f=await fixture();const outside=await mkdtemp(join(tmpdir(),'review-outside-'));dirs.push(outside);await writeFile(join(outside,'art.svg'),'outside');await rm(join(f.root,'source.svg'));await symlink(join(outside,'art.svg'),join(f.root,'source.svg'));await expect(loadReview(f.path)).rejects.toThrow('symlinks may not escape');});
 test('declared missing files are refused',async()=>{const f=await fixture();await rm(join(f.root,'source.svg'));await expect(loadReview(f.path)).rejects.toThrow();});
+
+test('#1316 omission preserves the base package hash and file set', async () => {
+ const p = await loadReview('tests/fixtures/viewport-387/package/review.json', {handoff: false});
+ expect(p.sourceHash).toBe('7e095240763ae30a8a592f2e5ae180b9a0900b1beed89777df89cdb07077f4e4');
+ expect([...p.files].sort()).toEqual(['mesh.png', 'report.json', 'review.json', 'rigid.png', 'skeleton.model.json']);
+ expect(Object.hasOwn(p.manifest, 'sceneReport')).toBe(false);
+});
+
+test('#1316 sceneReport pointer requires a model and a closed literal path/digest pair', async () => {
+ const f = await fixture();
+ const sceneReport = {path: 'scene.json', sha256: 'a'.repeat(64)};
+ expect(() => parseManifest({...f.input, sceneReport})).toThrow('SCENE_CAMERA_MODEL_MISMATCH');
+ for (const bad of [null, [], {path: 'scene.json'}, {...sceneReport, spec: '/1'},
+   {...sceneReport, path: '../scene.json'}, {...sceneReport, path: 'a/%2e%2e/scene.json'},
+   {...sceneReport, sha256: 'A'.repeat(64)}]) {
+   expect(() => parseManifest({...f.input, model: 'skeleton.model.json', sceneReport: bad})).toThrow('SCENE_SOURCE_MISMATCH');
+ }
+});
+
+test.each([
+ ['missing', null, '{}', 'SCENE_REQUIRED'],
+ ['escaping', null, '{}', 'SCENE_SOURCE_MISMATCH'],
+ ['wrong digest before invalid JSON', 'malformed', '{}', 'SCENE_SOURCE_MISMATCH'],
+ ['malformed JSON', 'malformed', 'malformed', 'SCENE_CAMERA_REPORT_INVALID'],
+ ['unknown spec', '{"spec":"spine-parts-scene-report/3"}', '{"spec":"spine-parts-scene-report/3"}', 'SCENE_CAMERA_REPORT_INVALID'],
+ ['keyed /2', '{"spec":"spine-parts-scene-report/2","camera":{}}', '{"spec":"spine-parts-scene-report/2","camera":{}}', 'SCENE_CAMERA_UNAVAILABLE'],
+] as const)('#1316 refuses sceneReport with %s', async (kind, bytes, declaredBytes, code) => {
+ const f = await fixture();
+ const model = 'skeleton.model.json';
+ const path = 'scene.json';
+ const scene = join(f.root, path);
+ await writeFile(join(f.root, model), '{"spec":"rigc-compiled/3","pages":[]}');
+ const sha256 = createHash('sha256').update(declaredBytes).digest('hex');
+ await writeFile(f.path, JSON.stringify({...f.input, model, sceneReport: {path, sha256}}));
+ if (bytes !== null) await writeFile(scene, bytes);
+ if (kind === 'escaping') {
+   const outside = await fixture();
+   await symlink(join(outside.root, 'source.svg'), scene);
+ }
+ await expect(loadReview(f.path)).rejects.toThrow(code);
+});
+
+test('#1316 a declared /1 changes source identity without changing inspection metadata', async () => {
+ const f = await fixture();
+ const model = 'skeleton.model.json';
+ const manifest = {...f.input, model};
+ await writeFile(join(f.root, model), '{"spec":"rigc-compiled/3","pages":[]}');
+ await writeFile(f.path, JSON.stringify(manifest));
+ const base = await loadReview(f.path);
+ const path = 'scene.json';
+ let previousHash = base.sourceHash;
+ for (const bytes of ['{"spec":"spine-parts-scene-report/1"}', '{"spec":"spine-parts-scene-report/1"}\n']) {
+   const sceneReport = {path, sha256: createHash('sha256').update(bytes).digest('hex')};
+   await writeFile(join(f.root, path), bytes);
+   await writeFile(f.path, JSON.stringify({...manifest, sceneReport}));
+   const p = await loadReview(f.path);
+   expect(p.manifest.sceneReport).toEqual(sceneReport);
+   expect([...p.files].sort()).toEqual([...base.files, path].sort());
+   expect(p.sourceHash).not.toBe(previousHash);
+   previousHash = p.sourceHash;
+   expect(p.reviewedSource).toEqual(base.reviewedSource);
+   expect(p.feedbackCatalog).toEqual(base.feedbackCatalog);
+   expect(p.scene).toBeUndefined();
+ }
+});
 test('opening starts pending; explicit state persists separately from source',async()=>{const f=await fixture();const p=await loadReview(f.path);const state=join(f.root,'user-state');const before=await Bun.file(f.path).text();expect((await readSession(p,state)).status).toBe('pending');const session=freshSession(p);session.status='approved';session.checkpoints.shape={outcome:'pass',note:'Contour accepted'};const saved=await saveSession(p,session,state);expect(saved.updatedAt).toBeString();expect((await readSession(p,state)).status).toBe('approved');expect(await Bun.file(f.path).text()).toBe(before);});
 test('asset changes invalidate approval even without revision bump',async()=>{const f=await fixture();const original=await loadReview(f.path);const state=join(f.root,'state');const session=freshSession(original);session.status='approved';await saveSession(original,session,state);await writeFile(join(f.root,'source.svg'),'<svg><!-- changed --></svg>');const changed=await loadReview(f.path);expect(changed.sourceHash).not.toBe(original.sourceHash);expect(sessionFile(changed,state)).not.toBe(sessionFile(original,state));expect((await readSession(changed,state)).status).toBe('pending');await expect(saveSession(changed,session,state)).rejects.toThrow('sourceHash');});
 test('session rejects foreign binding, unknown checkpoint and invalid feedback target',async()=>{const f=await fixture();const p=await loadReview(f.path);const state=join(f.root,'state');await expect(saveSession(p,{...freshSession(p),id:'other'},state)).rejects.toThrow('session.id');await expect(saveSession(p,{...freshSession(p),checkpoints:{unknown:{outcome:'pass',note:''}}},state)).rejects.toThrow('unknown checkpoint');await expect(saveSession(p,{...freshSession(p),feedback:[{id:'x',frameStart:0,frameEnd:1,target:{kind:'command',name:'x'},category:'defect',summary:'x'}]},state)).rejects.toThrow('feedback.target.kind');});
