@@ -172,7 +172,7 @@ try{
   cleanup.push(()=>pkg.stop(true));
   targets.push({screen:'package',url:`http://127.0.0.1:${pkg.port}/`,ready:standaloneReady,widths:[390]});
 
-  // #1230: --picks-dir interview open now renders the INTERVIEW_PICKS_DISABLED refusal; measure the multi-image menu on an option-set record.
+  // #1230: Interview-only open now renders the INTERVIEW_PICKS_DISABLED refusal; measure the multi-image menu on an option-set record.
   const optionSet=await optionSetsJobFixture({count:2,distinctImages:true,subjectless:true});
   cleanup.push(()=>optionSet.close());
   targets.push({screen:'interview',url:optionSet.ownerUrl,

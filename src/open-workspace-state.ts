@@ -87,6 +87,7 @@ export function parseDesignation(value: unknown): WorkspaceDesignation {
     throw workspaceError('WORKSPACE_REQUEST_INVALID');
   }
   const strings = ['input', 'compare', 'reference', 'animation', 'config', 'parts', 'source', 'full', 'head', 'keypoints'];
+  let parsedInputs = inputs;
   for (const [key, item] of Object.entries(inputs)) {
     if (strings.includes(key)) {
       if (typeof item !== 'string' || !item || item.length > 4096) throw workspaceError('WORKSPACE_REQUEST_INVALID');
@@ -101,11 +102,16 @@ export function parseDesignation(value: unknown): WorkspaceDesignation {
           if (!Number.isSafeInteger(entry) || Number(entry) < 1) throw workspaceError('WORKSPACE_REQUEST_INVALID');
         } else throw workspaceError('WORKSPACE_REQUEST_INVALID');
       }
-      if (typeof project.root !== 'string' || typeof project.picksDir !== 'string') throw workspaceError('WORKSPACE_REQUEST_INVALID');
+      if (typeof project.root !== 'string') throw workspaceError('WORKSPACE_REQUEST_INVALID');
+      if (Object.hasOwn(project, 'picksDir')) {
+        // Accept the legacy field on read and keep it out of canonical inputs.
+        const {picksDir: _legacyPicksDir, ...designation} = project;
+        parsedInputs = {...inputs, project: designation};
+      }
     } else throw workspaceError('WORKSPACE_REQUEST_INVALID');
   }
   if (typeof inputs.input !== 'string' || !isAbsolute(inputs.input)) throw workspaceError('WORKSPACE_REQUEST_INVALID');
-  return row as unknown as WorkspaceDesignation;
+  return {...row, inputs: parsedInputs} as unknown as WorkspaceDesignation;
 }
 
 export function parseRegistry(value: unknown): WorkspaceRegistry {
@@ -113,13 +119,14 @@ export function parseRegistry(value: unknown): WorkspaceRegistry {
   if (row.schema !== WORKSPACE_TARGETS_SCHEMA || typeof row.incarnation !== 'string' || !Array.isArray(row.targets) ||
       row.targets.length > WORKSPACE_TARGET_LIMIT) throw workspaceError('WORKSPACE_STATE_INVALID');
   const seen = new Set<string>();
-  for (const entry of row.targets) {
+  const targets = Array.from(row.targets, entry => {
     const target = object(entry), designation = parseDesignation(target.designation);
     if (seen.has(designation.key) || target.controlToken !== undefined &&
         (typeof target.controlToken !== 'string' || !/^[a-f0-9-]{36}$/.test(target.controlToken))) throw workspaceError('WORKSPACE_STATE_INVALID');
     seen.add(designation.key);
-  }
-  return row as unknown as WorkspaceRegistry;
+    return {...target, designation};
+  });
+  return {...row, targets} as unknown as WorkspaceRegistry;
 }
 
 export function parseWorkspaceRecord(value: unknown): WorkspaceRecord {

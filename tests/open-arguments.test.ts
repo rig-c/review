@@ -9,7 +9,7 @@ test('single-target open retains existing options and literal option values', ()
     ['out', '--animation', '--help'],
     ['out', '--animation', '--format'],
     ['out', '--config', 'config.json', '--parts', 'parts'],
-    ['out', '--project', 'project', '--project-version', '1', '--picks-dir', 'picks'],
+    ['out', '--project', 'project', '--project-version', '1'],
   ];
   for (const args of cases) expect(parseOpenTargets(args)).toEqual([parseOpenInputs([...args])]);
 });

@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | [`@rig-c/review/job-host`](#managed-owner-host) | Installed Bun entry | Supported import contract. Changes to its public names and signatures require explicit public-contract review. See the [runtime inventory](#named-export-inventory) and [source exports](../src/job-host.ts). | Review #489 |
 | CLI and `@rig-c/review/package.json` | Installed CLI and package metadata subpath | Supported. | Before Review #489 |
-| [Interview-stage project opening](#interview-stage-project-opening) | `rig-review open` with `--project` and `--picks-dir` | CLI flag and `rig-review/interview-picks@1` file readers remain supported for compatibility; the workspace renders the named `INTERVIEW_PICKS_DISABLED` refusal instead of an answer form (#1230). | Review #731 |
+| [Interview-stage project opening](WORKFLOWS.md#open-an-interview-before-a-draft-or-review-package-exists) | `rig-review open <project-root> --project <project-root>` | In 5.0.0 (#1225), `--picks-dir` and the per-question `saved` field in `GET /api/interview` were removed. The workspace renders `INTERVIEW_PICKS_DISABLED`. Stored legacy `picksDir` is accepted and ignored, and new workspace state omits it. Historical `rig-review/interview-picks@1` files remain readable. | Review #731, updated by #1225 |
 | [Package-only job API](REVIEW_PACKAGE.md#live-job-contract) | `rig-review/job-api@2` | Default package-only host contract. | C4 (Review #501) |
 | [Record-and-package job API](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam) | `rig-review/job-api@3` | Additive record mode with its own capability and reuse checks. | Review #588 |
 | [Finalized job acts](#act-and-ask-schemas-currently-accepted) | `rig-review/act@2` through `rig-review/act@10` | Consumers narrow by `schema`. Historical acts retain their original bytes and readers. | C4 (Review #501) and subsequent revisions |
@@ -87,7 +87,7 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | Fresh `checkpoint` asks and acts | #1229 | Declared checkpoint subjects, historical records and acts, and standalone `rig-review-session/1` checkpoint outcomes keep their readers and compatibility types; records show declared pairs without an ask. |
 | Fresh `interview-picks` asks and acts | #1230 | Declared picks subjects, historical acts and `rig-review/interview-picks@1` files keep their readers and compatibility types. |
 | Interview answer form | #1230 | Live job comments (`rig-review/act@10`); option-set pictures stay in the shared main view. |
-| `--picks-dir`'s UI | #1230 | Now the `INTERVIEW_PICKS_DISABLED` refusal on the workspace; CLI and file readers still read `rig-review/interview-picks@1`. |
+| `--picks-dir`, `POST /api/interview/picks`, the `interviewPicksRecord` export and the per-question `saved` field in `GET /api/interview` | #1225 | Project opening uses `--project` without a picks directory. Historical `rig-review/interview-picks@1` files keep their parser. |
 | Historical interview answer display | #1230 | A person can no longer see an old interview answer or its note on a Review screen; agents and the CLI read them byte for byte. |
 | Fresh `review-verdict` and `parts-verdict` asks | #1232 | Fresh asks refuse with `JOB_ASK_INVALID`. Send comments on the displayed publication produces an act@10. |
 | Fresh verdict submissions | #1233 | Stored verdict acts retain their readers and replay behavior. |
@@ -101,7 +101,7 @@ Each entry below was true when it was written. The sections above state what hol
 
 ### Interview-stage project opening
 
-The additional CLI form is:
+The original #731 CLI form was:
 
 ```sh
 rig-review open /path/to/project --project /path/to/project --picks-dir scratch/review-picks
