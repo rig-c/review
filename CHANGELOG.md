@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+* Output from a build on one side no longer appears while the other side is selected, and its result is shown when you return.
+
 ## 4.24.0
 
 The turn pad now leaves the animation alone until you use it. While you have not touched the pad, the clip drives the dials. When the pointer leaves the viewport, an unheld pad eases back to the clip. Hold still keeps the angle you steered to. A `current` direction publication now takes Create's `rig-create/direction@4`. Compare in the owner workspace uses the same shell as the other owner screens.
@@ -12,7 +18,6 @@ The turn pad now leaves the animation alone until you use it. While you have not
 
 ### Changed
 
-* Output from a build on one side no longer appears while the other side is selected, and its result is shown when you return.
 * The turn pad leaves untouched dials to the clip, releases on pointer leave, keeps the steered angle for Hold, and saves no `turn` while untouched (#1287, closes #1283).
 * `current` direction publications read Create's `rig-create/direction@4`. On `current` the direction panel's authored row drops the rig version: "Authored direction · {file} · SHA-256 {hash}" (#1286, closes #1280).
 * Compare in the owner workspace uses the shared owner shell, which carries its header and actions (#1281, refs #655). The owner review shell is one shared component (#1277, refs #655).
