@@ -522,16 +522,14 @@ try {
   const compared = await cli(['open', inputs[0]!, '--compare', inputs[1]!, '--reference', join(inputs[0]!, 'browser-reference.mp4'), '--animation', 'pair-inspect', '--view-only', '--control']);
   ownerURL = new URL(compared.stdout.trim()).href;
   const compareActSelectors = [
-    '#mode-build-picker', '.actions', '#mode-build-picker [data-build-side=a]', '#mode-build-picker [data-build-side=b]',
+    '#mode-build-picker', '.actions:has(#submit)', '#mode-build-picker [data-build-side=a]', '#mode-build-picker [data-build-side=b]',
     '#picked-build-label', '.actions #save-state', '.actions #export-json', '.actions #export-markdown', '.actions #submit',
   ];
   assert.ok(ownerPageCommand, 'owner page CDP session is available before Compare mounts');
   // Capture the frame's legacy nodes during header assembly, before the shared shell moves them.
   const {identifier: actProbe} = await ownerPageCommand('Page.addScriptToEvaluateOnNewDocument', {
     source: `(()=>{
-      if(window===parent || location.origin!==${JSON.stringify(new URL(ownerURL).origin)} ||
-        !location.pathname.startsWith('/instances/') || !new URLSearchParams(location.search).has('workspace') ||
-        window.frameElement?.dataset.workspaceLocale!=='legacy-compare')return;
+      if(window===parent)return;
       const append=Element.prototype.append;
       Element.prototype.append=function(...nodes){
         const result=Reflect.apply(append,this,nodes);
@@ -619,17 +617,20 @@ try {
   })()`);
   const compareActsIntact = `(()=>{
     const row=document.querySelector('#workspace-act-row'),saved=window.__ownerCompareOriginalActs;
-    return !!row && saved?.document===document && saved.header===document.querySelector('header') &&
-      saved.header.nextElementSibling===row && row.children.length===2 &&
-      row.firstElementChild===saved.nodes[0] && row.lastElementChild===saved.nodes[1] &&
-      ${JSON.stringify(compareActSelectors)}.every((selector,index)=>{
+    if(!saved)return ['original Compare act carriers were not observed'];
+    const issues=[];
+    if(!row || saved.document!==document || saved.header!==document.querySelector('header') ||
+      saved.header.nextElementSibling!==row || row.children.length!==2 ||
+      row.firstElementChild!==saved.nodes[0] || row.lastElementChild!==saved.nodes[1])issues.push('act row placement');
+    for(const [index,selector] of ${JSON.stringify(compareActSelectors)}.entries()){
         const matches=document.querySelectorAll(selector),node=matches[0];
-        return matches.length===1 && row.contains(node) && node.ownerDocument===document &&
+        if(!(matches.length===1 && row?.contains(node) && node.ownerDocument===document &&
           node===saved.nodes[index] && node.onclick===saved.handlers[index] &&
-          (node.tagName!=='BUTTON' || typeof node.onclick==='function');
-      });
+          (node.tagName!=='BUTTON' || typeof node.onclick==='function')))issues.push(selector);
+    }
+    return issues;
   })()`;
-  assert.ok(await inside(0, compareActsIntact), 'Compare act row holds the original carriers and live frame handlers');
+  assert.deepEqual(await inside(0, compareActsIntact), [], 'Compare act row holds the original carriers and live frame handlers');
   assert.ok(await inside(0, `document.querySelector('#mode-build-picker').hidden &&
     ['#save-state','#export-json','#export-markdown','#submit'].every(selector=>
       document.querySelector('#workspace-act-row '+selector).getClientRects().length>0)`), 'Compare shows the three acts and draft state');
@@ -735,7 +736,7 @@ try {
       'inner Compare picker updates the owner and retained rig in ' + locale);
   }
   if (compareSettingsCollapsed) await clickInside(0, '#settings-toggle');
-  assert.ok(await inside(0, compareActsIntact), 'Compare act nodes and handlers survive mode, locale, and target changes');
+  assert.deepEqual(await inside(0, compareActsIntact), [], 'Compare act nodes and handlers survive mode, locale, and target changes');
   await record('compare-language-agreement', {outerPicker: true, innerPicker: true, settingsRefresh: true, retainedRig: true});
   assert.deepEqual(await Promise.all(inputs.map(jobInputHashes)), before);
   await record('input-immutability', {unchanged: true, targets: inputs.length});
