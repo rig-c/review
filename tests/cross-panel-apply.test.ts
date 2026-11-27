@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1154,22 +1154,33 @@ async function settleJob<T extends { id: string; status: string }>(
   return current;
 }
 
-test('#250 conditions 3 and 4: both measured orders (Physics ↔ Bones and Physics ↔ Animation), exported feedback record + built rig/motion values in the same test, Undo (#166) across Applies, package immutability, and Compare mode per side (with failing controls)', async () => {
-  const { root, state, makePackage } = createHermeticWorkspace();
-  const pkgA = makePackage('pkg-a');
-  const pkgB = makePackage('pkg-b');
-  const refVideo = join(root, 'ref.mp4');
-  writeFileSync(refVideo, 'fake-mp4-reference-bytes');
+describe('#250 standalone mode', () => {
+  let root: string;
+  let state: string;
+  let pkgA: string;
+  let beforeHashA: string;
+  let loadedSingle: Awaited<ReturnType<typeof loadReview>>;
+  let singleServer: Awaited<ReturnType<typeof startServer>> | undefined;
+  let singleBase: string;
+  let status: RebuildStatusView;
 
-  const beforeHashA = treeSha256(pkgA);
-  const beforeHashB = treeSha256(pkgB);
+  beforeAll(async () => {
+    const workspace = createHermeticWorkspace();
+    ({ root, state } = workspace);
+    pkgA = workspace.makePackage('pkg-a');
+    beforeHashA = treeSha256(pkgA);
+    loadedSingle = await loadReview(pkgA);
+    singleServer = await startServer(loadedSingle, { port: 0, stateDir: state, cwd: root });
+    singleBase = `http://127.0.0.1:${singleServer.port}`;
+    status = await waitBaseline(singleBase);
+  });
 
-  const loadedSingle = await loadReview(pkgA);
-  const singleServer = await startServer(loadedSingle, { port: 0, stateDir: state, cwd: root });
-  const singleBase = `http://127.0.0.1:${singleServer.port}`;
+  afterAll(async () => {
+    await singleServer?.stop(true);
+    if (root) rmSync(root, { recursive: true, force: true });
+  });
 
-  try {
-    const status = await waitBaseline(singleBase);
+  test('#250 conditions 3 and 4: both measured orders (Physics ↔ Bones and Physics ↔ Animation), exported feedback record + built rig/motion values in the same test, Undo (#166) across Applies, and package immutability (with failing controls)', async () => {
     expect(status.baseline?.status).toBe('reproduced');
     const configHash = status.inputs!.configHash;
     const animHash = status.animations!.sha256!;
@@ -1489,17 +1500,45 @@ test('#250 conditions 3 and 4: both measured orders (Physics ↔ Bones and Physi
       expect(dropNoticeForPanel(null, panel, { handoff: status })).toBe('');
     }
     expect(treeSha256(pkgA)).toBe(beforeHashA);
-  } finally {
-    await singleServer.stop(true);
-  }
+  });
+});
 
-  // ---- Compare mode per-side verification (Side A and Side B) -------------------------------------------------------
-  const loadedCompare = await loadCompare({ a: pkgA, b: pkgB, reference: refVideo, animation: 'idle' });
-  const compareServer = await startCompareServer(loadedCompare, { port: 0, stateDir: state, cwd: root });
-  const compareBase = `http://127.0.0.1:${compareServer.port}`;
-  try {
-    const statusA = await waitBaseline(compareBase, '/api/compare/a/rebuild');
-    const statusB = await waitBaseline(compareBase, '/api/compare/b/rebuild');
+describe('#250 Compare mode', () => {
+  let root: string;
+  let state: string;
+  let pkgA: string;
+  let pkgB: string;
+  let beforeHashA: string;
+  let beforeHashB: string;
+  let loadedCompare: Awaited<ReturnType<typeof loadCompare>>;
+  let compareServer: Awaited<ReturnType<typeof startCompareServer>> | undefined;
+  let compareBase: string;
+  let statusA: RebuildStatusView;
+  let statusB: RebuildStatusView;
+
+  beforeAll(async () => {
+    const workspace = createHermeticWorkspace();
+    ({ root, state } = workspace);
+    pkgA = workspace.makePackage('pkg-a');
+    pkgB = workspace.makePackage('pkg-b');
+    const refVideo = join(root, 'ref.mp4');
+    writeFileSync(refVideo, 'fake-mp4-reference-bytes');
+    beforeHashA = treeSha256(pkgA);
+    beforeHashB = treeSha256(pkgB);
+
+    loadedCompare = await loadCompare({ a: pkgA, b: pkgB, reference: refVideo, animation: 'idle' });
+    compareServer = await startCompareServer(loadedCompare, { port: 0, stateDir: state, cwd: root });
+    compareBase = `http://127.0.0.1:${compareServer.port}`;
+    statusA = await waitBaseline(compareBase, '/api/compare/a/rebuild');
+    statusB = await waitBaseline(compareBase, '/api/compare/b/rebuild');
+  });
+
+  afterAll(async () => {
+    await compareServer?.stop(true);
+    if (root) rmSync(root, { recursive: true, force: true });
+  });
+
+  test.each(['a', 'b'] as const)('#250 conditions 3 and 4: Compare Apply and Undo on side %s and package immutability', async (side) => {
     expect(statusA.baseline?.status).toBe('reproduced');
     expect(statusB.baseline?.status).toBe('reproduced');
 
@@ -1510,82 +1549,76 @@ test('#250 conditions 3 and 4: both measured orders (Physics ↔ Bones and Physi
         body: JSON.stringify(body),
       });
 
-    for (const [side, sideStatus, sideSourceHash] of [
-      ['a', statusA, loadedCompare.a.sourceHash],
-      ['b', statusB, loadedCompare.b.sourceHash],
-    ] as const) {
-      const cfgHash = sideStatus.inputs!.configHash;
-      const physicsPatch: ConfigPatch = {
-        schema: CONFIG_PATCH_SCHEMA,
-        config_sha256: cfgHash,
-        ops: [{ op: 'replace', path: '/constraints/0/damping', value: 0.5, name: 'hairback_r0_phys' }],
-        producer: { name: '@rig-c/parts', version: '2.0.0' },
-        op: { cmd: 'rig', args: [] },
-      };
-      const bonesPatch: ConfigPatch = {
-        schema: CONFIG_PATCH_SCHEMA,
-        config_sha256: cfgHash,
-        ops: [{ op: 'replace', path: '/bones/0/at', value: [416, 424], name: 'hip' }],
-        producer: { name: '@rig-c/parts', version: '2.0.0' },
-        op: { cmd: 'rig', args: [] },
-      };
+    const sideStatus = side === 'a' ? statusA : statusB;
+    const sideSourceHash = loadedCompare[side].sourceHash;
+    const cfgHash = sideStatus.inputs!.configHash;
+    const physicsPatch: ConfigPatch = {
+      schema: CONFIG_PATCH_SCHEMA,
+      config_sha256: cfgHash,
+      ops: [{ op: 'replace', path: '/constraints/0/damping', value: 0.5, name: 'hairback_r0_phys' }],
+      producer: { name: '@rig-c/parts', version: '2.0.0' },
+      op: { cmd: 'rig', args: [] },
+    };
+    const bonesPatch: ConfigPatch = {
+      schema: CONFIG_PATCH_SCHEMA,
+      config_sha256: cfgHash,
+      ops: [{ op: 'replace', path: '/bones/0/at', value: [416, 424], name: 'hip' }],
+      producer: { name: '@rig-c/parts', version: '2.0.0' },
+      op: { cmd: 'rig', args: [] },
+    };
 
-      // 1. Apply Physics on `side`.
-      const job1 = await settleJob(
-        compareBase,
-        (await (await postSide(side, '/rebuild', { patch: physicsPatch })).json()) as PatchJobView,
-        `/api/compare/${side}/rebuild`,
-      );
-      expect(job1.status).toBe('built');
-      const rec1 = patchAppliedRecord(job1);
-      expect(dropNoticeForPanel(rec1, 'bones', { handoff: sideStatus })).toBe(
-        'This rebuild starts from the handoff and drops: Physics damping 0.85 → 0.5',
-      );
+    // 1. Apply Physics on `side`.
+    const job1 = await settleJob(
+      compareBase,
+      (await (await postSide(side, '/rebuild', { patch: physicsPatch })).json()) as PatchJobView,
+      `/api/compare/${side}/rebuild`,
+    );
+    expect(job1.status).toBe('built');
+    const rec1 = patchAppliedRecord(job1);
+    expect(dropNoticeForPanel(rec1, 'bones', { handoff: sideStatus })).toBe(
+      'This rebuild starts from the handoff and drops: Physics damping 0.85 → 0.5',
+    );
 
-      // 2. Apply Bones on `side` (supersedes Physics on `side`).
-      const job2 = await settleJob(
-        compareBase,
-        (await (await postSide(side, '/rebuild', { patch: bonesPatch })).json()) as PatchJobView,
-        `/api/compare/${side}/rebuild`,
-      );
-      expect(job2.status).toBe('built');
-      const rec2 = patchAppliedRecord(job2);
-      expect(appliedPanelOps(rec2).physics).toEqual([]);
-      expect(appliedPanelOps(rec2).bones).toEqual(bonesPatch.ops);
-      expect(dropNoticeForPanel(rec2, 'physics', { handoff: sideStatus })).toBe(
-        'This rebuild starts from the handoff and drops: Bones hip at [400, 420] → [416, 424]',
-      );
+    // 2. Apply Bones on `side` (supersedes Physics on `side`).
+    const job2 = await settleJob(
+      compareBase,
+      (await (await postSide(side, '/rebuild', { patch: bonesPatch })).json()) as PatchJobView,
+      `/api/compare/${side}/rebuild`,
+    );
+    expect(job2.status).toBe('built');
+    const rec2 = patchAppliedRecord(job2);
+    expect(appliedPanelOps(rec2).physics).toEqual([]);
+    expect(appliedPanelOps(rec2).bones).toEqual(bonesPatch.ops);
+    expect(dropNoticeForPanel(rec2, 'physics', { handoff: sideStatus })).toBe(
+      'This rebuild starts from the handoff and drops: Bones hip at [400, 420] → [416, 424]',
+    );
 
-      const scratchRig = JSON.parse(
-        readFileSync(join(state, 'rebuild', sideSourceHash, job2.id, 'rig/rig.json'), 'utf8'),
-      ) as {
-        bones: { name: string; x: number; y: number }[];
-        constraints: { name: string; damping: number }[];
-      };
-      expect(scratchRig.constraints[0]!.damping).toBe(0.85);
-      expect(scratchRig.bones.find(b => b.name === 'hip')).toMatchObject({ x: 16, y: 326 });
+    const scratchRig = JSON.parse(
+      readFileSync(join(state, 'rebuild', sideSourceHash, job2.id, 'rig/rig.json'), 'utf8'),
+    ) as {
+      bones: { name: string; x: number; y: number }[];
+      constraints: { name: string; damping: number }[];
+    };
+    expect(scratchRig.constraints[0]!.damping).toBe(0.85);
+    expect(scratchRig.bones.find(b => b.name === 'hip')).toMatchObject({ x: 16, y: 326 });
 
-      // 3. Undo on `side` restores Physics build on `side`.
-      const undone1 = (await (await postSide(side, '/rebuild/undo', { from: job2.id })).json()) as UndoView;
-      expect(undone1.status).toBe('built');
-      if (undone1.status !== 'built') throw new Error('expected built');
-      expect(undone1.job.id).toBe(job1.id);
-      const restored = recordFor(undone1.job);
-      expect(appliedPanelOps(restored).physics).toEqual(physicsPatch.ops);
-      expect(appliedPanelOps(restored).bones).toEqual([]);
-      expect(dropNoticeForPanel(restored, 'bones', { handoff: sideStatus })).toBe(
-        'This rebuild starts from the handoff and drops: Physics damping 0.85 → 0.5',
-      );
+    // 3. Undo on `side` restores Physics build on `side`.
+    const undone1 = (await (await postSide(side, '/rebuild/undo', { from: job2.id })).json()) as UndoView;
+    expect(undone1.status).toBe('built');
+    if (undone1.status !== 'built') throw new Error('expected built');
+    expect(undone1.job.id).toBe(job1.id);
+    const restored = recordFor(undone1.job);
+    expect(appliedPanelOps(restored).physics).toEqual(physicsPatch.ops);
+    expect(appliedPanelOps(restored).bones).toEqual([]);
+    expect(dropNoticeForPanel(restored, 'bones', { handoff: sideStatus })).toBe(
+      'This rebuild starts from the handoff and drops: Physics damping 0.85 → 0.5',
+    );
 
-      // 4. Second Undo on `side` returns to the inspected build.
-      const undone2 = (await (await postSide(side, '/rebuild/undo', { from: job1.id })).json()) as UndoView;
-      expect(undone2.status).toBe('inspected');
-    }
+    // 4. Second Undo on `side` returns to the inspected build.
+    const undone2 = (await (await postSide(side, '/rebuild/undo', { from: job1.id })).json()) as UndoView;
+    expect(undone2.status).toBe('inspected');
 
     expect(treeSha256(pkgA)).toBe(beforeHashA);
     expect(treeSha256(pkgB)).toBe(beforeHashB);
-  } finally {
-    await compareServer.stop(true);
-    rmSync(root, { recursive: true, force: true });
-  }
+  });
 });
