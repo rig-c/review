@@ -105,7 +105,7 @@ async function run(lang: 'en' | 'ko') {
   async function screen(name: string, pendingAct = true) {
     // #1226 owner ruling: with no ask the live rig row stays, with the no-ask line, Send comments and its save state.
     const noAskLine = catalog["We're looking at the work together. Leave your thoughts as comments."];
-    if (!pendingAct) await wait(`document.getElementById('workspace-act-row')?.hidden===false&&document.getElementById('save').hidden&&!document.getElementById('send-comments').hidden&&document.getElementById('workspace-ask-headline').textContent===${JSON.stringify(noAskLine)}`, name + '.act-row-complete');
+    if (!pendingAct) await wait(`document.getElementById('workspace-act-row')?.hidden===false&&!document.getElementById('save')&&!document.getElementById('review-status')&&!document.getElementById('send-comments').hidden&&document.getElementById('workspace-ask-headline').textContent===${JSON.stringify(noAskLine)}`, name + '.act-row-complete');
     const state = await page!.evaluate<{
       language: string; counts: Record<string, number>; title: string; rigHash: string; fullRigHash: string | null; sourceHash: string;
       sendDisabled: boolean; verdictVisible: boolean; actInHeading: boolean; actInRow: boolean; actRowDirect: boolean; actVisible: boolean; actRowHidden: boolean; visibleSaveStates: string[];
@@ -337,7 +337,7 @@ async function run(lang: 'en' | 'ko') {
       await writeFile(join(out, 'comment-row.png'), await page.screenshot());
     }
     // Submit through the shared action row and a trusted pointer.
-    assert.equal(await page.evaluate(`document.getElementById('review-status').hidden`),true);
+    assert.equal(await page.evaluate(`document.getElementById('review-status')===null&&document.getElementById('save')===null`),true);
     if (draft) {
       if (!await page.evaluate<boolean>(`document.querySelector('#stage-comment').getAttribute('aria-pressed') === 'true'`)) {
         await click(page, '#stage-comment');

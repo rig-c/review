@@ -184,22 +184,20 @@ test('Setup holds no control that seeks or plays: the angle tool and panel and e
 });
 const mainSource=()=>readFile(new URL('../web/main.ts',import.meta.url),'utf8');
 /** Static Comments controls that move with the rest of the review dialog. */
-const feedbackIds=['inspector-feedback','review-status','provenance-version','provenance-rig','provenance-motion','provenance-full','source-files','checkpoint-detail','detail-title','detail-note','checkpoint-note','proposal-panel','correction-controls','correction-stage','correction-selector','correction-model','correction-post-fields','comments-list-host','proposal-boundary','feedback-warnings','feedback-applied-check','proposal-list','strip-panel','strip-scope','strip-reference','strip-format','strip-export','strip-status'];
-test('hidden review decision and Submit nodes move once to the act row alongside Send comments',async()=>{
+const feedbackIds=['inspector-feedback','provenance-version','provenance-rig','provenance-motion','provenance-full','source-files','checkpoint-detail','detail-title','detail-note','checkpoint-note','proposal-panel','correction-controls','correction-stage','correction-selector','correction-model','correction-post-fields','comments-list-host','proposal-boundary','feedback-warnings','feedback-applied-check','proposal-list','strip-panel','strip-scope','strip-reference','strip-format','strip-export','strip-status'];
+test('review dialog actions move once to the act row alongside Send comments with no decision select or Submit button',async()=>{
  const html=await indexHtml(),dialog=between(html,'<dialog id="review-dialog"','</dialog>');
  for(const id of feedbackIds){expect(dialog).toContain(` id="${id}"`);expect(html.split(` id="${id}"`).length).toBe(2);}
- for(const id of ['feedback-start','feedback-end','feedback-range-hint','feedback-target-kind','feedback-target-name','feedback-target-names','feedback-target-hint','feedback-category','correction-path','correction-words','add-proposal'])expect(dialog).not.toContain(` id="${id}"`);
- expect(dialog.match(/id="save"/g)?.length).toBe(1);
+ for(const id of ['review-status','save','feedback-start','feedback-end','feedback-range-hint','feedback-target-kind','feedback-target-name','feedback-target-names','feedback-target-hint','feedback-category','correction-path','correction-words','add-proposal'])expect(dialog).not.toContain(` id="${id}"`);
+ expect(dialog).not.toContain('for="review-status"');
  const composition=await readFile(new URL('../web/inspector-blocks.ts',import.meta.url),'utf8');
- expect(composition).toContain("label,status,actions");expect(composition).toContain('bottom.actHome.append(act)');expect(composition).toContain('actHome:actHome??heading');expect(composition).toContain('dialog.remove()');
+ expect(composition).not.toContain('review-status');expect(composition).not.toContain("getElementById('save')");expect(composition).toContain('bottom.actHome.append(act)');expect(composition).toContain('actHome:actHome??heading');expect(composition).toContain('dialog.remove()');
  const main=await mainSource();expect(main).toContain("rigInspector.row.reveal=()=>");expect(main).not.toContain('dialog.showModal()');expect(main).not.toContain("button('write-review')");
  expect(main).toContain("onStatus:value=>{draftStatus=value;renderDraftState();}");expect(main).toContain('rigInspector.actBar.setSaveState(');for(const id of ['review-draft-state','draft-state'])expect(main).not.toMatch(new RegExp(`text\\('${id}'|el\\('${id}'\\)\\.(title|textContent)`));expect(main).toContain("text('review-message', value);");
- for(const gone of ["button('export')","button('export-markdown')","select('review-status').onchange"])expect(main).not.toContain(gone);
+ for(const gone of ["button('export')","button('export-markdown')","select('review-status')","button('save')"])expect(main).not.toContain(gone);
  const answer=main.slice(main.indexOf('function renderAnswerControls('),main.indexOf('/** Navigation alone crosses'));
- expect(answer).toContain('save.hidden=true');
  expect(answer).toContain('sendComments.hidden=');
- expect(main).toContain("select('review-status').value = session.status");
- expect(main).toContain("select('review-status').value=session.status");
+ expect(main).toContain("el('review-draft-recovery').after(sendComments)");
 });
 test('Stage 1 Parts has no hidden verdict handler or verdict route',async()=>{
  const source=await mainSource();
@@ -463,7 +461,7 @@ for(const live of [false,true])test('#840 '+(live?'live row':'standalone heading
   const mounted=mountRigInspector(document as unknown as Document,live?actRow as unknown as HTMLElement:undefined),row=mounted.row,owners=row.tabs.map(tab=>tab.button.id);
   expect(mounted.act.parentElement).toBe(live?actRow as unknown as HTMLElement:mounted.strip.parentElement);
   if(live){
-   const save=document.getElementById('save')!,refusal=document.getElementById('review-message')!;save.hidden=false;
+   const ask=new Host('button'),refusal=document.getElementById('review-message')!;ask.id='workspace-pending-ask';ask.hidden=false;mounted.act.prepend(ask as unknown as HTMLElement);
    mounted.act.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(true);expect(dirtyState.hidden).toBe(false);
    const headline=new Host('span');headline.id='workspace-ask-headline';mounted.act.prepend(headline as unknown as HTMLElement);
    for(const text of ['', '   ']){headline.textContent=text;mounted.syncActRow();expect(actRow.hidden).toBe(true);}
@@ -472,9 +470,9 @@ for(const live of [false,true])test('#840 '+(live?'live row':'standalone heading
    // used to expose the answer that was rendered early during loading.
    refusal.textContent='JOB_VISUAL_UNAVAILABLE';refusal.className='review-message error';refusal.hidden=false;
    mounted.syncActRow();expect(actRow.hidden).toBe(true);
-   save.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(false);expect(dirtyState.hidden).toBe(true);expect(save.hidden).toBe(true);
+   ask.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(false);expect(dirtyState.hidden).toBe(true);expect(ask.hidden).toBe(true);
    refusal.className='review-message';mounted.syncActRow();expect(actRow.hidden).toBe(true);
-   headline.hidden=false;save.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);expect(save.hidden).toBe(false);
+   headline.hidden=false;ask.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);expect(ask.hidden).toBe(false);
   }
   mounted.act.hidden=false;mounted.syncActRow();expect(dirtyState.hidden).toBe(live);expect(draftState.hidden).toBe(live);expect(draftRecovery.hidden).toBe(live);
   mounted.actBar.setSaveState({kind:'saved',text:'Submitted'});expect((live?dirtyState:draftState).textContent).toBe('Submitted');
@@ -550,19 +548,18 @@ test('#674 shared bottom strip keeps rig labels and accessibility text in EN and
 });
 
 
-test('#676 parts-shaped act bar derives its label, shares state nodes and operates the overflow with keyboard focus',()=>{
+test('#676 act bar shares state nodes and operates the overflow menu with localized labels and keyboard focus',()=>{
  const previous=Object.getOwnPropertyDescriptor(globalThis,'document'),oldFocus=hostDocument,preference=getLanguagePreference(),link=getLinkLanguage();
  Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Host(tag)}});hostDocument={activeElement:null};
  let bar:ReturnType<typeof mountActBar>|undefined;
  try{
   setLinkLanguage(null);setLanguagePreference('en');
-  const submit=new Host('button'),saved=new Host('span');saved.textContent='saved';let issues=0,json=0,issue=0;
-  bar=mountActBar({id:'parts-act',submit:submit as unknown as HTMLButtonElement,saveState:saved as unknown as HTMLElement,submitLabel:()=>issues?t('job.partsRequestFixes',[issues]):t('job.partsApprove'),overflow:[{label:'Export JSON',handler:()=>json++},{label:'Export issue',handler:()=>issue++}]});
-  const root=bar.element as unknown as Host,actions=root.children[0]!,button=actions.children[2]!,menu=actions.children[3]!,items=menu.children;
-  expect(actions.children.slice(0,2)).toEqual([saved,submit]);expect(submit.textContent).toBe('Approve parts and sign off');
-  issues=2;bar.refresh();expect(submit.textContent).toBe('Request fixes (2 issues)');
-  setLanguagePreference('ko');expect(submit.textContent).toBe('수정 요청 보내기 (이슈 2)');expect(button.getAttribute('aria-label')).toBe('작업 더 보기');
-  setLanguagePreference('en');expect(menu.hidden).toBe(true);expect(button.getAttribute('aria-haspopup')).toBe('menu');expect(menu.getAttribute('role')).toBe('menu');
+  const saved=new Host('span');saved.textContent=t('Not submitted');let json=0,issue=0;
+  bar=mountActBar({id:'parts-act',saveState:saved as unknown as HTMLElement,overflow:[{label:'Send comments',handler:()=>json++},{label:'Export issue',handler:()=>issue++}]});
+  const root=bar.element as unknown as Host,actions=root.children[0]!,button=actions.children[1]!,menu=actions.children[2]!,items=menu.children;
+  expect(actions.children.slice(0,1)).toEqual([saved]);expect(items[0]!.textContent).toBe('Send comments');
+  setLanguagePreference('ko');expect(items[0]!.textContent).toBe('코멘트 보내기');expect(button.getAttribute('aria-label')).toBe('작업 더 보기');
+  setLanguagePreference('en');expect(items[0]!.textContent).toBe('Send comments');expect(menu.hidden).toBe(true);expect(button.getAttribute('aria-haspopup')).toBe('menu');expect(menu.getAttribute('role')).toBe('menu');
   const key=(node:Host,value:string,target:Host=node)=>{const event=new Event('keydown',{cancelable:true});Object.defineProperties(event,{key:{value},target:{value:target}});node.dispatchEvent(event);return event;};
   expect(key(button,'ArrowDown').defaultPrevented).toBe(true);expect(menu.hidden).toBe(false);expect(hostDocument.activeElement).toBe(items[0]!);
   key(menu,'End',items[0]);expect(hostDocument.activeElement).toBe(items[1]!);
@@ -574,8 +571,8 @@ test('#676 parts-shaped act bar derives its label, shares state nodes and operat
   key(button,'Enter');items[0]!.click();expect(json).toBe(1);expect(menu.hidden).toBe(true);expect(hostDocument.activeElement).toBe(button);
   key(button,' ');items[1]!.click();expect(issue).toBe(1);expect(hostDocument.activeElement).toBe(button);
   key(button,'ArrowUp');expect(hostDocument.activeElement).toBe(items[1]!);menu.dispatchEvent(new Event('focusout'));expect(menu.hidden).toBe(true);
-  expect(saved.textContent).toBe('saved');expect(submit.parentElement).toBe(actions);
-  bar.dispose();button.click();expect(menu.hidden).toBe(true);issues=0;setLanguagePreference('ko');expect(submit.textContent).toBe('Request fixes (2 issues)');
+  expect(saved.textContent).toBe('Not submitted');
+  bar.dispose();button.click();expect(menu.hidden).toBe(true);setLanguagePreference('ko');expect(items[0]!.textContent).toBe('Send comments');
  }finally{bar?.dispose();setLinkLanguage(link);setLanguagePreference(preference);hostDocument=oldFocus;if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });
 
@@ -585,31 +582,31 @@ test('#695 act bar save state: one model renders saved, unsaved, saving, failed 
  let bar:ReturnType<typeof mountActBar>|undefined;
  try{
   setLinkLanguage(null);setLanguagePreference('en');
-  const submit=new Host('button'),state=new Host('span'),footer=new Host('span'),plain=new Host('span');let retried=0;
-  bar=mountActBar({id:'save-act',submit:submit as unknown as HTMLButtonElement,saveState:state as unknown as HTMLElement,saveStateCopies:[{node:footer as unknown as HTMLElement,title:true},{node:plain as unknown as HTMLElement}]});
+  const state=new Host('span'),footer=new Host('span'),plain=new Host('span');let retried=0;
+  bar=mountActBar({id:'save-act',saveState:state as unknown as HTMLElement,saveStateCopies:[{node:footer as unknown as HTMLElement,title:true},{node:plain as unknown as HTMLElement}]});
   const actions=bar.element.children[0] as unknown as Host;
-  expect(bar.saveState()).toBeNull();expect(state.textContent).toBe('');expect(actions.children).toEqual([state,submit]);
+  expect(bar.saveState()).toBeNull();expect(state.textContent).toBe('');expect(actions.children).toEqual([state]);
   const shown=(kind:ActSaveKind,text:string)=>{for(const node of [state,footer,plain]){expect(node.dataset.saveState).toBe(kind);expect(node.textContent).toBe(text);}expect(footer.getAttribute('title')).toBe(text);expect(plain.getAttribute('title')).toBeNull();expect(bar!.saveState()?.kind).toBe(kind);};
-  bar.setSaveState({kind:'unsaved',text:'Unsaved changes.'});shown('unsaved','Unsaved changes.');expect(actions.children).toEqual([state,submit]);
+  bar.setSaveState({kind:'unsaved',text:'Unsaved changes.'});shown('unsaved','Unsaved changes.');expect(actions.children).toEqual([state]);
   bar.setSaveState({kind:'failed',text:'Review was NOT submitted.',title:'JOB_BODY_LIMIT · POST /jobs/x/ui/acts · 9 bytes · HTTP 413'});expect(state.getAttribute('title')).toBe('JOB_BODY_LIMIT · POST /jobs/x/ui/acts · 9 bytes · HTTP 413');expect(footer.getAttribute('title')).toBe('Review was NOT submitted.');
   bar.setSaveState({kind:'unsaved',text:'Unsaved changes.'});expect(state.getAttribute('title')).toBeNull();
   bar.setSaveState({kind:'saving',text:'Restoring source-bound view · inspection controls temporarily paused.'});shown('saving','Restoring source-bound view · inspection controls temporarily paused.');
-  bar.setSaveState({kind:'failed',text:'Save failed.'});shown('failed','Save failed.');expect(actions.children).toEqual([state,submit]);
-  bar.setSaveState({kind:'failed',text:'Save failed.',retry:{label:'Submit review',run:()=>retried++}});shown('failed','Save failed.');
-  const retry=actions.children[1]!;expect(actions.children).toEqual([state,retry,submit]);expect(retry.hidden).toBe(false);expect(retry.textContent).toBe('Submit review');
+  bar.setSaveState({kind:'failed',text:'Save failed.'});shown('failed','Save failed.');expect(actions.children).toEqual([state]);
+  bar.setSaveState({kind:'failed',text:'Save failed.',retry:{label:'Send comments',run:()=>retried++}});shown('failed','Save failed.');
+  const retry=actions.children[1]!;expect(actions.children).toEqual([state,retry]);expect(retry.hidden).toBe(false);expect(retry.textContent).toBe('Send comments');
   retry.click();expect(retried).toBe(1);
   bar.setSaveState({kind:'saved',text:'Local draft discarded · current submitted review retained.'});shown('saved','Local draft discarded · current submitted review retained.');expect(retry.hidden).toBe(true);
   retry.click();expect(retried).toBe(1);
-  bar.setSaveState({kind:'read-only',text:'Read-only view: reopen with rig-review open to edit.',retry:{label:'Submit review',run:()=>retried++}});shown('read-only','Read-only view: reopen with rig-review open to edit.');expect(retry.hidden).toBe(true);
-  bar.setSaveState({kind:'failed',text:'Save failed.',retry:{label:'Submit review',run:()=>retried+=10}});expect(retry.hidden).toBe(false);expect(actions.children.filter(node=>node===retry).length).toBe(1);retry.click();expect(retried).toBe(11);
+  bar.setSaveState({kind:'read-only',text:'Read-only view: reopen with rig-review open to edit.',retry:{label:'Send comments',run:()=>retried++}});shown('read-only','Read-only view: reopen with rig-review open to edit.');expect(retry.hidden).toBe(true);
+  bar.setSaveState({kind:'failed',text:'Save failed.',retry:{label:'Send comments',run:()=>retried+=10}});expect(retry.hidden).toBe(false);expect(actions.children.filter(node=>node===retry).length).toBe(1);retry.click();expect(retried).toBe(11);
   const snapshot=bar.saveState()!;snapshot.text='changed';expect(bar.saveState()?.text).toBe('Save failed.');
-  const source=await mainSource(),start=source.indexOf(' const state=rigInspector.actBar;',source.indexOf('async function startParts(')),end=source.indexOf(" select('review-status')",start);
+  const source=await mainSource(),start=source.indexOf(' const state=rigInspector.actBar;',source.indexOf('async function startParts(')),end=source.indexOf(' viewDisposers.push(viewport.bindControls',start);
   expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
   const initializeParts=new Function('rigInspector','actReadOnly',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end)));
   for(const readOnly of [null,'Read-only view: reopen with rig-review open to edit.']){
    initializeParts({actBar:bar},readOnly);shown(readOnly?'read-only':'unsaved',readOnly??'Not submitted');
   }
-  bar.dispose();expect(actions.children).toEqual([state,submit]);
+  bar.dispose();expect(actions.children).toEqual([state]);
  }finally{bar?.dispose();setLinkLanguage(link);setLanguagePreference(preference);if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });
 

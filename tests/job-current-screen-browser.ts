@@ -156,7 +156,7 @@ try {
             : kind === 'direction'
               ? `!!document.querySelector('#rig-root canvas')&&!!document.querySelector('#direction-panel')`
               : `!!document.querySelector('#rig-root canvas')`;
-          await wait(`document.body.dataset.ready==='true'&&!document.body.inert&&document.querySelector('#send-comments')?.checkVisibility()===true&&document.querySelector('#save')?.hidden===true&&document.querySelector('#message')?.textContent===${JSON.stringify(setup.title)}&&${stageReady}`);
+          await wait(`document.body.dataset.ready==='true'&&!document.body.inert&&document.querySelector('#send-comments')?.checkVisibility()===true&&document.querySelector('#save')===null&&document.querySelector('#review-status')===null&&document.querySelector('#message')?.textContent===${JSON.stringify(setup.title)}&&${stageReady}`);
           if (kind === 'direction') {
             await page.evaluate(`(()=>{
               const s=document.querySelector('#scrub');

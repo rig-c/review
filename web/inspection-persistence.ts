@@ -130,8 +130,8 @@ function sameCompareBinding(value:unknown,expected:unknown):boolean {
  }
  return true;
 }
-export function recoverSession<T extends {id:string;revision:string;sourceHash:string;status:string;feedback:unknown[]}>(value:unknown,baseline:T):T|null {
- if(!value||typeof value!=='object'||Array.isArray(value))return null;const o=value as Record<string,unknown>,base=baseline as Record<string,unknown>;for(const key of Object.keys(o))if(!Object.keys(baseline).includes(key))return null;
+export function recoverSession<T extends {id:string;revision:string;sourceHash:string;status?:string;feedback:unknown[]}>(value:unknown,baseline:T):T|null {
+ if(!value||typeof value!=='object'||Array.isArray(value))return null;const o=value as Record<string,unknown>,base=baseline as Record<string,unknown>;for(const key of Object.keys(o))if(key!=='status'&&!Object.keys(baseline).includes(key))return null;
  const isCompare='binding'in baseline&&base.binding!==undefined;
  if(isCompare){
   const sameBindingJson=JSON.stringify(o.binding)===JSON.stringify(base.binding);
@@ -140,10 +140,11 @@ export function recoverSession<T extends {id:string;revision:string;sourceHash:s
   for(const k of ['id','revision','sourceHash','referenceBinding','binding'])if(JSON.stringify(o[k])!==JSON.stringify(base[k]))return null;
   if(!sameReviewedSource(o.reviewedSource,base.reviewedSource))return null;
  }
- if(!['pending','approved','changes-requested'].includes(String(o.status))||!Array.isArray(o.feedback)||!Array.isArray(o.feedbackWarnings))return null;
+ if((o.status!==undefined&&!['pending','approved','changes-requested'].includes(String(o.status)))||!Array.isArray(o.feedback)||!Array.isArray(o.feedbackWarnings))return null;
  for(const item of o.feedback){if(!item||typeof item!=='object')return null;const f=item as Record<string,unknown>,target=f.target as Record<string,unknown>|undefined;const comment=(f.context as any)?.comment;if(hasStageComment(comment)){try{parseStageComment(comment);}catch{return null;}}if(hasStageComment(comment)&&(comment.frame===null||comment.timeBasis!==undefined)&&!isTimeOnlyFeedback(f))return null;if(typeof f.id!=='string'||typeof f.summary!=='string'||(!Number.isInteger(f.frameStart)||!Number.isInteger(f.frameEnd))&&!isTimeOnlyFeedback(f)||!target||!['bone','slot','rig'].includes(String(target.kind))||typeof target.name!=='string'||!['defect','quality'].includes(String(f.category)))return null;}
  if('checkpoints'in baseline){if(!o.checkpoints||typeof o.checkpoints!=='object'||Array.isArray(o.checkpoints))return null;for(const value of Object.values(o.checkpoints)){if(!value||typeof value!=='object'||Array.isArray(value))return null;const item=value as Record<string,unknown>;if(!['pending','pass','fail'].includes(String(item.outcome))||typeof item.note!=='string'||item.note.length>32768)return null;}}
  const next:Record<string,unknown>={...o};
+ if(!('status'in baseline))delete next.status;else if(next.status===undefined)next.status=base.status;
  if('reviewedSource'in baseline&&base.reviewedSource!==undefined)next.reviewedSource=structuredClone(base.reviewedSource);
  if(isCompare){
   next.id=base.id;next.sourceHash=base.sourceHash;next.binding=structuredClone(base.binding);
@@ -327,7 +328,7 @@ export class InspectionDraftStore {
  }
 }
 
-interface PersistenceSession {id:string;revision:string;sourceHash:string;status:string;feedback:unknown[]}
+interface PersistenceSession {id:string;revision:string;sourceHash:string;status?:string;feedback:unknown[]}
 interface PersistenceAdapter<T> {
  recover?:(value:unknown,baseline:T)=>T|null;
  legacyScopes?:readonly string[];
@@ -377,13 +378,13 @@ export async function connectInspectionPersistence<T>(adapter:PersistenceAdapter
   try{adapter.restoreUI(draft.ui);}catch(error){status(`Saved panel selection unavailable: ${error instanceof Error?error.message:String(error)}`);}
  }
  if(raw&&(conflict||!draft))appendAction('Download saved local draft',()=>{download(raw);if(restoreFailed){conflict=false;adapter.onConflict(false);clearNotices();status('Saved draft downloaded · not submitted');}});
- if(conflict&&recovered)appendAction('Recover local draft as pending',()=>{try{adapter.restoreSession({...recovered,status:'pending'},true);conflict=false;adapter.onConflict(false);clearNotices();status('Recovered local draft as pending · not submitted');save();}catch(error){status(`Local draft recovery refused: ${error instanceof Error?error.message:String(error)}`);}});
+ if(conflict&&recovered)appendAction('Recover local draft as pending',()=>{try{adapter.restoreSession(('status'in(adapter.baseline as object)?{...recovered,status:'pending'}:recovered) as T,true);conflict=false;adapter.onConflict(false);clearNotices();status('Recovered local draft as pending · not submitted');save();}catch(error){status(`Local draft recovery refused: ${error instanceof Error?error.message:String(error)}`);}});
  if(conflict&&!restoreFailed)appendAction('Discard conflicting local draft',async()=>{adapter.restoreSession(structuredClone(adapter.baseline),false);restoreInputs(initialInputs,viewInputIds);adapter.afterInputs();await store.clear();conflict=false;adapter.onConflict(false);clearNotices();status('Local draft discarded · current submitted review retained.');save();});
  const selected=location.hash.startsWith('#review=')?explicit:draft?.bookmark;
  let restored=location.hash.startsWith('#review=')||!!draft;
  if(selected){try{await adapter.restoreBookmark(selected,new AbortController().signal);restored=true;}catch(error){status(`Inspection was not restored: ${error instanceof Error?error.message:String(error)}`);}}
  if(draft){
-  const excluded=new Set(viewInputIds);if(conflict||!draft.reviewDirty){excluded.add('review-status');excluded.add('status');excluded.add('checkpoint-note');for(const key of Object.keys(draft.inputs))if(key.startsWith('radio:outcome:'))excluded.add(key);}
+  const excluded=new Set([...viewInputIds,'review-status','status']);if(conflict||!draft.reviewDirty){excluded.add('checkpoint-note');for(const key of Object.keys(draft.inputs))if(key.startsWith('radio:outcome:'))excluded.add(key);}
   restoreInputs(draft.inputs,excluded);adapter.afterInputs({ui:draft.ui});
  }
  if(raw&&!draft)appendAction('Discard unusable local draft',async()=>{await store.clear();conflict=false;adapter.onConflict(false);clearNotices();status('Unusable local draft discarded for this review only.');save();});

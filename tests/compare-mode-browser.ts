@@ -18,7 +18,8 @@ import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { loadReview } from '../src/manifest.ts';
 import { startServer } from '../src/server.ts';
-import { openReview } from '../src/open.ts';
+import { openReview, prepareOpenTarget } from '../src/open.ts';
+import { compareSessionFile, freshCompareSession } from '../src/compare-session.ts';
 import { encodeBookmark, type InspectionBookmark } from '../web/inspection-persistence.ts';
 
 export const PROBE_MP4_BASE64 =
@@ -515,8 +516,21 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
     const probe = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('') });
     const frontPort = probe.port!;
     probe.stop(true);
+    const compareInputs = { input: join(root, 'a'), compare: join(root, 'b'), reference: refPath, animation: 'inspect' };
+    const preparedCompare = await prepareOpenTarget(compareInputs, { stateDir, direct: true });
+    if (preparedCompare.package.mode !== 'compare') throw new Error('Expected compare target');
+    const seededCompareFile = compareSessionFile(preparedCompare.package.p, preparedCompare.stateDir);
+    await mkdir(join(seededCompareFile, '..'), { recursive: true });
+    await writeFile(
+      seededCompareFile,
+      JSON.stringify(
+        { ...freshCompareSession(preparedCompare.package.p), status: 'approved', updatedAt: '2026-10-01T00:00:00.000Z' },
+        null,
+        2,
+      ) + '\n',
+    );
     const opened = await openReview(
-      { input: join(root, 'a'), compare: join(root, 'b'), reference: refPath, animation: 'inspect' },
+      compareInputs,
       { stateDir, direct: true },
     );
 
@@ -971,10 +985,8 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       const sessionUrl = new URL('api/compare/session', location.href);
       if (document.querySelector('#status,label[for="status"]')) throw Error('COMPARE_VERDICT_CONTROL_PRESENT');
       const readSession = await fetch(sessionUrl);
-      const historical = {...await readSession.json(), status: 'approved'};
-      const seeded = await fetch(sessionUrl, {method: 'PUT', headers: {'Content-Type': 'application/json',
-        'X-Review-Capability': ${JSON.stringify(new URL(opened.url).hash.slice(5))}}, body: JSON.stringify(historical)});
-      if (!seeded.ok) throw Error('COMPARE_HISTORICAL_STATUS_FIXTURE ' + seeded.status);
+      const historical = await readSession.json();
+      if (historical.status !== 'approved') throw Error('COMPARE_HISTORICAL_STATUS_FIXTURE ' + historical.status);
       const originalFetch = window.fetch;
       let submission;
       window.fetch = function(input, init) {

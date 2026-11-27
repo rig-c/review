@@ -52,7 +52,7 @@ type RefusalScreen={
  language:string;width:number;height:number;topbars:number;viewports:number;modals:number;dialogViewers:number;
  forms:number;questionPanels:number;retiredRecordDomCount:number;modelCanvas:number;rigEmpty:string;footerMessage:string;
  refusalVisible:boolean;refusalError:boolean;refusalTitle:string;refusalText:string;
- actRowVisible:boolean;saveDisabled:boolean;saveDescription:string;commentHidden:boolean;
+ actRowVisible:boolean;saveAbsent:boolean;reviewStatusAbsent:boolean;commentHidden:boolean;
  controls:string[];inspectorHidden:boolean;
 };
 let currentCase:{language:'en'|'ko';width:number;height:number;state?:RefusalScreen}|undefined;
@@ -86,7 +86,7 @@ try{
   await wait(`document.body.dataset.ready==='true'&&!document.body.inert&&document.getElementById('review-message')?.getAttribute('title')==='INTERVIEW_PICKS_DISABLED'`);
   const state:RefusalScreen=await page.evaluate(`(()=>{
    const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden],dialog:not([open])')&&getComputedStyle(n).visibility!=='hidden';
-   const msg=document.getElementById('review-message'),row=document.getElementById('workspace-act-row'),save=document.getElementById('save');
+   const msg=document.getElementById('review-message'),row=document.getElementById('workspace-act-row');
    return {language:document.documentElement.lang,width:innerWidth,height:innerHeight,
     topbars:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,
     modals:document.querySelectorAll('dialog:modal').length,dialogViewers:document.querySelectorAll(${JSON.stringify(dialogViewer)}).length,
@@ -98,7 +98,7 @@ try{
     footerMessage:document.getElementById('message').textContent.trim(),
     refusalVisible:visible(msg),refusalError:msg.classList.contains('error'),
     refusalTitle:msg.getAttribute('title')??'',refusalText:msg.textContent.trim(),
-    actRowVisible:visible(row),saveDisabled:save.disabled,saveDescription:save.getAttribute('aria-description')??'',
+    actRowVisible:visible(row),saveAbsent:document.getElementById('save')===null,reviewStatusAbsent:document.getElementById('review-status')===null,
     commentHidden:document.getElementById('stage-comment').hidden,
     controls:[...document.querySelectorAll('${sharedControls}')].map(node=>node.id),
     inspectorHidden:document.getElementById('workspace-inspector').hidden};
@@ -118,8 +118,8 @@ try{
   assert.equal(state.rigEmpty,expectedRefusal);
   assert.equal(state.footerMessage,expectedRefusal);
   assert.equal(state.actRowVisible,true);
-  assert.equal(state.saveDisabled,true);
-  assert.equal(state.saveDescription,expectedRefusal);
+  assert.equal(state.saveAbsent,true);
+  assert.equal(state.reviewStatusAbsent,true);
   assert.equal(state.commentHidden,true,'standalone interview refusal hides unbound comment entry');
   assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
   assert.equal(state.inspectorHidden,true,'standalone interview has no view-controller block, so the bottom panel collapses to nothing');

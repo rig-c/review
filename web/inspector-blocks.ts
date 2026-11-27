@@ -174,12 +174,12 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
  };
 }
 
-/** Compose the real rig acts into C6; all fields, submit nodes and their listeners retain identity. */
+/** Compose the real rig acts into C6; all fields, action nodes and their listeners retain identity. */
 export function mountRigInspector(root:Document=document,actHome?:HTMLElement):BottomPanel&{body:HTMLElement;actBar:ActBar;answersRendered:boolean;syncActRow:()=>void;comments:{button:HTMLButtonElement;panel:HTMLElement}} {
  const inspector=root.querySelector<HTMLElement>('.inspector')!,body=inspector.querySelector<HTMLElement>('.inspector-body')!,heading=inspector.querySelector<HTMLElement>('.inspector-heading')!;
  const feedback=root.getElementById('inspector-feedback')!,dialog=root.getElementById('review-dialog')!;
- const [label,status,actions]=[feedback.querySelector<HTMLLabelElement>('label[for="review-status"]')!,root.getElementById('review-status')!,dialog.querySelector<HTMLElement>('.review-dialog-actions')!];
- const actBar=mountActBar({id:'workspace-review-act',decision:[label,status],actions,submit:root.getElementById('save') as HTMLButtonElement,saveState:root.getElementById('review-draft-state')!,saveStateCopies:[root.getElementById(actHome?'dirty':'draft-state')].flatMap(node=>node?[{node,title:true}]:[])}),act=actBar.element;
+ const actions=dialog.querySelector<HTMLElement>('.review-dialog-actions')!;
+ const actBar=mountActBar({id:'workspace-review-act',actions,saveState:root.getElementById('review-draft-state')!,saveStateCopies:[root.getElementById(actHome?'dirty':'draft-state')].flatMap(node=>node?[{node,title:true}]:[])}),act=actBar.element;
  if(actHome)for(const id of ['draft-state','draft-recovery'])root.getElementById(id)!.hidden=true;
  const title=dialog.querySelector<HTMLElement>('.review-dialog-header')!;title.querySelector('#review-dialog-close')?.remove();
  feedback.className='workspace-review-panel';feedback.hidden=true;feedback.prepend(title);body.append(feedback);dialog.remove();
@@ -195,7 +195,7 @@ export function mountRigInspector(root:Document=document,actHome?:HTMLElement):B
   if(!actHome)return;
   const headline=root.getElementById('workspace-ask-headline'),error=root.getElementById('review-message');
   const question=!!headline&&!headline.hidden&&!!headline.textContent?.trim();
-  const refusal=!!error&&!error.hidden&&error.classList.contains('error')&&!!error.textContent?.trim()&&['save','request-changes','workspace-pending-ask'].every(id=>root.getElementById(id)?.hidden!==false);
+  const refusal=!!error&&!error.hidden&&error.classList.contains('error')&&!!error.textContent?.trim()&&['request-changes','workspace-pending-ask'].every(id=>root.getElementById(id)?.hidden!==false);
   // Loading may render answers before the question; an early read refusal can
   // still use this row once its caller has hidden every answer control.
   actHome.hidden=act.hidden||(!question&&!refusal);root.getElementById('dirty')!.hidden=!actHome.hidden;
@@ -230,12 +230,8 @@ export function mountBottomPanel(options:BottomPanelOptions):BottomPanel {
 
 export interface ActBarOptions {
  id:string;
- decision?:HTMLElement[];
  /** Reuse a screen's action group without replacing any of its nodes. */
  actions?:HTMLElement;
- submit:HTMLButtonElement;
- /** Omit for an existing button whose text is owned by the screen. */
- submitLabel?:string|(()=>string);
  saveState:HTMLElement;
  /** Other nodes that show the same save state (the C11 footer copy); `title` repeats the text as a tooltip. */
  saveStateCopies?:{node:HTMLElement;title?:boolean}[];
@@ -245,10 +241,10 @@ export interface ActBarOptions {
 export type ActSaveKind='saved'|'unsaved'|'saving'|'failed'|'read-only';
 export interface ActSaveState {kind:ActSaveKind;text:string;retry?:{label:string;run:()=>void};/** Diagnostic hover (a refusal code and its origin), untranslated. */title?:string}
 export interface ActBar {element:HTMLElement;refresh():void;dispose():void;setSaveState(state:ActSaveState):void;saveState():ActSaveState|null}
-/** C10: screen-owned decision, submit and save state, with an optional shared action menu. */
+/** C10: screen-owned action group and save state, with an optional shared action menu. */
 export function mountActBar(options:ActBarOptions):ActBar {
- const actions=options.actions??panelMake('div',{className:'review-dialog-actions'},options.saveState,options.submit);
- const element=panelMake('div',{className:'workspace-act-bar',id:options.id},...(options.decision??[]),actions);
+ const actions=options.actions??panelMake('div',{className:'review-dialog-actions'},options.saveState);
+ const element=panelMake('div',{className:'workspace-act-bar',id:options.id},actions);
  const cleanups:(()=>void)[]=[],labels:{button:HTMLButtonElement;label:string}[]=[];
  const listen=(node:HTMLElement,type:string,fn:(event:Event)=>void)=>{node.addEventListener(type,fn);cleanups.push(()=>node.removeEventListener(type,fn));};
  if(options.overflow?.length){
@@ -261,10 +257,9 @@ export function mountActBar(options:ActBarOptions):ActBar {
   actions.append(more.button,more.menu);labels.push({button:more.button,label:'More act actions'});
  }
  const refresh=()=>{
-  if(options.submitLabel!==undefined)options.submit.textContent=tr(typeof options.submitLabel==='function'?options.submitLabel():options.submitLabel);
   for(const {button,label}of labels)if(label==='More act actions')button.setAttribute('aria-label',tr(label));else button.textContent=tr(label);
  };
- refresh();const off=options.submitLabel!==undefined||labels.length?onLanguageChange(refresh):()=>{};
+ refresh();const off=labels.length?onLanguageChange(refresh):()=>{};
  let current:ActSaveState|null=null,retry:HTMLButtonElement|null=null;
  /** The one renderer: kind as data, the same text in the act node and its copies, a retry action only when failed. */
  const setSaveState=(state:ActSaveState)=>{
