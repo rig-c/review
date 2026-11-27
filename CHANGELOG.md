@@ -1,10 +1,47 @@
 # Changelog
 
-## Unreleased
+## 4.23.0
+
+A producer can publish its current output for review without numbering it. The new `current` selector opens the Parts, rig or direction screen for that output. Comments sent on it still reach the producer while the producer keeps writing its project record. The owner workspace now loads the same `main.js` as every other screen.
+
+**Read before upgrading:**
+
+* **New selector `{kind: 'current', output: 'parts' | 'rig' | 'direction', record}`, additive.** `JobSelector` gains the arm, and `JOB_ERROR_CODES` gains `JOB_CURRENT_RECORD_MISSING`, `JOB_CURRENT_RECORD_MISMATCH` and `JOB_CURRENT_OUTPUT_MISMATCH`. Older Reviews refuse `current` with `JOB_REQUEST_INVALID`, so a producer that publishes it pins 4.23.0 or later. `draft`, `rig` and `post` are unchanged.
+* **What a `current` publication must carry.**
+  * `record` equals the sha256 of the frozen `project.json`. A missing record refuses `JOB_CURRENT_RECORD_MISSING`, and a different hash refuses `JOB_CURRENT_RECORD_MISMATCH`.
+  * The files match the output:
+    * `parts`: parts and part ids, with no model or direction;
+    * `rig`: a model with no direction;
+    * `direction`: a model and a direction file.
+    Anything else refuses `JOB_CURRENT_OUTPUT_MISMATCH`.
+  * `plan` is null.
+  * `previousDraft`, `previousBuild`, `answeredDirectionFeedback`, `chestLandmarks` and `checkpointEvidence` refuse `JOB_SOURCE_MISMATCH`. `commit` is allowed.
+* **No asks on `current`.** Every ask and `ask-batch` subject refuses `JOB_ASK_INVALID`. The page offers Send comments, which sends the comment-only `rig-review/act@10`.
+* **The send check on `current` skips the project record.**
+  * An act@10 on a `current` publication checks three things: the publication is still head, every other sealed file is unchanged, and the snapshot is intact. A failure of any of them refuses `JOB_ACT_SOURCE_STALE`.
+  * Writes to `project.json` after publication no longer refuse the comment.
+  * Numbered selectors keep the full check, including `JOB_RECORD_MOVED`.
+* **Screens.** `current` opens the same screen as its numbered counterpart:
+  * `parts` like `draft` with parts;
+  * `rig` like `rig`;
+  * `direction` like `post`, with the version label omitted.
+  The browser draft key is `package.id:current:<output>:<record>`.
 
 ### Added
 
-* Adds the `current` publication selector (`{kind: 'current', output: 'parts' | 'rig' | 'direction', record}`) on the server and contract surface, with `JOB_CURRENT_RECORD_MISSING`, `JOB_CURRENT_RECORD_MISMATCH` and `JOB_CURRENT_OUTPUT_MISMATCH` publication refusals, `JOB_ASK_INVALID` on asks, and send-time `rig-review/act@10` checks that re-hash output seals without re-hashing `project.json` (#1267, refs rig-c/create#1063).
+* The `current` selector on the server and contract surface, with its three publication refusals, `JOB_ASK_INVALID` on asks, and the send check above (#1269, refs #1267 and rig-c/create#1063).
+* `current` outputs open on the Parts, rig and direction screens, with their own browser draft storage (#1275, closes #1267).
+
+### Changed
+
+* The four `index.html` routes (single rig, Parts, job, owner workspace) build their page from one entry helper. The page bytes are unchanged (#1268, refs #655).
+* The owner workspace loads the shared `main.js` bundle instead of its own. Its page marks `#app` with `data-review-screen="workspace"`; nothing else in its DOM changes (#1272, refs #655).
+* The development pin on `@rig-c/parts` is 2.61.0 (this release, refs #1170).
+
+### Fixed
+
+* The owner-workspace browser suite no longer fails when a comparison frame has not created its document yet (#1274, closes #1271).
+* The 4.22.0 notes below now say the main toolbar keeps to one row where the width allows, matching the release page.
 
 ## 4.22.0
 
@@ -23,7 +60,7 @@ Reviewers now give feedback through comments. Fresh sign-off, checkpoint and int
 
   The comment row reads `F0–12 (producer) · mesh · Quality`. General and parts comments are unchanged.
 * **Every declared checkpoint pair can be chosen.** When a record declares more than one Before / After pair, the View switch gets a second group: `Pair 1 · <step>`, `Pair 2 · <step>`. A single-pair record is unchanged.
-* **The main toolbar keeps one row.** The stage's minimum width is now the main toolbar's own one-row width, measured per language and screen, with 240px as the floor. When there is not enough room, Comments shrinks toward its 280px minimum first, and then Parts moves into the **Parts and settings** drawer. Saved panel sizes are untouched, and Compare is unchanged.
+* **The main toolbar keeps to one row where the width allows.** The stage's minimum width is now the main toolbar's own one-row width, measured per language and screen, with 240px as the floor. When there is not enough room, Comments shrinks toward its 280px minimum first, and then Parts moves into the **Parts and settings** drawer. Saved panel sizes are untouched, and Compare is unchanged.
 
 ### Added
 
@@ -42,7 +79,7 @@ Reviewers now give feedback through comments. Fresh sign-off, checkpoint and int
 
 ### Fixed
 
-* With the comments panel open, the main toolbar stays on one row at narrow widths (#1256, closes #1248).
+* With the comments panel open, the main toolbar stays on one row where the width allows, and takes fewer rows below that (#1256, closes #1248).
 * The checkpoint View switch no longer moves when the label changes from After to Difference (#1263, closes #1258).
 * A comment being typed is no longer closed when the list refreshes. Its text, focus and cursor stay (#1264, closes #1260).
 * Browser tests wait for the displayed receipt before approving or commenting (#1261, #1262).
