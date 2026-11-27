@@ -7,7 +7,7 @@ import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, t
 import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion, observeJobBody } from './job-api.ts';
 import { JobSession } from './job-session.ts';
 import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, loadRetainedJobReview, loadRetainedRecordRig, retainedRecordPainting, readPreviousDraftBytes, retainedRigDraftVerdict, type JobRootIdentity } from './job-source.ts';
-import { checkedPath } from './interview-project.ts';
+import { checkedPath, interviewSetWithoutContext } from './interview-project.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
 import { JobError, JobStore, jobCropReferences } from './job-store.ts';
 import { safeFile, packagePath, previousBuildFiles, type ReviewPackage } from './manifest.ts';
@@ -345,6 +345,7 @@ export function retainedPublicationRoutes(session: JobSession) {
                     const sealed = isRetainedRecordSource(retained) ? retained.source.files : [];
                     return json({
                         questions: questions.map(question => ({...question,
+                            ...(isRetainedRecordSource(retained) ? {} : {set: interviewSetWithoutContext(question.set)}),
                             ...(rigPicture && question.missingPicture === 'rig' ? {missingPicture: undefined} : {}),
                             images: (painting && question.missingPicture ? [painting] : question.images).map((image, index) => ({name: image.name,
                                 url: `/api/interview/image/${question.ref.sha256}/${index}`,

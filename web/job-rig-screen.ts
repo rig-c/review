@@ -318,7 +318,7 @@ export function createJobRigScreen(options: {
     return {...evidencePair,access,pendingSubjects,recordSubmission,navigation,jobClosed:()=>options.window.state().closed,...prepared.refusal?{unavailable:prepared.refusal}:{},
       chestLandmarks:prepared.display.publication.chestLandmarks,
       ...(source.direction?{direction:{...binding,answeredDirectionFeedback}}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{
-        verdictComments:{...binding,rows:[],available:()=>true}}:{}),
+        verdictComments:{...binding,rows:[]}}:{}),
       ...prepared.parts?{subject:'parts' as const}: {},
       read(path, method) {
         if (method !== 'GET') return prepared.parts?undefined:Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));

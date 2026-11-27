@@ -169,7 +169,7 @@ test('#1228 and #1229 publications declaring signoff or checkpoint show no form 
   await h.screen.painted(cleanRig!, new AbortController().signal);
   cleanTx.finalize();
   expect(typeof rigHost()!.submitComments).toBe('function');
-  expect(rigHost()!.verdictComments?.available()).toBe(true);
+  expect(rigHost()!.verdictComments?.rows).toEqual([]);
   const staleProducerAsk: PendingAskV3 = {askId: 'producer-signoff', publicationId: picture.publication.publicationId, source: picture.publication.source, status: 'pending', subject: {kind: 'signoff', stage: 'plan-approved'}};
   h.state.pending = [staleProducerAsk];
   const refusedRig = await h.screen.prepare(picture, new AbortController().signal);

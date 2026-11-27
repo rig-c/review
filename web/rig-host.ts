@@ -45,7 +45,7 @@ export interface RigHost {
   readonly subject?:'parts';
   readonly unavailable?:string;
   readonly direction?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId:string;readonly previousPublicationId?:string|null;readonly sourceHash:string;readonly answeredDirectionFeedback?:readonly JobAnsweredDirectionFeedback[]};
-  readonly verdictComments?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId:string;readonly previousPublicationId?:string|null;readonly sourceHash:string;readonly rows:CommentRow[];readonly available:()=>boolean};
+  readonly verdictComments?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId:string;readonly previousPublicationId?:string|null;readonly sourceHash:string;readonly rows:CommentRow[]};
   readonly navigation?:RigHostNavigation;
   readonly record?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId?:string;readonly previousPublicationId?:string|null;readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean;readonly planPicture?:{readonly name:string;readonly src:string;readonly path:string;readonly sha256:string};/** #1048: the sealed `files` entries of the record's question images. */readonly questionPictures?:readonly {readonly name:string;readonly src?:string;readonly path:string;readonly sha256:string}[];readonly missingPicture?:'rig'|'scene';readonly questionPicture?:true};
   /** #1226: unsent pinned rows and general comments go out as one comment-only act; it answers no ask. #1242: parts pins too. */

@@ -572,7 +572,9 @@ function collectQuestionFiles(
   }
   for (const question of questions) {
     required.push(question.ref, ...question.images.map(image => image.ref));
-    visit(JSON.parse(sourceBytes(root, question.ref.path).toString('utf8')), !question.editable);
+    // The package reader strips pending context before file discovery. Historical sets still use their raw bytes.
+    const set = question.editable ? question.set : JSON.parse(sourceBytes(root, question.ref.path).toString('utf8'));
+    visit(set, !question.editable);
   }
   for (const row of records) {
     if (row.observedSet) {
@@ -1589,7 +1591,7 @@ export async function prepareJobSource(options: {
       try { JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
       catch { throw new JobError('JOB_RECORD_INCOMPLETE'); }
       if (record.path === 'project.json') {
-        project = readProject(root.path);
+        project = readProject(root.path, undefined, 'package');
       }
     } else {
       try { lstatSync(join(root.path, 'project.json')); throw new JobError('JOB_FREEZE_REQUIRED'); }

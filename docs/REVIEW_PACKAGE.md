@@ -1450,7 +1450,7 @@ The consumer writes successful stdout verbatim as act.json beside the PNG and ha
 | `JOB_STILL_CAPTURE_FAILED` | The Rig still is missing or could not be captured, its frame or PNG fails validation, or the stored or fetched still fails an integrity check. | Wait for a successful Rig draw and try the verdict again. If retrieval still fails, ask the host operator to check the retained act and PNG. |
 | `JOB_STILL_CAMERA_NOT_FIXED` | The submitted capture uses a nonfixed camera or nondefault framing. | Restore the fixed camera and default framing, then submit again. |
 | `JOB_STILL_VIEW_UNSUPPORTED` | The submitted capture is outside the whole-rig view, such as solo, highlight or comparison. | Return to the whole-rig view and submit again. |
-| `JOB_STILL_BINDING_MISMATCH` | The publication, instance, displayed source, page or ask differs from the capture binding, or the draw or player generation is invalid. | Wait for the current Rig to draw and start a new verdict attempt. |
+| `JOB_STILL_BINDING_MISMATCH` | Not raised; retained in `JOB_ERROR_CODES` for compatibility (rig verdict capture submissions are retired). | None. |
 | `JOB_STILL_UNAVAILABLE` | A PNG is requested for a historical or non-rig act with no retained still. | Fetch that act without `--still-out` or an image Accept header. For a new still, reopen the current Rig review. |
 | `JOB_STILL_OUTPUT_FAILED` | `--still-out` is missing for an act with a still, or the CLI cannot complete PNG or stdout output. | Supply an existing writable destination directory and check for output conflicts. If a retained lock is reported, wait for the other writer to finish or remove the named lock if a killed process left it. Ignore partial stdout on nonzero exit. |
 

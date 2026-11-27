@@ -70,7 +70,13 @@ const capturedENInput: PartsIssue = {
   "nativeCrop": null
 };
 
-test('crop409 leads: EN act leaves package immutable and independent KO-height replay keeps exact job source binding', async () => {
+function reconstructENInput(sourceHash: string): PartsIssue {
+    const reconstruction = structuredClone(capturedENInput);
+    reconstruction.sourceHash = sourceHash;
+    return reconstruction;
+}
+
+test('crop409 leads: historical EN packet is stale and reconstructed acts preserve the live source binding and package bytes', async () => {
     const cases: {root: string; snapshot: string; sourceHash: string; standaloneHash: string;
         verdictOutput: boolean; status: number}[] = [];
     let firstInputs: Record<string, string> | undefined;
@@ -78,7 +84,7 @@ test('crop409 leads: EN act leaves package immutable and independent KO-height r
         const fixture = await scriptedJobWindowFixture();
         try {
             const publication = await fixture.publish('parts', 'parts-issue');
-            expect(publication.source.sourceHash).toBe(capturedENInput.sourceHash);
+            expect(publication.source.sourceHash).not.toBe(capturedENInput.sourceHash);
             const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
             assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);
             const pkg = await loadPartsView(fixture.packageRoot);
@@ -87,16 +93,22 @@ test('crop409 leads: EN act leaves package immutable and independent KO-height r
             const before = await jobInputHashes(fixture.input.root);
             if (firstInputs) expect(before).toEqual(firstInputs);
             else firstInputs = before;
-            const raw = structuredClone(capturedENInput);
-            if (language !== 'en') raw.view.camera.viewport.height = 695;
             const descriptor = await (await fetch(fixture.locator + '/publications/' + publication.publicationId)).json();
             const endpoint = fixture.host.origin + descriptor.value.routes.apiBase + 'stage-parts/comment';
-            const response = await fetch(endpoint, {
+            const post = (issue: PartsIssue) => fetch(endpoint, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json', Origin: fixture.host.origin,
                     'X-Review-Capability': fixture.host.session.hostCredentials().ui},
-                body: JSON.stringify(raw),
+                body: JSON.stringify(issue),
             });
+            if (language === 'en') {
+                const historical = await post(capturedENInput);
+                expect(historical.status).toBe(409);
+                expect((await historical.json()).error).toEqual({code: 'JOB_ACT_SOURCE_STALE', message: 'JOB_ACT_SOURCE_STALE'});
+            }
+            const raw = reconstructENInput(publication.source.sourceHash);
+            if (language !== 'en') raw.view.camera.viewport.height = 695;
+            const response = await post(raw);
             const result = await response.json();
             expect(response.status).toBe(200);
             const comment: PartsIssue = result.comment;
@@ -138,10 +150,11 @@ test('crop409 leads: EN act leaves package immutable and independent KO-height r
     }
     expect(cases[0]!.root).not.toBe(cases[1]!.root);
     expect(cases[0]!.snapshot).not.toBe(cases[1]!.snapshot);
+    expect(cases[0]!.sourceHash).toBe(cases[1]!.sourceHash);
     console.log('CROP409_LEADS ' + JSON.stringify({rootsDistinct: true, snapshotsDistinct: true,
         sourceHashes: cases.map(value => value.sourceHash), standaloneHashes: cases.map(value => value.standaloneHash),
         statuses: cases.map(value => value.status), verdictOutputs: cases.map(value => value.verdictOutput),
-        boundary: 'KO camera-height replay is reconstructed, not the missing original KO packet.'}));
+        boundary: 'EN and KO-height requests are reconstructions with the live source hash. The original KO packet is unavailable.'}));
 });
 
 test('crop409 diagnostics retain rejection codes and identify bounded PNG invariants without exposing request text or state paths', async () => {
@@ -157,6 +170,7 @@ test('crop409 diagnostics retain rejection codes and identify bounded PNG invari
             body: JSON.stringify(issue),
         });
         const before = await jobInputHashes(fixture.input.root);
+        const reconstruction = reconstructENInput(publication.source.sourceHash);
         const cases: {field: string; expected: string | number[]; received: string | number[];
             mutate: (issue: PartsIssue) => void}[] = [
             {field: 'crop.dimensions', expected: [69, 69], received: [69, 70],
@@ -169,7 +183,7 @@ test('crop409 diagnostics retain rejection codes and identify bounded PNG invari
                 mutate: issue => { issue.crop.path = '/private/request-must-not-be-returned.png'; }},
         ];
         for (const control of cases) {
-            const issue = structuredClone(capturedENInput);
+            const issue = structuredClone(reconstruction);
             issue.summary = 'private reviewer text must not be returned';
             control.mutate(issue);
             const response = await post(issue);
@@ -182,30 +196,30 @@ test('crop409 diagnostics retain rejection codes and identify bounded PNG invari
             expect(JSON.stringify(body)).not.toContain('request-must-not-be-returned');
             expect(JSON.stringify(body)).not.toContain('data:image');
         }
-        const stale = structuredClone(capturedENInput);
+        const stale = structuredClone(reconstruction);
         stale.sourceHash = 'f'.repeat(64);
         const staleResponse = await post(stale);
         expect(staleResponse.status).toBe(409);
         expect((await staleResponse.json()).error).toEqual({code: 'JOB_ACT_SOURCE_STALE', message: 'JOB_ACT_SOURCE_STALE'});
-        const staleImage = structuredClone(capturedENInput);
+        const staleImage = structuredClone(reconstruction);
         staleImage.parts[0]!.imageHash = 'f'.repeat(64);
         const staleImageResponse = await post(staleImage);
         expect(staleImageResponse.status).toBe(409);
         expect((await staleImageResponse.json()).error).toEqual({code: 'PARTS_COMMENT_STALE_SOURCE', message: 'PARTS_COMMENT_STALE_SOURCE'});
         // Reuse content-addressed evidence, then plant corruption only in this test's derived state.
-        expect((await post(structuredClone(capturedENInput))).status).toBe(200);
+        expect((await post(reconstruction)).status).toBe(200);
         const storedPath = resolvedCropPath(capturedENInput.crop.path);
         const storedBytes = await readFile(storedPath);
         try {
             await writeFile(storedPath, 'test-only corrupt derived evidence');
-            const response = await post(structuredClone(capturedENInput));
+            const response = await post(reconstruction);
             expect(response.status).toBe(409);
             expect((await response.json()).error).toEqual({code: 'JOB_SOURCE_MISMATCH', message: 'JOB_SOURCE_MISMATCH',
                 diagnostic: {field: 'crop.storage', expected: 'regular file with matching SHA-256', received: 'rejected by existing validator'}});
         } finally {
             await writeFile(storedPath, storedBytes);
         }
-        expect((await post(structuredClone(capturedENInput))).status).toBe(200);
+        expect((await post(reconstruction)).status).toBe(200);
         expect(await jobInputHashes(fixture.input.root)).toEqual(before);
         const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
         assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);

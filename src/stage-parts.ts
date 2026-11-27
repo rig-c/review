@@ -99,7 +99,7 @@ export function stagePartsRoutes(packages:{single:ReviewPackage}|{a:ReviewPackag
     const saved=readsVerdict?await joinedVerdict(req,p,pkg,verdictOptions,format,headers):null;
     if(saved instanceof Response)return saved;
     const activeMetadata=metadata&&latestApplied?{...metadata,evidence:latestApplied.evidence}:metadata;
-    return Response.json({...partsViewJson(pkg,saved??{verdict:null,stale:null}),differenceAvailable:false,readOnly:!readsVerdict,...(recorded&&!readsVerdict?{verdictReadOnlyReason:'PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.'}:{}),inspectionSourceHash:p.sourceHash,...(saved?{joinedVerdictBinding:saved.binding,verdictFile:saved.filename}:{}),...(activeMetadata?{draft:activeMetadata}:{draftUnavailable:stageDraftRefusals.STAGE_DRAFT_NO_MESH})},{headers});
+    return Response.json({...partsViewJson(pkg,saved??{verdict:null,stale:null}),differenceAvailable:false,readOnly:!readsVerdict,inspectionSourceHash:p.sourceHash,...(saved?{joinedVerdictBinding:saved.binding,verdictFile:saved.filename}:{}),...(activeMetadata?{draft:activeMetadata}:{draftUnavailable:stageDraftRefusals.STAGE_DRAFT_NO_MESH})},{headers});
    }
    let promise=loaded.get(key);
    const initializing=!promise;
