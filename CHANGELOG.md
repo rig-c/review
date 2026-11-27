@@ -12,6 +12,7 @@
 * Compare refuses a reading seek past the shared clip instead of seeking to a different time (#1302).
 * Compare keeps the selected chest-row bones when Apply, Undo or Reset reloads the picked build (#1304).
 * Compare shows the Idle refusal instead of the other side's tracks when the picked side has no producer handoff (#1305).
+* Idle, dial, and animation previews stay visible in Compare while you use the turn pad (#1303).
 
 ## 4.24.0
 
