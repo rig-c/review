@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { JobSession } from '../src/job-session.ts';
 import { createJobHostPorts } from '../src/job-api.ts';
-import { JOB_API_V3_SCHEMA } from '../src/job-contract.ts';
+import { JOB_API_V3_SCHEMA, jobRawActMediaType } from '../src/job-contract.ts';
 import { createSyntheticOptionRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
 import { seedHistoricalPicksAsks } from './helpers/historical-picks-act.ts';
 import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
@@ -354,49 +354,52 @@ test('oversized single events refuse before commit, while existing oversized eve
   expect(legacy.error.code).toBe('JOB_BODY_LIMIT');
 });
 
-// #1022: an idempotent replay returns its stored receipt only while that receipt is still true.
-test('#1022 replay of a superseded publish or ask refuses by name and names the head; current and finalized replays are unchanged', async () => {
+// #1022: publish retries depend on the head, while historical history remains readable.
+test('#1022 superseded publish retries name the head and recorded verdict bytes survive', async () => {
   const f = await fixture();
   const publishA = await f.publishRequest('publish-a');
-  const firstA = await (await f.call(publishA)).json();
-  const askA = { ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation, idempotencyKey: 'ask-a',
-    publicationId: firstA.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } as const };
-  seedHistoricalVerdictAsk(f.session, askA.publicationId, askA.subject, askA.idempotencyKey);
-  const firstAskA = await (await f.call(askA)).json();
-  expect(firstAskA.ok).toBe(true);
-  // Still current: the stored receipts come back exactly as before (the envelope reports the current generation, as on main).
-  const receipt = async (request: object) => { const {ok, value} = await (await f.call(request)).json(); return {ok, value}; };
-  expect(await receipt(publishA)).toEqual({ok: true, value: firstA.value});
-  expect(await receipt(askA)).toEqual({ok: true, value: firstAskA.value});
+  const first = await (await f.call(publishA)).json();
+  expect(first.ok).toBe(true);
+  const publicationId = first.value.publicationId;
+  const subject = {kind: 'review-verdict', stage: 'rig-review'} as const;
+  const removed = {...f.base(), verb: 'ask', expectedGeneration: first.generation,
+    idempotencyKey: 'ask-a', publicationId, subject};
+  const pending = seedHistoricalVerdictAsk(f.session, publicationId, subject, removed.idempotencyKey);
+  const finalized = seedHistoricalVerdictAsk(f.session, publicationId, subject);
+  const act = seedHistoricalDecisionAct(f.session, finalized, historicalRig.receipt.value);
+  const original = JSON.stringify(act);
+  const {store} = f.session as unknown as {store: JobStore<unknown>};
+  store.update(f.session.jobId, null, ({data}) => ({data, still: {
+    actId: act.actId, pageId: historicalRig.request.pageId, submissionId: historicalRig.request.submissionId,
+    sha256: historicalRig.still.sha256, binding: historicalRig.still.binding,
+    png: Buffer.from(historicalRig.still.png, 'base64'), actBytes: Buffer.from(original),
+  }}));
+  const next = () => f.call({...f.base(), verb: 'next', after: null, waitMs: 0}).then(response => response.json());
+  const before = await next();
+  expect(before.value.events).toContainEqual(expect.objectContaining({type: 'pending', ask: pending}));
+  expect((await (await f.call(publishA)).json()).value).toEqual(first.value);
 
-  // A finalized historical ask keeps its receipt even after the publication is superseded.
-  const finalizedAsk = {...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
-    idempotencyKey: 'ask-a-finalized', publicationId: firstA.value.publicationId,
-    subject: {kind: 'review-verdict', stage: 'rig-review'} as const};
-  const pendingFinalized = seedHistoricalVerdictAsk(f.session, finalizedAsk.publicationId,
-    finalizedAsk.subject, finalizedAsk.idempotencyKey);
-  const finalizedReceipt = await receipt(finalizedAsk);
-  expect(finalizedReceipt).toEqual({ok: true, value: pendingFinalized});
-  seedHistoricalDecisionAct(f.session, pendingFinalized, historicalRig.receipt.value);
-
-  // B replaces A before the first ask is answered.
   const publicationB = await f.publish();
-  const head = 'head ' + publicationB.publicationId;
   const publishReplay = await (await f.call(publishA)).json();
-  expect(publishReplay.ok).toBe(false);
-  expect(publishReplay.error.code).toBe('JOB_ACT_SOURCE_STALE');
-  expect(publishReplay.error.message).toBe(`publication ${firstA.value.publicationId} is superseded; ${head}`);
-  const askReplay = await (await f.call(askA)).json();
-  expect(askReplay.ok).toBe(false);
-  expect(askReplay.error.code).toBe('JOB_ASK_SUPERSEDED');
-  expect(askReplay.error.message).toBe(`ask ${firstAskA.value.askId} is superseded; ${head}`);
-  expect(await receipt(finalizedAsk)).toEqual(finalizedReceipt);
-  // A refusal writes nothing and leaves B the head.
+  expect(publishReplay).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE',
+    message: `publication ${publicationId} is superseded; head ${publicationB.publicationId}`}});
+  expect(await (await f.call(removed)).json()).toMatchObject({
+    ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'},
+  });
+  const after = await next();
+  expect(after.value.events.slice(0, before.value.events.length)).toEqual(before.value.events);
+  const fetchAct = await f.ports.handleJobApi(new Request(f.origin + `/jobs/${f.session.jobId}/api`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', Accept: jobRawActMediaType,
+      Authorization: 'Bearer ' + f.session.writerGrant().fetchCapability},
+    body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: act.actId}),
+  }));
+  expect([fetchAct.status, await fetchAct.text()]).toEqual([200, original]);
+  expect(JSON.stringify(after.value.events.find((event: {type: string}) => event.type === 'act')?.act)).toBe(original);
   expect(f.session.status().publication?.publicationId).toBe(publicationB.publicationId);
+  expect(f.session.status().pending).toEqual([]);
 });
 
-// #1022 measured case: two option sets in one record, B replaces A, then a producer retry replays A's publish and ask.
-test('#1022 a byte-identical retry of a replaced option-set publish and ask refuses and names the head', async () => {
+test('#1022 a replaced option-set publish retries by name while its historical pending event stays readable', async () => {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-1021-')), root = join(scratch, 'input');
   directories.push(scratch);
   await mkdir(root);
@@ -419,22 +422,22 @@ test('#1022 a byte-identical retry of a replaced option-set publish and ask refu
     const requests = (set: typeof a, key: string) => ({
       publish: { verb: 'publish', expectedGeneration: session.status().generation, idempotencyKey: 'publish-' + key, result: set.result,
         freeze: { kind: 'producer-held', holdId: key, record } },
-      ask: (publicationId: string) => ({ verb: 'ask', expectedGeneration: session.status().generation, idempotencyKey: 'ask-' + key,
+      removedAsk: (publicationId: string) => ({ verb: 'ask', expectedGeneration: session.status().generation, idempotencyKey: 'ask-' + key,
         publicationId, subject: set.context.subjects[0] }) });
-    const first = requests(a, 'a'), publishedA = await call(first.publish), askBodyA = first.ask(publishedA.value.publicationId);
-    // #1230: fresh picks asks refuse; A's ask and its receipt are the ones a pre-refusal Review stored for the producer.
-    expect(await call(askBodyA)).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
-    const askRequestA = { schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'r', ...askBodyA };
-    const [storedAskA] = seedHistoricalPicksAsks(session, publishedA.value.publicationId, [a.context.subjects[0]!], askRequestA);
-    const askedA = { value: storedAskA! };
-    expect(await call(askBodyA)).toMatchObject({ ok: true, value: storedAskA });
+    const first = requests(a, 'a'), publishedA = await call(first.publish), askBodyA = first.removedAsk(publishedA.value.publicationId);
+    expect(await call(askBodyA)).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
+    const [storedAskA] = seedHistoricalPicksAsks(session, publishedA.value.publicationId, [a.context.subjects[0]!]);
+    const next = () => call({verb: 'next', after: null, waitMs: 0});
+    const original = (await next()).value.events.find((event: {type: string}) => event.type === 'pending');
+    expect(original.ask).toEqual(storedAskA);
     const second = requests(b, 'b'), publishedB = await call(second.publish);
-    expect(await call(second.ask(publishedB.value.publicationId))).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+    expect(await call(second.removedAsk(publishedB.value.publicationId)))
+      .toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
     const head = 'head ' + publishedB.value.publicationId;
     expect(await call(first.publish)).toMatchObject({ ok: false, error: { code: 'JOB_ACT_SOURCE_STALE',
       message: `publication ${publishedA.value.publicationId} is superseded; ${head}` } });
-    expect(await call(askBodyA)).toMatchObject({ ok: false, error: { code: 'JOB_ASK_SUPERSEDED',
-      message: `ask ${askedA.value.askId} is superseded; ${head}` } });
+    expect(JSON.stringify((await next()).value.events.find((event: {type: string}) => event.type === 'pending')))
+      .toBe(JSON.stringify(original));
     expect(session.status().pending).toEqual([]);
   } finally { session.dispose(); }
 });

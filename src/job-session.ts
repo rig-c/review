@@ -7,10 +7,10 @@ import {
   type JobHostPorts, type JobProgressLineV3, type JobProgressRequestV3, type JobProgressV3, type JobProgressValueV3,
   type JobAnsweredDirectionFeedback, type JobErrorCode, type JobNextValue, type JobPendingAsk, type JobPublication,
   type JobPublicationMode, type JobReviewerBinding,
-  type JobSubject, type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
+  type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type StatusV3,
 } from './job-contract.ts';
-import { bindJobAsk, bindJobRecordAsk, finalizeCommentOnlyAct, isCommentUISubmission, parseCommentUISubmission, parseUISubmission, prepareJobRecordAct } from './job-act.ts';
-import { atSubject, isRecordSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, parseChestLandmarksAct, parseCommentOnlyAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
+import { finalizeCommentOnlyAct, isCommentUISubmission, parseCommentUISubmission, parseUISubmission, prepareJobRecordAct } from './job-act.ts';
+import { isRecordSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, parseChestLandmarksAct, parseCommentOnlyAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
   assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, parseAnsweredDirectionFeedbackReferences, prepareJobSource, retainedRigDraftVerdict, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
   type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
@@ -496,23 +496,12 @@ export class JobSession {
     return previous ?? null;
   }
 
-  /** A stored agent receipt is returned only while it is still true (#1022). A publication that is no longer the
-   * head, or an ask that is no longer pending and has no finalized act, refuses by name and names the head. */
-  private assertReplayCurrent(current: StoredJob<JobData>, verb: string, value: unknown): void {
-    const data = current.data, head = 'head ' + (data.head ?? 'none');
-    if (verb === 'publish') {
-      const publicationId = (value as {publicationId: string}).publicationId;
-      if (data.head !== publicationId) throw new JobError('JOB_ACT_SOURCE_STALE', `publication ${publicationId} is superseded; ${head}`);
-      return;
+  /** A publish receipt is current while its publication is still the head (#1022). */
+  private assertReplayCurrent(data: JobData, value: unknown): void {
+    const {publicationId} = value as {publicationId: string};
+    if (data.head !== publicationId) {
+      throw new JobError('JOB_ACT_SOURCE_STALE', `publication ${publicationId} is superseded; head ${data.head ?? 'none'}`);
     }
-    const asks = verb === 'ask' ? [value as {askId: string}] : verb === 'ask-batch' ? (value as {asks: {askId: string}[]}).asks : [];
-    asks.forEach((ask, index) => {
-      const status = data.asks[ask.askId]?.status;
-      if (status === 'pending' || status === 'answered') return;
-      const prefix = verb === 'ask-batch' ? `subjects[${index}]: ` : '';
-      if (!current.active) throw new JobError('JOB_CLOSED', `${prefix}ask ${ask.askId} ended when the job closed`);
-      throw new JobError('JOB_ASK_SUPERSEDED', `${prefix}ask ${ask.askId} is superseded; ${head}`);
-    });
   }
 
   private active(current: StoredJob<JobData>, generation: number): void {
@@ -535,28 +524,6 @@ export class JobSession {
     data.events.push(event);
     if (value.type === 'published' || value.type === 'pending') delete data.progress;
     return event;
-  }
-
-  /** The committed head's retained source, re-checked against the work root and its sealed snapshot. */
-  private headRetained(data: JobData, publicationId: string): JobRetainedSourceV3 {
-    if (data.head !== publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
-    const retained = data.publications[publicationId].retained;
-    assertJobSourceCurrent(retained);
-    if (needsSnapshotRecheck(retained)) {
-      assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals, retained.snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE');
-    }
-    return retained;
-  }
-
-  /** Admit a new ask after receipt replay and source checks. Historical verdict receipts bypass this path. */
-  private addAsk(data: JobData, publicationId: string, subject: JobSubject | RecordSubject, retained: JobRetainedSourceV3): JobPendingAsk | PendingAskV3 {
-    if (subject.kind === 'review-verdict' || subject.kind === 'parts-verdict') throw new JobError('JOB_ASK_INVALID');
-    const ask: JobPendingAsk | PendingAskV3 = isRetainedRecordSource(retained)
-      ? { askId: randomUUID(), publicationId, subject, source: bindJobRecordAsk(subject, retained), status: 'pending' }
-      : { askId: randomUUID(), publicationId, subject, source: bindJobAsk(subject, retained), status: 'pending' };
-    data.asks[ask.askId] = ask;
-    this.event(data, { type: 'pending', ask });
-    return ask;
   }
 
   private notify(): void { for (const listener of this.listeners) listener(); }
@@ -593,12 +560,13 @@ export class JobSession {
       if (!act) throw new JobError('JOB_ACT_UNKNOWN');
       return act;
     }
+    if (input.verb !== 'publish' && input.verb !== 'close') throw new JobError('JOB_REQUEST_INVALID');
     const { requestId: _requestId, ...semantic } = input;
     const digest = requestDigest(semantic), key = 'agent:' + input.idempotencyKey;
     let current = this.current();
     const previous = this.replay(current.data, key, digest);
     if (previous) {
-      this.assertReplayCurrent(current, input.verb, previous.value);
+      if (input.verb === 'publish') this.assertReplayCurrent(current.data, previous.value);
       this.operations++;
       try {
         if (input.verb === 'close') await this.reclaimClosedSnapshots();
@@ -642,129 +610,68 @@ export class JobSession {
     let candidate: JobRetainedSourceV3 | null = null;
     this.operations++;
     try {
-      if (input.verb === 'publish') {
-        candidate = input.schema === JOB_API_V3_SCHEMA
-          ? await prepareJobSource({
-              root: current.data.root,
-              stateRoot: this.store.root,
-              fingerprint: current.data.fingerprint,
-              request: input,
-              readPublished: this.options.readPublished,
-              readRecordPublished: this.options.readRecordPublished,
-              partsEnumerator: this.options.partsEnumerator,
-              afterSnapshot: this.options.afterSnapshot,
-              afterDirectorySync: this.options.afterDirectorySync,
-            })
-          : await prepareJobSource({
-              root: current.data.root,
-              stateRoot: this.store.root,
-              fingerprint: current.data.fingerprint,
-              request: input,
-              readPublished: this.options.readPublished,
-              partsEnumerator: this.options.partsEnumerator,
-              afterSnapshot: this.options.afterSnapshot,
-              afterDirectorySync: this.options.afterDirectorySync,
-            });
-      } else if (input.verb === 'ask') {
-        if (current.data.head === input.publicationId) {
-          const stored = current.data.publications[input.publicationId];
-          if (stored && !isRetainedRecordSource(stored.retained) && stored.retained.source.selector?.kind === 'current') {
-            bindJobAsk(input.subject, stored.retained);
-          }
-          if (stored && isRetainedRecordSource(stored.retained)) {
-            bindJobRecordAsk(input.subject, stored.retained);
-            if (!this.options.readRecordPublished) {
-              throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Record publication requires a trusted record reader');
-            }
-            await verifyJobRecordSourceFresh({
-              retained: stored.retained,
-              readRecordPublished: this.options.readRecordPublished,
-              phase: 'ask',
-              subject: input.subject as RecordSubject,
-            });
-          }
-        }
-      } else if (input.verb === 'ask-batch') {
-        // One freshness read for the whole batch; every subject binds and validates against it (#963).
-        if (current.data.head !== input.publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
-        const retained = current.data.publications[input.publicationId].retained;
-        if (!isRetainedRecordSource(retained)) {
-          if (retained.source.selector?.kind === 'current') {
-            input.subjects.forEach((subject, index) => atSubject(index, () => bindJobAsk(subject, retained)));
-          }
-          throw new JobError('JOB_REQUEST_INVALID', 'ask-batch requires a record publication');
-        }
-        input.subjects.forEach((subject, index) => atSubject(index, () => bindJobRecordAsk(subject, retained)));
-        if (!this.options.readRecordPublished) {
-          throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Record publication requires a trusted record reader');
-        }
-        await verifyJobRecordSourceFresh({
-          retained,
-          readRecordPublished: this.options.readRecordPublished,
-          phase: 'ask',
-          subjects: input.subjects as readonly RecordSubject[],
-        });
-      }
+      candidate = input.schema === JOB_API_V3_SCHEMA
+        ? await prepareJobSource({
+            root: current.data.root,
+            stateRoot: this.store.root,
+            fingerprint: current.data.fingerprint,
+            request: input,
+            readPublished: this.options.readPublished,
+            readRecordPublished: this.options.readRecordPublished,
+            partsEnumerator: this.options.partsEnumerator,
+            afterSnapshot: this.options.afterSnapshot,
+            afterDirectorySync: this.options.afterDirectorySync,
+          })
+        : await prepareJobSource({
+            root: current.data.root,
+            stateRoot: this.store.root,
+            fingerprint: current.data.fingerprint,
+            request: input,
+            readPublished: this.options.readPublished,
+            partsEnumerator: this.options.partsEnumerator,
+            afterSnapshot: this.options.afterSnapshot,
+            afterDirectorySync: this.options.afterDirectorySync,
+          });
       if (signal.aborted) throw new JobError('JOB_REQUEST_INVALID', 'Request cancelled');
       current = this.current();
       let result: unknown;
       this.store.update(this.jobId, current.revision, fresh => {
         this.active(fresh, input.expectedGeneration);
         const data = fresh.data;
-        let snapshot: JobSnapshotOwner | undefined;
         data.generation++;
-        switch (input.verb) {
-          case 'publish': {
-            assertJobSourceCurrent(candidate!);
-            if (needsSnapshotRecheck(candidate!)) {
-              assertRetainedSnapshotIntact(
-                candidate!.snapshotRoot,
-                candidate!.seals,
-                candidate!.snapshotIdentity,
-                'JOB_SOURCE_UNRETAINABLE',
-              );
-            }
-            const publication: JobPublication | PublicationV3 = {
-              publicationId: randomUUID(), instanceKey: candidate!.instanceKey, generation: data.generation,
-              source: candidate!.source, label: candidate!.label, previousPublicationId: data.head, visual: candidate!.visual,
-              ...(!isRetainedRecordSource(candidate!) && candidate!.interview !== undefined ? { interview: candidate!.interview } : {}),
-              ...(!isRetainedRecordSource(candidate!) && candidate!.chestLandmarks ? {chestLandmarks: candidate!.chestLandmarks} : {}),
-              ...(!isRetainedRecordSource(candidate!) && candidate!.answeredDirectionFeedback ? {
-                answeredDirectionFeedback: resolveAnsweredDirectionFeedback(candidate!, {generation: data.generation}, data, this.jobId),
-              } : {}),
-            };
-            for (const ask of Object.values(data.asks)) {
-              if (ask.status === 'pending') data.asks[ask.askId] = { ...ask, status: 'superseded' };
-            }
-            data.publications[publication.publicationId] = { publication, retained: candidate! };
-            snapshot = {publicationId: publication.publicationId, snapshotHash: jobSnapshotHash(candidate!.seals),
-              snapshotRoot: candidate!.snapshotRoot, ...candidate!.snapshotIdentity!};
-            data.head = publication.publicationId;
-            this.event(data, { type: 'published', publication });
-            result = publication;
-            break;
-          }
-          case 'ask': {
-            result = this.addAsk(data, input.publicationId, input.subject, this.headRetained(data, input.publicationId));
-            break;
-          }
-          case 'ask-batch': {
-            // One head/source/snapshot re-check, then every ask under its own generation and pending event.
-            const retained = this.headRetained(data, input.publicationId);
-            const asks = input.subjects.map((subject, index) => {
-              if (index > 0) data.generation++;
-              return atSubject(index, () => this.addAsk(data, input.publicationId, subject, retained));
-            });
-            result = { asks };
-            break;
-          }
+        assertJobSourceCurrent(candidate!);
+        if (needsSnapshotRecheck(candidate!)) {
+          assertRetainedSnapshotIntact(
+            candidate!.snapshotRoot,
+            candidate!.seals,
+            candidate!.snapshotIdentity,
+            'JOB_SOURCE_UNRETAINABLE',
+          );
         }
+        const publication: JobPublication | PublicationV3 = {
+          publicationId: randomUUID(), instanceKey: candidate!.instanceKey, generation: data.generation,
+          source: candidate!.source, label: candidate!.label, previousPublicationId: data.head, visual: candidate!.visual,
+          ...(!isRetainedRecordSource(candidate!) && candidate!.interview !== undefined ? { interview: candidate!.interview } : {}),
+          ...(!isRetainedRecordSource(candidate!) && candidate!.chestLandmarks ? {chestLandmarks: candidate!.chestLandmarks} : {}),
+          ...(!isRetainedRecordSource(candidate!) && candidate!.answeredDirectionFeedback ? {
+            answeredDirectionFeedback: resolveAnsweredDirectionFeedback(candidate!, {generation: data.generation}, data, this.jobId),
+          } : {}),
+        };
+        for (const ask of Object.values(data.asks)) {
+          if (ask.status === 'pending') data.asks[ask.askId] = { ...ask, status: 'superseded' };
+        }
+        data.publications[publication.publicationId] = { publication, retained: candidate! };
+        const snapshot: JobSnapshotOwner = {publicationId: publication.publicationId, snapshotHash: jobSnapshotHash(candidate!.seals),
+          snapshotRoot: candidate!.snapshotRoot, ...candidate!.snapshotIdentity!};
+        data.head = publication.publicationId;
+        this.event(data, { type: 'published', publication });
+        result = publication;
         data.replays[key] = { digest, value: result };
-        return { data, ...(snapshot ? {snapshot} : {}) };
+        return { data, snapshot };
       }, fresh => {
         const raced = this.replay(fresh.data, key, digest);
         if (!raced) return false;
-        this.assertReplayCurrent(fresh, input.verb, raced.value);
+        this.assertReplayCurrent(fresh.data, raced.value);
         result = raced.value;
         return true;
       }, this.sameSemanticRevision(current));

@@ -56,7 +56,7 @@ On a review link:
 
 For the publishing agent:
 
-- **Publish and ask.** `session open` prints a standing review link; `publish`, `ask`, `next` and `close` drive it. [Session — WORKFLOWS](docs/WORKFLOWS.md#standing-live-job-workflow)
+- **Publish for review.** `session open` prints a standing review link; `publish`, `next` and `close` drive it. [Session — WORKFLOWS](docs/WORKFLOWS.md#standing-live-job-workflow)
 
 | Task | Command or panel | Destination |
 | --- | --- | --- |

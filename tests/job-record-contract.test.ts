@@ -144,7 +144,6 @@ test('CP1 schema constants and capabilities preserve API@2 defaults alongside op
   expect(JOB_CAPABILITIES_V3).toEqual({
     recordPublication: true,
     recordActSchema: 'rig-review/act@4',
-    askBatch: true,
     progress: true,
   });
   expect(jobApiSchemaForMode()).toBe(JOB_API_SCHEMA);
@@ -1013,43 +1012,16 @@ test('#586 reopen subject and rig-review/act@4 contract enforce exact keys, decl
     );
   }
 
-  // Package API@2 refuses reopen subjects while opt-in API@3 accepts them
-  expect(() => parseJobSubject({ kind: 'reopen', stage: 'plan-approved' })).toThrow(
-    expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
-  );
-  expect(() =>
-    parseJobRequest({
-      schema: JOB_API_SCHEMA,
-      jobId: 'job-1',
-      requestId: 'req-ask-v2-reopen',
-      verb: 'ask',
-      expectedGeneration: 1,
-      idempotencyKey: 'idem-ask-v2-reopen',
-      publicationId: 'pub-1',
-      subject: { kind: 'reopen', stage: 'plan-approved' },
-    }),
-  ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
-
-  const v3Ask = parseJobRequestV3({
-    schema: JOB_API_V3_SCHEMA,
-    jobId: 'job-1',
-    requestId: 'req-ask-v3-reopen',
-    verb: 'ask',
-    expectedGeneration: 1,
-    idempotencyKey: 'idem-ask-v3-reopen',
-    publicationId: 'pub-1',
-    subject: { kind: 'reopen', stage: 'plan-approved' },
-  });
-  expect(v3Ask).toEqual({
-    schema: JOB_API_V3_SCHEMA,
-    jobId: 'job-1',
-    requestId: 'req-ask-v3-reopen',
-    verb: 'ask',
-    expectedGeneration: 1,
-    idempotencyKey: 'idem-ask-v3-reopen',
-    publicationId: 'pub-1',
-    subject: { kind: 'reopen', stage: 'plan-approved' },
-  });
+  // The historical record subject parser still accepts reopen; neither wire schema accepts ask.
+  const subject = {kind: 'reopen', stage: 'plan-approved'} as const;
+  expect(() => parseJobSubject(subject)).toThrow(expect.objectContaining({code: 'JOB_ASK_INVALID'}));
+  expect(parseRecordSubject(subject)).toEqual(subject);
+  for (const schema of [JOB_API_SCHEMA, JOB_API_V3_SCHEMA]) {
+    expect(() => parseJobRequest({
+      schema, jobId: 'job-1', requestId: 'req-reopen', verb: 'ask',
+      expectedGeneration: 1, idempotencyKey: 'idem-reopen', publicationId: 'pub-1', subject,
+    }, schema)).toThrow(expect.objectContaining({code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}));
+  }
 
   const baseOptionContext: OptionContext = {
     label: 'Interview',
@@ -1228,7 +1200,7 @@ test('#588 @rig-c/review/job-host exports the record-mode constants, types and r
 // Archive-backed reader-double evidence using 2-rigging-answers.tar.gz with a local
 // readRecordPublished double and synthetic parts integrity (distinct from official
 // installed Create reader/consumer conformance in Create #278 and Create #317).
-test('#588 archive-backed reader-double evidence: host started with readRecordPublished serves a Create project archive under job-api@3, asks and finalizes checkpoint and signoff subjects, fetches rig-review/act@4 acts via parseRecordAct, and refuses undeclared subjects by name', async () => {
+test('#588 archive-backed reader-double evidence: host started with readRecordPublished serves a Create project archive under job-api@3, reads historical checkpoint and signoff subjects, fetches rig-review/act@4 acts via parseRecordAct, and refuses undeclared subjects by name', async () => {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-588-create-record-'));
   const root = join(scratch, 'project');
   const stateDir = join(scratch, 'state');
@@ -1400,7 +1372,7 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
     expect(planSource.projectHash).toBe(projectSha);
     expect(planSource.plan.steps).toEqual(planSteps);
 
-    // 3. Undeclared subjects refuse by name (JOB_ASK_INVALID)
+    // 3. The removed ask verb refuses undeclared subjects by name
     for (const undeclaredSubject of [
       { kind: 'checkpoint', checkpointId: 'undeclared_step' },
       { kind: 'signoff', stage: 'post-interview' },
@@ -1416,12 +1388,12 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
         publicationId: planPublication.publicationId,
         subject: undeclaredSubject,
       });
-      expect(badAskRes.status).toBe(409);
+      expect(badAskRes.status).toBe(400);
       const badAskJson = await badAskRes.json();
       expect(badAskJson).toMatchObject({
         schema: HOST_JOB_API_V3_SCHEMA,
         ok: false,
-        error: { code: 'JOB_ASK_INVALID' },
+        error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' },
       });
     }
 
@@ -1446,7 +1418,7 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
     if (!ackPlanRes.ok) throw new Error(ackPlanRes.error.code);
     const displayedNonce = ackPlanRes.value.displayedNonce;
 
-    // 4. Declared checkpoint subjects still parse on the published source (#1229), while fresh asks refuse JOB_ASK_INVALID,
+    // 4. Declared checkpoint subjects still parse on the published source (#1229), while fresh asks refuse JOB_REQUEST_INVALID,
     // fresh submissions refuse JOB_ACT_KIND_DISABLED, and stored rig-review/act@4 checkpoint acts fetch and validate over job-api@3.
     const askCheckpointRes = await callApi({
       schema: HOST_JOB_API_V3_SCHEMA,
@@ -1458,12 +1430,12 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
       publicationId: planPublication.publicationId,
       subject: { kind: 'checkpoint', checkpointId: 'seethrough' },
     });
-    expect(askCheckpointRes.status).toBe(409);
+    expect(askCheckpointRes.status).toBe(400);
     const askCheckpointJson = await askCheckpointRes.json();
     expect(askCheckpointJson).toMatchObject({
       schema: HOST_JOB_API_V3_SCHEMA,
       ok: false,
-      error: { code: 'JOB_ASK_INVALID' },
+      error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' },
     });
 
     const replayGen = host.session.status().generation;
@@ -1567,7 +1539,7 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
       }),
     ).toThrow('JOB_ACT_INVALID');
 
-    // 5. Declared signoff subjects still parse on the published source, while fresh asks refuse JOB_ASK_INVALID,
+    // 5. Declared signoff subjects still parse on the published source, while fresh asks refuse JOB_REQUEST_INVALID,
     // page submissions refuse JOB_ACT_KIND_DISABLED, and stored rig-review/act@4 signoff acts keep reading (#1227).
     if (planPublication.source.subject !== 'plan') throw new Error('Expected plan source');
     expect(planPublication.source.subjects).toContainEqual({ kind: 'signoff', stage: 'rigging-interview' });
@@ -1582,13 +1554,13 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
       publicationId: planPublication.publicationId,
       subject: { kind: 'signoff', stage: 'rigging-interview' },
     });
-    expect(askSignoffRes.status).toBe(409);
+    expect(askSignoffRes.status).toBe(400);
     const askSignoffJson = await askSignoffRes.json();
     expect(askSignoffJson).toMatchObject({
       schema: HOST_JOB_API_V3_SCHEMA,
       ok: false,
       generation: generationBeforeSignoff,
-      error: { code: 'JOB_ASK_INVALID' },
+      error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' },
     });
 
     const disabledSignoffActRes = await host.ports.commitUIAct(
@@ -1698,8 +1670,8 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
       publicationId: optionPublication.publicationId,
       subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
     });
-    expect(askOptionRes.status).toBe(409);
-    expect(await askOptionRes.json()).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+    expect(askOptionRes.status).toBe(400);
+    expect(await askOptionRes.json()).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' } });
 
     const [rigPoint] = feedbackItemComments(backdropPins.rows as unknown as Feedback[]);
     const referencePoint = structuredClone(rigPoint!);
@@ -1992,7 +1964,7 @@ test('#588 record host compatibility: cold start hook pairing, ordinary reuse, a
   }
 });
 
-test('#588 record-move and freshness boundaries: publish, ask, and commitUIAct report JOB_RECORD_MOVED when project.json moves during reader phases or before synchronous store commit', async () => {
+test('#588 record-move and freshness boundaries: publish and commitUIAct report JOB_RECORD_MOVED when project.json moves during reader phases or before synchronous store commit', async () => {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-588-move-boundary-'));
   const root = join(scratch, 'project');
   const stateDir = join(scratch, 'state');
@@ -2136,7 +2108,7 @@ test('#588 record-move and freshness boundaries: publish, ask, and commitUIAct r
     const publication = (await cleanPublishRes.json()).value as publicJobHost.JobPublicationV3;
     expect(host.session.status().generation).toBe(1);
 
-    // 3. #1229 / #1230: all fresh record asks refuse JOB_ASK_INVALID at bindJobRecordAsk before reader invocation, without advancing generation
+    // 3. #1229 / #1230: all fresh record asks refuse JOB_REQUEST_INVALID at bindJobRecordAsk before reader invocation, without advancing generation
     const optScratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-588-ask-move-'));
     try {
       const optRoot = join(optScratch, 'project');
@@ -2178,11 +2150,11 @@ test('#588 record-move and freshness boundaries: publish, ask, and commitUIAct r
           publicationId: optPub.publicationId,
           subject: optWorkspace.context.subjects[0]!,
         });
-        expect(refusedAskRes.status).toBe(409);
+        expect(refusedAskRes.status).toBe(400);
         expect(await refusedAskRes.json()).toMatchObject({
           schema: HOST_JOB_API_V3_SCHEMA,
           ok: false,
-          error: { code: 'JOB_ASK_INVALID' },
+          error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' },
         });
         expect(optReads).toBe(readsAfterPublish);
         expect(optHost.session.status().generation).toBe(1);
@@ -2363,7 +2335,7 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
         }),
       );
 
-    // 1. Publish plan record and verify fresh checkpoint (#1229) and signoff (#1227) asks refuse JOB_ASK_INVALID
+    // 1. Publish plan record and verify fresh checkpoint (#1229) and signoff (#1227) asks refuse JOB_REQUEST_INVALID
     const pubPlanRes = await callApi({
       schema: HOST_JOB_API_V3_SCHEMA,
       jobId: host.session.jobId,
@@ -2390,11 +2362,11 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
       publicationId: planPublication.publicationId,
       subject: { kind: 'checkpoint', checkpointId: 'seethrough' },
     });
-    expect(askCpRes.status).toBe(409);
+    expect(askCpRes.status).toBe(400);
     expect(await askCpRes.json()).toMatchObject({
       schema: HOST_JOB_API_V3_SCHEMA,
       ok: false,
-      error: { code: 'JOB_ASK_INVALID' },
+      error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' },
     });
 
     const askSignoffRes = await callApi({
@@ -2407,11 +2379,11 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
       publicationId: planPublication.publicationId,
       subject: { kind: 'signoff', stage: 'rigging-interview' },
     });
-    expect(askSignoffRes.status).toBe(409);
+    expect(askSignoffRes.status).toBe(400);
     expect(await askSignoffRes.json()).toMatchObject({
       schema: HOST_JOB_API_V3_SCHEMA,
       ok: false,
-      error: { code: 'JOB_ASK_INVALID' },
+      error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' },
     });
 
     // 2. Drive normal owner URL access -> transport -> createJobWindow -> prepareJobInspection -> comment-only act@10 submit
@@ -2629,12 +2601,12 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
   }
 });
 
-test('#588 browser packet preflight: shared archive reader fixture passes non-browser publish/ask setup check with duplicate-free closureFiles', async () => {
+test('#588 browser packet preflight: shared archive reader fixture passes non-browser publish and retired-verb setup check with duplicate-free closureFiles', async () => {
   await runRecordBrowserPreflightSetupCheck();
 });
 
 test('#586 live host and session reopen lifecycle: package-only host refuses reopen ask/act, record-and-package host enforces declared stage, display receipt, and source currentness, and finalizes/fetches rig-review/act@4 {stage, words} with verbatim words via parseRecordAct', async () => {
-  // Part A: package-only default session/host rejects reopen ask (JOB_ASK_INVALID) and reopen UI act (JOB_ACT_INVALID)
+  // Part A: package-only default session/host rejects the removed ask verb and the reopen UI act
   const pkgFixture = await jobFixture();
   try {
     const pkgPub = await pkgFixture.publish();
@@ -2647,11 +2619,11 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
       publicationId: pkgPub.publicationId,
       subject: { kind: 'reopen', stage: 'plan-approved' },
     });
-    expect(badPkgAskRes.status).toBe(409);
+    expect(badPkgAskRes.status).toBe(400);
     expect(await badPkgAskRes.json()).toMatchObject({
       schema: JOB_API_SCHEMA,
       ok: false,
-      error: { code: 'JOB_ASK_INVALID' },
+      error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' },
     });
 
     const pkgReceipt = await pkgFixture.display(pkgPub);
@@ -2796,7 +2768,7 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
         }),
       );
 
-    // 1. Publish option-set and verify reopen ask is refused on option-set (JOB_ASK_INVALID)
+    // 1. Publish option-set and verify the removed ask verb refuses on an option-set
     const pubOptRes = await callApi({
       schema: HOST_JOB_API_V3_SCHEMA,
       jobId: host.session.jobId,
@@ -2824,11 +2796,11 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
       publicationId: optPub.publicationId,
       subject: { kind: 'reopen', stage: 'plan-approved' },
     });
-    expect(badOptReopenAsk.status).toBe(409);
+    expect(badOptReopenAsk.status).toBe(400);
     expect(await badOptReopenAsk.json()).toMatchObject({
       schema: HOST_JOB_API_V3_SCHEMA,
       ok: false,
-      error: { code: 'JOB_ASK_INVALID' },
+      error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' },
     });
 
     // 2. Publish plan with declared reopen stages ['plan-approved', 'design-interview']
@@ -2852,7 +2824,7 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
     expect(planSource.subjects).toContainEqual({ kind: 'reopen', stage: 'plan-approved' });
     expect(planSource.subjects).toContainEqual({ kind: 'reopen', stage: 'design-interview' });
 
-    // 3. Both undeclared and declared reopen stages refuse at ask with JOB_ASK_INVALID (#989 Bar 2)
+    // 3. Both undeclared and declared reopen stages receive the same removed-verb refusal
     for (const stage of ['post-interview', 'plan-approved', 'design-interview'] as const) {
       const beforeGen = host.session.status().generation;
       const askRes = await callApi({
@@ -2865,11 +2837,11 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
         publicationId: planPub.publicationId,
         subject: { kind: 'reopen', stage },
       });
-      expect(askRes.status).toBe(409);
+      expect(askRes.status).toBe(400);
       expect(await askRes.json()).toMatchObject({
         schema: HOST_JOB_API_V3_SCHEMA,
         ok: false,
-        error: { code: 'JOB_ASK_INVALID' },
+        error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' },
       });
       expect(host.session.status().generation).toBe(beforeGen);
     }
@@ -2934,12 +2906,12 @@ test('#800 / #1227 all five record signoffs still parse on publications and hist
     expect(publication.source.subjects).toEqual(stages.map(stage => ({kind: 'signoff', stage})));
     const unknown = await (await call({verb: 'ask', expectedGeneration: session.status().generation, idempotencyKey: 'unknown',
       publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'unknown-stage'}})).json();
-    expect(unknown).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+    expect(unknown).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
     for (const stage of stages) {
       const askedRes = await call({verb: 'ask', expectedGeneration: session.status().generation, idempotencyKey: stage,
         publicationId: publication.publicationId, subject: {kind: 'signoff', stage}});
-      expect(askedRes.status).toBe(409);
-      expect(await askedRes.json()).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+      expect(askedRes.status).toBe(400);
+      expect(await askedRes.json()).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
       const receipt = await ports.ackDisplayed(session.jobId, new Request(origin + `/jobs/${session.jobId}/ui/displayed`, {
         method: 'POST', headers: {'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': credentials.ui},
         body: JSON.stringify({publicationId: publication.publicationId, pageId: stage, sourceHash: publication.source.sourceHash}),

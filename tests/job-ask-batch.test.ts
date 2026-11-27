@@ -4,14 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'bun:test';
 import { JobSession } from '../src/job-session.ts';
-import { createJobHostPorts, jobAskBatchLimit, parseJobRequestV3, parseRecordSource, requestDigest } from '../src/job-api.ts';
-import { JOB_API_V3_SCHEMA, JOB_CAPABILITIES_V3, type NextValueV3, type PendingAskV3 } from '../src/job-contract.ts';
+import { createJobHostPorts, parseJobRequest, parseRecordSource, requestDigest } from '../src/job-api.ts';
+import { JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_CAPABILITIES_V3, jobRawActMediaType, type PendingAskV3 } from '../src/job-contract.ts';
 import type { JobStore } from '../src/job-store.ts';
+import { seedHistoricalPicksAct } from './helpers/historical-picks-act.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
 import { createSyntheticOptionSetsRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
 
-// Review #963 / #1229 / #1230: fresh record asks and ask-batch requests refuse JOB_ASK_INVALID across all retired record subjects,
-// while request parsing bounds, head checks and pre-refusal stored ask-batch replay receipts remain intact.
+const removedVerbError = (verb: 'ask' | 'ask-batch') => ({
+  code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ' + verb,
+});
 
 async function batchFixture(prefix: string) {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), prefix));
@@ -23,10 +25,13 @@ async function batchFixture(prefix: string) {
     reviewer: { id: 'synthetic-owner', role: 'owner' }, publicationMode: 'record-and-package', readRecordPublished: reader.reader });
   const origin = 'http://127.0.0.1:19963', ports = createJobHostPorts(session, origin), credentials = session.hostCredentials();
   let sequence = 0;
-  const call = async (body: object) => (await ports.handleJobApi(new Request(origin + `/jobs/${session.jobId}/api`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + credentials.agent },
-    body: JSON.stringify({ schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'request-' + (++sequence), ...body }),
-  }))).json();
+  const request = (body: object, token = credentials.agent, accept = 'application/json') =>
+    ports.handleJobApi(new Request(origin + `/jobs/${session.jobId}/api`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token, Accept: accept },
+      body: JSON.stringify({ schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'request-' + (++sequence), ...body }),
+    }));
+  const call = async (body: object) => (await request(body)).json();
+  const next = (after: string | null = null) => call({verb: 'next', after, waitMs: 0});
   const published = await call({ verb: 'publish', expectedGeneration: 0, idempotencyKey: 'publish',
     result: workspace.result, freeze: { kind: 'producer-held', holdId: 'synthetic', record: workspace.record } });
   expect(published.ok).toBe(true);
@@ -52,22 +57,19 @@ async function batchFixture(prefix: string) {
         internal.event(data, { type: 'pending', ask });
         return ask;
       });
-      const parsed = parseJobRequestV3({
-        schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'seed-' + idempotencyKey,
-        verb: 'ask-batch', expectedGeneration, idempotencyKey, publicationId, subjects,
-      }) as unknown as Record<string, unknown>;
-      const { requestId: _requestId, ...semantic } = parsed;
-      data.replays['agent:' + idempotencyKey] = { digest: requestDigest(semantic), value: { asks } };
+      const semantic = {schema: JOB_API_V3_SCHEMA, jobId: session.jobId, verb: 'ask-batch',
+        expectedGeneration, idempotencyKey, publicationId, subjects};
+      data.replays['agent:' + idempotencyKey] = {digest: requestDigest(semantic), value: {asks}};
       return { data };
     });
     internal.notify();
     return { asks };
   }
-  return { scratch, root, workspace, reader, session, store, call, batch, seedHistoricalBatch, snapshot, publicationId,
+  return { scratch, root, workspace, reader, session, store, call, request, next, batch, seedHistoricalBatch, snapshot, publicationId,
     dispose: async () => { session.dispose(); await rm(scratch, { recursive: true, force: true }); } };
 }
 
-test('#963 / #1229 / #1230 fresh single record asks and ask-batch requests refuse JOB_ASK_INVALID without calling the reader or mutating generation', async () => {
+test('#963 / #1229 / #1230 removed single record asks and ask-batch requests refuse by name without calling the reader or mutating generation', async () => {
   const fixture = await batchFixture('review-ask-batch-refusal-');
   try {
     const subjects = fixture.workspace.context.subjects;
@@ -77,10 +79,10 @@ test('#963 / #1229 / #1230 fresh single record asks and ask-batch requests refus
     for (const [index, subject] of subjects.entries()) {
       const asked = await fixture.call({ verb: 'ask', expectedGeneration: generation,
         idempotencyKey: 'single-' + index, publicationId: fixture.publicationId, subject });
-      expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+      expect(asked).toMatchObject({ ok: false, error: removedVerbError('ask') });
     }
     const response = await fixture.batch(subjects);
-    expect(response).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID', message: 'subjects[0]: JOB_ASK_INVALID' } });
+    expect(response).toMatchObject({ ok: false, error: removedVerbError('ask-batch') });
     expect(fixture.reader.calls.length).toBe(calls);
     expect(fixture.session.status().generation).toBe(generation);
     expect(fixture.session.status().pending).toEqual([]);
@@ -90,7 +92,7 @@ test('#963 / #1229 / #1230 fresh single record asks and ask-batch requests refus
   }
 });
 
-test('#963 malformed, duplicate, out-of-bounds and retired subjects refuse the whole batch under their index and leave the store unchanged', async () => {
+test('#963 the removed batch verb refuses before checking subject shape, duplicates or bounds and leave the store unchanged', async () => {
   const fixture = await batchFixture('review-ask-batch-atomic-');
   try {
     const subjects = fixture.workspace.context.subjects;
@@ -103,26 +105,25 @@ test('#963 malformed, duplicate, out-of-bounds and retired subjects refuse the w
       ['reopen', { kind: 'reopen', stage: 'plan-approved' }],
     ] as const) {
       const refused = await fixture.batch([retired], 'retired-' + key);
-      expect(refused).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID', message: 'subjects[0]: JOB_ASK_INVALID' } });
+      expect(refused).toMatchObject({ ok: false, error: removedVerbError('ask-batch') });
     }
 
     const malformed = await fixture.batch([subjects[0]!, { kind: 'no-such-subject' }], 'malformed');
-    expect(malformed.ok).toBe(false);
-    expect(malformed.error.message.startsWith('subjects[1]: ')).toBe(true);
+    expect(malformed).toMatchObject({ok: false, error: removedVerbError('ask-batch')});
     expect(fixture.snapshot()).toEqual(before);
 
     const duplicate = await fixture.batch([subjects[0]!, subjects[1]!, subjects[0]!], 'duplicate');
-    expect(duplicate).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'subjects[2]: duplicate of subjects[0]' } });
-    for (const count of [0, jobAskBatchLimit + 1]) {
+    expect(duplicate).toMatchObject({ ok: false, error: removedVerbError('ask-batch') });
+    for (const count of [0, 33]) {
       const sized = await fixture.batch(Array.from({ length: count }, (_, index) => ({ kind: 'checkpoint', checkpointId: 'step_' + index })), 'size-' + count);
-      expect(sized).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'JOB_REQUEST_INVALID' } });
+      expect(sized).toMatchObject({ ok: false, error: removedVerbError('ask-batch') });
     }
     expect(fixture.snapshot()).toEqual(before);
     expect(fixture.reader.calls.length).toBe(calls);
   } finally { await fixture.dispose(); }
 });
 
-test('#963 non-head publications refuse ask-batch with JOB_ACT_SOURCE_STALE before subject binding', async () => {
+test('#963 a stale publication has the same removed-verb refusal', async () => {
   const fixture = await batchFixture('review-ask-batch-stale-');
   try {
     const subjects = fixture.workspace.context.subjects;
@@ -132,13 +133,13 @@ test('#963 non-head publications refuse ask-batch with JOB_ACT_SOURCE_STALE befo
     const before = fixture.snapshot(), calls = fixture.reader.calls.length;
     const stale = await fixture.call({ verb: 'ask-batch', expectedGeneration: fixture.session.status().generation,
       idempotencyKey: 'stale-head', publicationId: fixture.publicationId, subjects });
-    expect(stale).toMatchObject({ ok: false, error: { code: 'JOB_ACT_SOURCE_STALE' } });
+    expect(stale).toMatchObject({ ok: false, error: removedVerbError('ask-batch') });
     expect(fixture.reader.calls.length).toBe(calls);
     expect(fixture.snapshot()).toEqual(before);
   } finally { await fixture.dispose(); }
 });
 
-test('#963 a replayed historical batch returns the same asks without reading the publisher again', async () => {
+test('#963 historical batch events are readable without the publisher and corrupted receipts still refuse reads', async () => {
   const fixture = await batchFixture('review-ask-batch-replay-');
   try {
     const subjects = fixture.workspace.context.subjects.slice(0, 3);
@@ -147,13 +148,17 @@ test('#963 a replayed historical batch returns the same asks without reading the
     const calls = fixture.reader.calls.length, after = fixture.snapshot();
     const replayed = await fixture.call({ verb: 'ask-batch', expectedGeneration: generation, idempotencyKey: 'replay',
       publicationId: fixture.publicationId, subjects });
-    expect(replayed.value).toEqual(seeded);
+    expect(replayed).toMatchObject({ok: false, error: removedVerbError('ask-batch')});
+    const history = await fixture.next();
+    expect(history.ok).toBe(true);
+    expect(history.value.events.filter((event: {type: string}) => event.type === 'pending')
+      .map((event: {ask: unknown}) => event.ask)).toEqual(seeded.asks);
     expect(fixture.reader.calls.length).toBe(calls);
     expect(fixture.snapshot()).toEqual(after);
 
     const conflict = await fixture.call({ verb: 'ask-batch', expectedGeneration: generation, idempotencyKey: 'replay',
       publicationId: fixture.publicationId, subjects: subjects.slice(0, 2) });
-    expect(conflict).toMatchObject({ ok: false, error: { code: 'JOB_IDEMPOTENCY_CONFLICT' } });
+    expect(conflict).toMatchObject({ ok: false, error: removedVerbError('ask-batch') });
 
     // Each ask inside the stored batch receipt is a durable copy: evidence its publication does not carry refuses.
     const store = fixture.store as unknown as JobStore<{ replays: Record<string, { value: { asks: { source: object }[] } }> }>;
@@ -162,55 +167,85 @@ test('#963 a replayed historical batch returns the same asks without reading the
       Object.assign(data.replays['agent:replay'].value.asks[1].source, { checkpointEvidence: [] });
       return { data };
     });
-    const tampered = await fixture.call({ verb: 'ask-batch', expectedGeneration: generation, idempotencyKey: 'replay',
-      publicationId: fixture.publicationId, subjects });
-    expect(tampered).toMatchObject({ ok: false, error: { code: 'JOB_SOURCE_MISMATCH' } });
+    expect(await fixture.next()).toMatchObject({ok: false, error: {code: 'JOB_SOURCE_MISMATCH'}});
   } finally { await fixture.dispose(); }
 });
 
-test('#963 next reports askBatch among the V3 capabilities and ask-batch parses only under job-api@3', async () => {
+test('#1225 next omits askBatch and both wire schemas refuse the removed verbs', async () => {
   const fixture = await batchFixture('review-ask-batch-next-');
+  const packageFixture = await jobFixture();
   try {
-    const next = await fixture.call({ verb: 'next', after: null, waitMs: 0 });
+    const next = await fixture.next();
     expect(next.value.capabilities).toEqual(JOB_CAPABILITIES_V3);
-    expect(next.value.capabilities.askBatch).toBe(true);
+    expect(next.value.capabilities).not.toHaveProperty('askBatch');
     expect(next.value.capabilities.progress).toBe(true);
-  } finally { await fixture.dispose(); }
-  // Request schema parsing still recognizes historical record subject shapes before bindJobRecordAsk refuses fresh asks.
-  const request = { schema: JOB_API_V3_SCHEMA, jobId: 'job-1', requestId: 'request-1', verb: 'ask-batch',
-    expectedGeneration: 0, idempotencyKey: 'key', publicationId: 'publication-1', subjects: [{ kind: 'checkpoint', checkpointId: 'step_layout' }] };
-  expect(parseJobRequestV3(request)).toEqual(request as never);
-  expect(() => parseJobRequestV3({ ...request, subject: request.subjects[0] })).toThrow('JOB_REQUEST_INVALID');
-  expect(() => parseJobRequestV3({ ...request, subjects: request.subjects[0] })).toThrow('JOB_REQUEST_INVALID');
-});
-
-test('#963 a package-retained head refuses ask-batch with JOB_REQUEST_INVALID and creates nothing', async () => {
-  const f = await jobFixture();
-  const stateDir = await mkdtemp(join(realpathSync(tmpdir()), 'review-ask-batch-package-'));
-  const session = new JobSession({ root: f.root, stateDir, fingerprint: 'b'.repeat(64), reviewer: { id: 'owner', role: 'owner' },
-    publicationMode: 'record-and-package', readPublished: async () => f.getContext() });
-  try {
-    const original = await f.publishRequest() as unknown as { result: object };
-    const publication = await session.execute({ ...original, schema: JOB_API_V3_SCHEMA, jobId: session.jobId, expectedGeneration: 0,
-      result: { ...original.result, kind: 'package' } } as never, new AbortController().signal) as { publicationId: string };
-    const next = await session.execute({ schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'next', verb: 'next',
-      after: null, waitMs: 0 }, new AbortController().signal) as NextValueV3;
-    expect((next.capabilities as { askBatch?: boolean } | undefined)?.askBatch).toBe(true);
-    const generation = session.status().generation;
-    const refused = session.execute({ schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'batch', verb: 'ask-batch',
-      expectedGeneration: generation, idempotencyKey: 'batch', publicationId: publication.publicationId,
-      subjects: [{ kind: 'review-verdict', stage: 'rig-review' }] }, new AbortController().signal);
-    await expect(refused).rejects.toMatchObject({ code: 'JOB_REQUEST_INVALID' });
-    expect(session.status().generation).toBe(generation);
-    expect(session.status().pending).toEqual([]);
+    const pkg = await packageFixture.publish();
+    const before = packageFixture.session.status();
+    for (const verb of ['ask', 'ask-batch'] as const) {
+      const subject = {kind: 'checkpoint', checkpointId: 'step-one'};
+      const request = {...packageFixture.base(), verb, expectedGeneration: before.generation,
+        idempotencyKey: 'removed-verb', publicationId: pkg.publicationId,
+        ...(verb === 'ask' ? {subject} : {subjects: [subject]})};
+      for (const schema of [JOB_API_SCHEMA, JOB_API_V3_SCHEMA]) {
+        expect(() => parseJobRequest({...request, schema}, schema)).toThrow(expect.objectContaining(removedVerbError(verb)));
+      }
+      for (const response of [
+        await packageFixture.call(request),
+        await fixture.request({verb}),
+        await fixture.request({verb, schema: JOB_API_SCHEMA}),
+      ]) {
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ok: false, error: removedVerbError(verb)});
+      }
+    }
+    expect(packageFixture.session.status()).toEqual(before);
   } finally {
-    session.dispose();
-    await f.close();
-    await rm(stateDir, { recursive: true, force: true });
+    await packageFixture.close();
+    await fixture.dispose();
   }
 });
 
-test('#1022 a replayed historical batch whose asks were superseded refuses by index and names the head', async () => {
+test('#1225 recorded multi-set acts return identical bytes through next, fetch-act and UI retry after republish', async () => {
+  const fixture = await batchFixture('review-ask-batch-act-history-');
+  const {session, publicationId, reader, workspace} = fixture;
+  try {
+    const source = session.status().publication!.source;
+    const page = session.ackDisplayed({publicationId, pageId: 'historical-batch-page', sourceHash: source.sourceHash});
+    const start = await fixture.next();
+    const recorded = session.retainedSourceV3(publicationId).questions.map(question => {
+      const {set} = question;
+      const value = {questionId: set.question, note: '  exact 한글\n', selections: set.asks.map(item => ({
+        itemId: item.id, optionId: item.options.find(option => option.recommended)!.id, otherText: null,
+      }))};
+      const submission = {...page, expectedGeneration: session.status().generation, submissionId: 'historical-' + set.id,
+        kind: 'interview-picks', value};
+      const act = seedHistoricalPicksAct(session, {...submission, questionId: set.question,
+        setId: set.id, optionSetSha256: question.ref.sha256});
+      return {act, submission: {...submission, askId: act.askId}, bytes: JSON.stringify(act)};
+    });
+    expect(recorded).toHaveLength(3);
+    const head = await fixture.call({verb: 'publish', expectedGeneration: session.status().generation,
+      idempotencyKey: 'new-head', result: workspace.result, freeze: {kind: 'producer-held', holdId: 'synthetic-2', record: workspace.record}});
+    expect(head.ok).toBe(true);
+    const before = fixture.snapshot(), calls = reader.calls.length;
+    const history = await fixture.next(start.value.cursor);
+    expect(history.ok).toBe(true);
+    expect(history.value.events.filter((event: {type: string}) => event.type === 'act')
+      .map((event: {act: unknown}) => JSON.stringify(event.act))).toEqual(recorded.map(row => row.bytes));
+    for (const {act, submission, bytes} of recorded) {
+      const response = await fixture.request({verb: 'fetch-act', actId: act.actId}, session.writerGrant().fetchCapability, jobRawActMediaType);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(bytes);
+      expect(JSON.stringify(await session.commitUIAct(submission))).toBe(bytes);
+      await expect(session.commitUIAct({...submission, value: {...submission.value, note: 'changed'}}))
+        .rejects.toMatchObject({code: 'JOB_IDEMPOTENCY_CONFLICT'});
+    }
+    expect(fixture.snapshot()).toEqual(before);
+    expect(reader.calls.length).toBe(calls);
+  } finally { await fixture.dispose(); }
+});
+
+test('#1022 a superseded historical batch keeps its events while retries of the removed verb refuse', async () => {
   const fixture = await batchFixture('review-ask-batch-superseded-');
   try {
     const subjects = fixture.workspace.context.subjects.slice(0, 2);
@@ -222,8 +257,11 @@ test('#1022 a replayed historical batch whose asks were superseded refuses by in
     const before = fixture.snapshot();
     const replayed = await fixture.call({ verb: 'ask-batch', expectedGeneration: generation, idempotencyKey: 'superseded',
       publicationId: fixture.publicationId, subjects });
-    expect(replayed).toMatchObject({ ok: false, error: { code: 'JOB_ASK_SUPERSEDED',
-      message: `subjects[0]: ask ${seeded.asks[0]!.askId} is superseded; head ${republished.value.publicationId}` } });
+    expect(replayed).toMatchObject({ok: false, error: removedVerbError('ask-batch')});
+    const history = await fixture.next();
+    expect(history.value.events.filter((event: {type: string}) => event.type === 'pending')
+      .map((event: {ask: unknown}) => event.ask)).toEqual(seeded.asks);
+    expect(fixture.session.status().pending).toEqual([]);
     expect(fixture.snapshot()).toEqual(before);
   } finally { await fixture.dispose(); }
 });

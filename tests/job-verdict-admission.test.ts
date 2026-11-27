@@ -24,9 +24,9 @@ for (const subject of subjects) {
         const before = row.get(f.session.jobId);
         const response = await f.call({...f.base(), verb: 'ask', expectedGeneration: publication.generation,
           idempotencyKey: 'fresh-verdict', publicationId: publication.publicationId, subject});
-        expect(response.status).toBe(409);
+        expect(response.status).toBe(400);
         expect(await response.json()).toMatchObject({ok: false, generation: publication.generation,
-          error: {code: 'JOB_ASK_INVALID'}});
+          error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
         expect(row.get(f.session.jobId)).toEqual(before);
       } finally {db.close();}
     } finally {await f.close();}

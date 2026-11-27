@@ -51,10 +51,10 @@ async function runFlow(ownUid: boolean) {
     async fetch(request) {
       const input = request.clone();
       const response = await ports.handleJobApi(request);
-      if (response.status !== 409) return response;
+      if (response.status !== 400) return response;
       const body = await input.json();
       if (body.idempotencyKey === 'agent-fresh-ask' &&
-          (await response.clone().json()).error?.code === 'JOB_ASK_INVALID') {
+          (await response.clone().json()).error?.message === 'Unknown job verb: ask') {
         const publication = f.session.status().publication!;
         seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'}, 'agent-ask');
       }
@@ -143,16 +143,16 @@ test.skipIf(agentUid === undefined && !requiredInCI)(
     expect(result.messages.find(message => message.identity).identity).toEqual({
       uid: agentUid, daemonUid, directoryDenied: true, databaseDenied: true,
     });
-    for (const verb of ['publish', 'ask', 'next', 'close']) {
+    for (const verb of ['publish', 'next', 'close']) {
       expect(result.messages.some(message => message.flow?.verb === verb && message.flow.ok)).toBe(true);
     }
     expect(result.messages.filter(message => message.flow?.verb === 'ask').map(message => message.flow))
-      .toEqual([{verb: 'ask', ok: false, generation: 1, code: 'JOB_ASK_INVALID'},
-        {verb: 'ask', ok: true, generation: expect.any(Number)}]);
+      .toEqual([{verb: 'ask', ok: false, generation: 1, code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}]);
     const received = result.messages.find(message => message.receivedAct)?.receivedAct;
     expect(received.actId).toBeTruthy();
     expect(received.sourceHash).toMatch(/^[a-f0-9]{64}$/);
     const completed = result.messages.find(message => message.completed);
+    expect(completed.sawPendingAsk).toBe(true);
     expect(completed.schema).toBe('rig-review/act@6');
     expect(completed.texts).toEqual(['isolated exact words']);
     expect(completed.firstPublication).not.toBe(completed.secondPublication);
