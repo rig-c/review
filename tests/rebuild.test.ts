@@ -617,7 +617,6 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));
   // Connect to stagePartsRoutes and verify end-to-end Stage 1 scratch display + Reset.
   const stageRoute=stagePartsRoutes({single:f.p},undefined,id=>rebuilds.stageDraft(id),{
    joined:f.joined,
-   readInput:async r=>r.json(),
    viewOnly:false,
   });
   const stageScratch=await (await stageRoute(new Request('http://127.0.0.1/api/stage-parts',{headers:{'X-Review-Stage-Build':patchJob.id}})))!.json();

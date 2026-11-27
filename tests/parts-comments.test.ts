@@ -6,12 +6,13 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {PNG} from 'pngjs';
 import {writePartsPackage} from './helpers/parts-package.ts';
-import {loadPartsView,saveVerdict,saveVerdictWithReceipt,readVerdict,readPartsVerdictJson,verdictSource,exportPartsVerdict,partsViewJson,type PartsViewPackage} from '../src/parts-view.ts';
+import {buildVerdict,loadPartsView,readVerdict,readPartsVerdictJson,verdictSource,exportPartsVerdict,partsViewJson,type PartsViewPackage} from '../src/parts-view.ts';
 import {preparePartsComment,validateStoredPartsComment} from '../src/parts-comment-crops.ts';
 import {resolvedCropPath,storePngCrop,validatePngCrop,validatePngCropMetadata} from '../src/comment-crops.ts';
 import {parsePartsComment,parsePartsIssue,assertPartsIssueBinding,snapImageRegion} from '../src/parts-comment.ts';
 import {parseStageComment} from '../src/stage-comment.ts';
 import {commentFixture,candidate,legacyCandidate} from './helpers/parts-comments-package.ts';
+import {seedPartsVerdictFixture} from './helpers/parts-verdict-fixture.ts';
 import {parseCommentsAct,parseCommentsPartsVerdict} from '../src/job-host.ts';
 import commentsLegacy from './fixtures/comments-contract-legacy.json';
 
@@ -64,9 +65,11 @@ test('parts issues (/2): item and assembled multi-part records round-trip in ver
  const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'parts-comments-'));try{const pkg=await commentFixture(root),before=await Promise.all(pkg.files.map(f=>readFile(f.abs))),one=await preparePartsComment(pkg,candidate(pkg)),frontHash=pkg.files.find(f=>f.abs===pkg.imagePaths[2])!.sha256,two=await preparePartsComment(pkg,{...candidate(pkg),id:'comment-two',summary:'Assembled multi-part seam',parts:[{name:'back_defect',imageHash:one.parts[0]!.imageHash},{name:'front',imageHash:frontHash}],imageRegion:null,rigRegion:{x:2,y:11,width:8,height:9},nativeCrop:null,view:{...one.view,mode:'assembled',camera:{...one.view.camera,zoom:0.25}}});
  expect(two.nativeCrop).toBeNull();
  expect(two.view.camera.zoom).toBe(0.25);
- const saved=await saveVerdict(pkg,{status:'changes-requested',issues:[one,two]});expect(saved.schema).toBe('rig-review-parts-verdict/4');expect((await readVerdict(pkg)).verdict!.issues).toEqual([one,two]);
- const {verdict:named}=await saveVerdictWithReceipt(pkg,{status:'changes-requested',issues:[one,two]},undefined,'alice');expect(named.schema).toBe('rig-review-parts-verdict/4');expect(named.by).toBe('alice');expect((await readVerdict(pkg)).verdict!.by).toBe('alice');
- const unnamedResaved=await saveVerdict(pkg,{status:'changes-requested',issues:[one,two],by:'forged-browser-by'});expect(unnamedResaved.by).toBeUndefined();expect((await readVerdict(pkg)).verdict!.by).toBeUndefined();
+ const body={status:'changes-requested',issues:[one,two]};
+ const saved=await seedPartsVerdictFixture(pkg,body);expect(saved.schema).toBe('rig-review-parts-verdict/4');
+ const anonymous=(await readVerdict(pkg)).verdict!;expect(anonymous.issues).toEqual([one,two]);expect(anonymous.by).toBeUndefined();
+ await seedPartsVerdictFixture(pkg,body,'alice');expect((await readVerdict(pkg)).verdict).toEqual({...saved,by:'alice'});
+ expect(buildVerdict(pkg,{...body,by:'forged-browser-by'},'test').by).toBeUndefined();
  const crop=PNG.sync.read(await readFile(resolvedCropPath(one.nativeCrop!.path))),original=PNG.sync.read(await readFile(pkg.imagePaths[0]!));const expected=[];for(let y=3;y<12;y++)expected.push(...original.data.subarray((y*30+2)*4,(y*30+10)*4));expect([...crop.data]).toEqual(expected);expect(new Set([...crop.data].filter((_,i)=>i%4===3)).size).toBeGreaterThan(2);
  for(const format of ['json','issue'] as const){const out=exportPartsVerdict(saved,format);expect(out).toContain('back_defect');expect(out).toContain('front');for(const c of [one,two]){expect(out).toContain(c.summary);expect(out).toContain(c.crop.sha256);expect(out).toContain(c.crop.path);}expect(out).toContain(one.nativeCrop!.sha256);expect(out).toContain(one.nativeCrop!.path);expect(out).toContain('2.125');expect(out).toContain('11.375');expect(out).not.toContain('data:image');}
  expect(await Promise.all(pkg.files.map(f=>readFile(f.abs)))).toEqual(before);
@@ -122,13 +125,13 @@ test('optional painting is hashed and protected; wrong canvas is refused before 
 });
 
 import {startPartsServer} from '../src/parts-server.ts';
-test('parts comment HTTP routes enforce origin/capability/closed paths and CLI exports both crops after save',async()=>{
+test('parts comment HTTP routes enforce origin/capability/closed paths and CLI exports both crops from a historical verdict',async()=>{
  const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'parts-comment-http-'));const pkg=await commentFixture(root),capability='b'.repeat(64),server=await startPartsServer(pkg,{port:0,capability,exitOnClose:false});try{
  const origin=`http://127.0.0.1:${server.port}`,headers={'Content-Type':'application/json',Origin:origin,'X-Review-Capability':capability},post=(body:unknown,h=headers)=>fetch(origin+'/api/parts/comment',{method:'POST',headers:h,body:JSON.stringify(body)}),c=candidate(pkg);
  expect((await post(c,{'Content-Type':'application/json',Origin:origin} as any)).status).toBe(403);expect((await post(c,{...headers,Origin:'http://elsewhere'})).status).toBe(403);
  const pathInjection=await post({...c,crop:{...c.crop,path:'../../outside.png'}});expect(pathInjection.status).toBe(400);expect((await pathInjection.json()).error).toContain('PARTS_COMMENT_CROP_INVALID');
  for(const [body,name]of [[{...c,parts:[{name:'back_defect',imageHash:'0'.repeat(64)}]},'PARTS_COMMENT_STALE_SOURCE'],[{...c,imageRegion:{...c.imageRegion!,x:1.5}},'PARTS_COMMENT_FRACTIONAL'],[{...c,crop:{...c.crop,png:c.crop.png!.replace('AAAA','BBBB')}},'COMMENT_CROP_INVALID'],[{...c,view:{...c.view,camera:{...c.view.camera,zoom:17}}},'PARTS_CAMERA_RANGE'],[{...c,view:{...c.view,camera:{...c.view.camera,unknown:1}}},'PARTS_COMMENT_INVALID']] as const){const res=await post(body);expect(res.status).toBe(400);expect((await res.json()).error).toContain(name);}
- const res=await post(c);expect(res.status).toBe(200);const one=(await res.json()).comment;await saveVerdict(pkg,{status:'changes-requested',issues:[one]});
+ const res=await post(c);expect(res.status).toBe(200);const one=(await res.json()).comment;await seedPartsVerdictFixture(pkg,{status:'changes-requested',issues:[one]});
  const cliState=process.env.RIG_REVIEW_STATE_DIR!;
  for(const format of ['json','issue']){const proc=Bun.spawn([process.execPath,'src/cli.ts','parts',root,'--format',format],{env:{...process.env,RIG_REVIEW_STATE_DIR:cliState},stdout:'pipe',stderr:'pipe'}),text=await new Response(proc.stdout).text(),error=await new Response(proc.stderr).text();expect(await proc.exited,error).toBe(0);expect(error).toBe('');expect(text).toContain(one.nativeCrop.sha256);expect(text).toContain(one.crop.sha256);expect(text).not.toContain('data:image');}
  expect((await fetch(origin+'/api/parts/comment-crops/../../outside.png')).status).toBe(404);
@@ -139,15 +142,17 @@ test('native evidence accepts distinct PNG encoding with identical RGBA; read ne
  const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'parts-read-evidence-'));let server:Awaited<ReturnType<typeof startPartsServer>>|undefined;try{
  const pkg=await commentFixture(root),one=await preparePartsComment(pkg,candidate(pkg)),pixels=PNG.sync.read(await readFile(resolvedCropPath(one.nativeCrop!.path))),alternate=PNG.sync.write(pixels,{filterType:0,deflateLevel:0}),sha256=createHash('sha256').update(alternate).digest('hex');expect(sha256).not.toBe(one.nativeCrop!.sha256);
  const nativeCrop={...one.nativeCrop!,sha256,path:`comment-crops/${sha256}.png`};await storePngCrop({...nativeCrop,png:'data:image/png;base64,'+alternate.toString('base64')});
- const saved=await saveVerdict(pkg,{status:'changes-requested',issues:[{...one,nativeCrop}]});expect((await readVerdict(pkg)).verdict!.issues[0]!.nativeCrop).toEqual(nativeCrop);
+ await seedPartsVerdictFixture(pkg,{status:'changes-requested',issues:[{...one,nativeCrop}]});
+ const saved=(await readVerdict(pkg)).verdict!;expect(saved.issues[0]!.nativeCrop).toEqual(nativeCrop);expect(saved.status).toBe('changes-requested');
  const before=await readFile(pkg.verdictPath),missing=resolvedCropPath(one.crop.path);await rm(missing);server=await startPartsServer(pkg,{port:0,exitOnClose:false});const origin=`http://127.0.0.1:${server.port}`,res=await fetch(origin+'/api/parts'),body=await res.json();expect(res.status).toBe(400);expect(body.error).toContain('COMMENT_CROP_STATE_UNAVAILABLE');expect(body.error).not.toContain(root);
- await expect(readVerdict(pkg)).rejects.toThrow('COMMENT_CROP_STATE_UNAVAILABLE');await expect(readFile(missing)).rejects.toThrow();expect(await readFile(pkg.verdictPath)).toEqual(before);
- await expect(saveVerdict(pkg,{status:'approved',issues:[]})).rejects.toThrow('COMMENT_CROP_STATE_UNAVAILABLE');expect(await readFile(pkg.verdictPath)).toEqual(before);expect(saved.status).toBe('changes-requested');
+ await expect(readVerdict(pkg)).rejects.toThrow('COMMENT_CROP_STATE_UNAVAILABLE');
+ await expect(readPartsVerdictJson(pkg)).rejects.toThrow('COMMENT_CROP_STATE_UNAVAILABLE');
+ await expect(readFile(missing)).rejects.toThrow();expect(await readFile(pkg.verdictPath)).toEqual(before);
  }finally{server?.stop(true);await rm(root,{recursive:true,force:true});}
 });
 
 test('read propagates a native-pixel validation error and keeps saved outcomes intact; real source staleness stays separate',async()=>{
- const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'parts-read-tamper-'));try{const pkg=await commentFixture(root),one=await preparePartsComment(pkg,candidate(pkg)),saved=await saveVerdict(pkg,{status:'changes-requested',issues:[one]});
+ const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'parts-read-tamper-'));try{const pkg=await commentFixture(root),one=await preparePartsComment(pkg,candidate(pkg)),saved=await seedPartsVerdictFixture(pkg,{status:'changes-requested',issues:[one]});
  const altered=PNG.sync.read(await readFile(resolvedCropPath(one.nativeCrop!.path)));altered.data[0]=altered.data[0]!^1;const png=PNG.sync.write(altered),sha256=createHash('sha256').update(png).digest('hex'),nativeCrop={...one.nativeCrop!,sha256,path:`comment-crops/${sha256}.png`};await storePngCrop({...nativeCrop,png:'data:image/png;base64,'+png.toString('base64')});await writeFile(pkg.verdictPath,JSON.stringify({...saved,issues:[{...one,nativeCrop}]}));const before=await readFile(pkg.verdictPath);
  await expect(readVerdict(pkg)).rejects.toThrow('PARTS_COMMENT_NATIVE_CROP_TAMPERED');expect(await readFile(pkg.verdictPath)).toEqual(before);
  await writeFile(pkg.verdictPath,JSON.stringify({...saved,source:{...saved.source,sha256:'0'.repeat(64)}}));expect(await readVerdict(pkg)).toEqual({verdict:null,stale:'files'});
@@ -165,7 +170,7 @@ test('selected pre-rig comment exports the same part image and exact original ev
  const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'parts-correction-'));
  try{
   const pkg=await commentFixture(root),comment=await preparePartsComment(pkg,candidate(pkg));
-  await saveVerdict(pkg,{status:'changes-requested',issues:[comment]});
+  await seedPartsVerdictFixture(pkg,{status:'changes-requested',issues:[comment]});
   const cli=Bun.spawn([process.execPath,'src/cli.ts','parts',root,'--correction',comment.id,'--parts-file','evidence/parts.json','--format','issue'],{env:{...process.env,RIG_REVIEW_STATE_DIR:process.env.RIG_REVIEW_STATE_DIR!},stdout:'pipe',stderr:'pipe'});
   const [out,err,exit]=await Promise.all([new Response(cli.stdout).text(),new Response(cli.stderr).text(),cli.exited]);
   expect({exit,err}).toEqual({exit:0,err:''});

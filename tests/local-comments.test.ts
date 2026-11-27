@@ -11,11 +11,12 @@ import { LOCAL_COMMENTS_ROUTE, LOCAL_COMMENTS_SCHEMA, readPackageComments, readP
 import { loadReview } from '../src/manifest.ts';
 import { partsIssueComments } from '../src/parts-comment.ts';
 import { preparePartsComment } from '../src/parts-comment-crops.ts';
-import { loadPartsView, saveVerdict, verdictSource } from '../src/parts-view.ts';
+import { loadPartsView, verdictSource } from '../src/parts-view.ts';
 import { createReviewRequestContext } from '../src/server.ts';
 import { freshSession, sessionFile, type Feedback } from '../src/session.ts';
 import { feedbackContextComments } from '../src/stage-comment.ts';
 import { candidate, commentFixture } from './helpers/parts-comments-package.ts';
+import { seedPartsVerdictFixture } from './helpers/parts-verdict-fixture.ts';
 import { useTemporaryReviewState } from './helpers/temporary-review-state.ts';
 
 useTemporaryReviewState();
@@ -263,7 +264,7 @@ test('parts writes serialize, preserve native bytes and old source rows, and lea
 
 test('parts CLI retains verdict /1–/5 and original file identity alongside local sends', async () => {
   const root = join(state(),'legacy-src'), pkg = await commentFixture(root);
-  const current = await saveVerdict(pkg,{status:'approved',issues:[]});
+  const current = await seedPartsVerdictFixture(pkg,{status:'approved',issues:[]});
   await savePartsComments(pkg,binding(verdictSource(pkg).sha256,'Independent local comment'));
   const {schema:_schema,issues:_issues,...common} = current;
   const legacy = Object.fromEntries(pkg.items.map(item=>[item.name,{outcome:'pending',note:''}]));

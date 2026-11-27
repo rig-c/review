@@ -201,30 +201,11 @@ test('hidden review decision and Submit nodes move once to the act row alongside
  expect(main).toContain("select('review-status').value = session.status");
  expect(main).toContain("select('review-status').value=session.status");
 });
-test('#1233 only hosted Parts retains the hidden stage-parts verdict fallback',async()=>{
+test('Stage 1 Parts has no hidden verdict handler or verdict route',async()=>{
  const source=await mainSource();
- const parts=source.indexOf('async function startParts(');
- const start=source.indexOf("\n button('save').disabled=saveBlocked();",parts);
- const end=source.indexOf('\n viewDisposers.push(viewport.bindControls',start);
- expect(start).toBeGreaterThan(parts);expect(end).toBeGreaterThan(start);
- const code=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end));
- const bind=new Function('scope',`with(scope){${code}}`);
- const issue={id:'pin',summary:'Check the seam'};
- for(const host of [null,{}]){
-  const requests:{path:string;init:RequestInit}[]=[],save={disabled:false,onclick:null as (()=>Promise<void>)|null};
-  const scope={host,button:()=>save,saveBlocked:()=>false,saving:false,partsSubject:null,text(){},el:()=>({classList:{toggle(){}}}),
-   state:{setSaveState(){}},renderDraftState(){},issues:[issue],fresh:()=>true,generalRows:undefined,
-   request:async(path:string,init:RequestInit)=>{requests.push({path,init});},disposed:false,submittedIssues:new Set(),
-   dirty:true,partsBaseline:null,persistence:null};
-  bind(scope);await save.onclick?.();
-  if(host){
-   expect(requests).toEqual([{path:'/api/stage-parts/verdict',init:{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({status:'changes-requested',issues:[issue]})}}]);
-   expect([...scope.submittedIssues]).toEqual([issue.id]);
-  }else{
-   expect(save.onclick).toBeNull();expect(requests).toEqual([]);
-  }
- }
+ const parts=between(source,'async function startParts(','viewDisposers.push(viewport.bindControls');
+ expect(parts).not.toMatch(/button\(['"]save['"]\)\.onclick\s*=\s*(?!\s|null\b)\S/);
+ expect(source).not.toContain('/api/stage-parts/verdict');
 });
 test('the left column is a fixed header row and one scrolling body: strip, parts and Settings scroll together',async()=>{
  const html=await indexHtml(),css=await stylesCss(),left=between(html,'<aside class="left-panel">','<main>');

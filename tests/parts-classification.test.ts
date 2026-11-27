@@ -1,6 +1,7 @@
 import {test,expect} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import * as reader from '../src/parts-view.ts';
+import {seedPartsVerdictFixture} from './helpers/parts-verdict-fixture.ts';
 const fixture=JSON.parse(readFileSync(new URL('./fixtures/parts-check-385.json',import.meta.url),'utf8'));
 const names=new Set(['front','back_defect','back_control']);
 test('#385 explicit scope/kind/subjects alone classify all six combinations under a passing unknown block',()=>{
@@ -56,7 +57,7 @@ test('#385 serving path exposes separate readings, keeps verdict/2 IDs and refus
  expect(pkg.readings!.filter(r=>r.kind==='faint'||r.kind==='check'&&r.classification==='part')).toHaveLength(1);
  const time=new Date(wireBefore.updatedAt);
  expect(reader.buildVerdict({...pkg,readings:[]} as any,{status:'approved',issues:[]},'test',time)).toEqual(wireBefore);
- await reader.saveVerdict(pkg,{status:'approved',issues:[]});
+ await seedPartsVerdictFixture(pkg,{status:'approved',issues:[]});
  server=await startPartsServer(pkg,{port:0,exitOnClose:false});const origin=`http://127.0.0.1:${server.port}`;
  const res=await fetch(origin+'/api/parts'),body=await res.json();expect(res.status).toBe(200);expect(body.readings).toEqual(pkg.readings);expect(body.flags).toEqual(pkg.flags);expect(JSON.stringify(body)).not.toContain(root);
  const exported=await fetch(origin+'/api/parts/export');expect(exported.status).toBe(200);expect(await exported.json()).toEqual((await reader.readVerdict(pkg)).verdict);

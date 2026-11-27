@@ -9,7 +9,8 @@ import {parsePartsIssue} from '../src/parts-comment.ts';
 import {paintOverlay} from '../web/parts-render.ts';
 import {writeComparisonPackage} from './helpers/parts-comparison-package.ts';
 import {candidate,commentFixture} from './helpers/parts-comments-package.ts';
-import {loadPartsView,saveVerdict,readVerdict,exportPartsVerdict,verdictSource} from '../src/parts-view.ts';
+import {seedPartsVerdictFixture} from './helpers/parts-verdict-fixture.ts';
+import {loadPartsView,readVerdict,exportPartsVerdict,verdictSource} from '../src/parts-view.ts';
 import {preparePartsComment} from '../src/parts-comment-crops.ts';
 import {resolvedCropPath} from '../src/comment-crops.ts';
 import {PNG} from 'pngjs';
@@ -53,12 +54,12 @@ test('#384 comparison state is closed and bounded, old parts comment and rig cod
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
-test('#384 every comparison mode/opacity survives save, read and both exports; native crop remains original RGBA',async()=>{
+test('#384 historical comparison mode/opacity survives read and both exports; native crop remains original RGBA',async()=>{
  const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'comparison-persist-'));try{
  await writeComparisonPackage(root);const pkg=await loadPartsView(root,{painting:join(root,'painting.png')}),source=verdictSource(pkg),before=await Promise.all(pkg.files.map(f=>readFile(f.abs)));
  const issues=[];
  for(const mode of ['part','overlay'] as const){const c=candidate(pkg);c.parts=[{name:'body',imageHash:c.parts[0]!.imageHash}];c.rigRegion={...c.imageRegion!,x:6,y:7};c.id=mode;c.view.comparison={mode,opacity:.375};issues.push(await preparePartsComment(pkg,c));}
- await saveVerdict(pkg,{status:'changes-requested',issues});const saved=(await readVerdict(pkg)).verdict!;
+ await seedPartsVerdictFixture(pkg,{status:'changes-requested',issues});const saved=(await readVerdict(pkg)).verdict!;
  expect(saved.issues).toEqual(issues);expect(saved.source).toEqual(source);
  for(const c of saved.issues){const native=PNG.sync.read(await readFile(resolvedCropPath(c.nativeCrop!.path))),original=PNG.sync.read(before[1]!),r=c.imageRegion!;
  for(let y=0;y<r.height;y++)expect(native.data.subarray(y*r.width*4,(y+1)*r.width*4)).toEqual(original.data.subarray(((r.y+y)*original.width+r.x)*4,((r.y+y)*original.width+r.x+r.width)*4));}
@@ -69,7 +70,7 @@ test('#384 every comparison mode/opacity survives save, read and both exports; n
 });
 
 test('#384 painting retains source identity: adding it shows existing stale-files warning, never reuses an earlier approval',async()=>{
- const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'painting-identity-'));try{await writeComparisonPackage(root);const old=await loadPartsView(root);await saveVerdict(old,{status:'approved',issues:[]});const withPainting=await loadPartsView(root,{painting:join(root,'painting.png')});
+ const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'painting-identity-'));try{await writeComparisonPackage(root);const old=await loadPartsView(root);await seedPartsVerdictFixture(old,{status:'approved',issues:[]});const withPainting=await loadPartsView(root,{painting:join(root,'painting.png')});
  expect(verdictSource(withPainting).sha256).not.toBe(verdictSource(old).sha256);expect(await readVerdict(withPainting)).toEqual({verdict:null,stale:'files'});
  }finally{await rm(root,{recursive:true,force:true});}
 });

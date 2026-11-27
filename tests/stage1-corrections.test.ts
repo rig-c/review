@@ -4,8 +4,9 @@ import {mkdtemp,writeFile,readFile,mkdir,rm,cp} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {writeMeshPackage} from './helpers/parts-mesh-package.ts';
+import {seedPartsVerdictFixture} from './helpers/parts-verdict-fixture.ts';
 import {loadReview} from '../src/manifest.ts';
-import {loadPartsView,partsViewJson,saveVerdict,readVerdict} from '../src/parts-view.ts';
+import {loadPartsView,readVerdict} from '../src/parts-view.ts';
 import {stageDraftRefusals,stagePartsRoutes} from '../src/stage-parts.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
@@ -58,7 +59,7 @@ test('stage 1 follows the explicitly drawn draft, refuses wrong bytes, and Reset
   await writeFile(join(root,'draft.model.json'),JSON.stringify(model));
   await writeFile(join(root,'review.json'),JSON.stringify({schema:'rig-review/1',id:'draft',title:'Generated draft',revision:'1',model:'draft.model.json',producer:{config:'config.json',parts:'out'}}));
   const originalParts=await loadPartsView(parts,{rig:join(parts,'rig/rig.json'),meshReport:join(parts,'rig/mesh_report.json')});
-  await saveVerdict(originalParts,{status:'approved',issues:[]});
+  await seedPartsVerdictFixture(originalParts,{status:'approved',issues:[]});
   const verdictBefore=await readFile(originalParts.verdictPath);
   const p=await loadReview(root),route=stagePartsRoutes({single:p});
   const req=(build='inspected')=>new Request('http://127.0.0.1/api/stage-parts',{headers:{'X-Review-Stage-Build':build}});
@@ -168,13 +169,12 @@ test('#562B joined stage 1 routes original vs scratch builds, enforces eligibili
   };
   const route=stagePartsRoutes({single:f.p},undefined,draftReader,{
    joined:joinedWithBarrier,
-   readInput:async req=>req.json(),
    viewOnly:false,
   });
-  const req=(build='inspected',pathname='/api/stage-parts',init?:RequestInit)=>
-   new Request('http://127.0.0.1'+pathname,{...init,headers:{...(init?.headers as Record<string,string>|undefined),'X-Review-Stage-Build':build}});
+  const req=(build='inspected',pathname='/api/stage-parts')=>
+   new Request('http://127.0.0.1'+pathname,{headers:{'X-Review-Stage-Build':build}});
 
-  // 1. Editable joined draft: `inspected` selects recorded original and omits inspectionOnly.
+  // Editable joined draft: `inspected` selects recorded original and omits inspectionOnly.
   const origRes=await route(req('inspected'));
   expect(origRes!.status).toBe(200);
   const origData=await origRes!.json();
@@ -183,7 +183,7 @@ test('#562B joined stage 1 routes original vs scratch builds, enforces eligibili
   expect(origData.draft.mappings).toEqual([{part:'torso',skin:'default',slot:'torso',attachment:'torso',vertices:30,triangles:40}]);
   expect(origData.items.find((i:any)=>i.name==='torso').mesh.triangles.length/3).toBe(40);
 
-  // 2. Scratch build ID selects settled applied rig, mesh report and model while keeping original rasters pinned.
+  // Scratch build ID selects settled applied rig, mesh report and model while keeping original rasters pinned.
   const scratchRes=await route(req(buildId));
   expect(scratchRes!.status).toBe(200);
   const scratchData=await scratchRes!.json();
@@ -195,13 +195,12 @@ test('#562B joined stage 1 routes original vs scratch builds, enforces eligibili
   expect(scratchData.readOnly).toBe(true);
   const imgRes=await route(req(buildId,'/api/stage-parts/image/0'));
   expect(imgRes!.status).toBe(200);
+  const retiredVerdict=new Request('http://127.0.0.1/api/stage-parts/verdict',{
+   method:'POST',headers:{'X-Review-Stage-Build':buildId},
+  });
+  expect(await route(retiredVerdict)).toBeNull();
 
-  // 3. Verdict save/export on a scratch build is refused with PARTS_VERDICT_READ_ONLY.
-  const verdictOnScratch=await route(req(buildId,'/api/stage-parts/verdict',{method:'POST',headers:{Origin:'http://127.0.0.1'},body:'{}'}));
-  expect(verdictOnScratch!.status).toBe(409);
-  expect(await verdictOnScratch!.json()).toEqual({error:'PARTS_VERDICT_READ_ONLY'});
-
-  // 4. Reset to `inspected` restores the exact recorded original from its separate cache entry.
+  // Reset to `inspected` restores the exact recorded original from its separate cache entry.
   const resetRes=await route(req('inspected'));
   expect(resetRes!.status).toBe(200);
   const resetData=await resetRes!.json();
@@ -209,7 +208,7 @@ test('#562B joined stage 1 routes original vs scratch builds, enforces eligibili
   expect(resetData.draft.mappings[0].triangles).toBe(40);
   expect(resetData.items.find((i:any)=>i.name==='torso').mesh.triangles.length/3).toBe(40);
 
-  // 5. Cache-hit revalidation catches busy state and Undo/superseding Apply (STAGE_DRAFT_STALE).
+  // Cache-hit revalidation catches busy state and Undo/superseding Apply (STAGE_DRAFT_STALE).
   busyState=true;
   const busyRes=await route(req(buildId));
   expect(busyRes!.status).toBe(409);
@@ -223,7 +222,7 @@ test('#562B joined stage 1 routes original vs scratch builds, enforces eligibili
   expect((await undoneRes!.json()).error).toBe(stageDraftRefusals.STAGE_DRAFT_STALE);
   activeBuild=buildId;
 
-  // 5b. Cached Stage 1 late-read selection change control (selection flips after entry draft check, during post-cache prepared read / image read, and in the final trailing source-check await).
+  // Cached Stage 1 late-read selection change control (selection flips after entry draft check, during post-cache prepared read / image read, and in the final trailing source-check await).
   for(const targetCall of [2,3]){
    expect((await route(req(buildId)))!.status).toBe(200);
    assertCallCount=0;flipSelectionOnAssertCall=targetCall;
@@ -240,7 +239,7 @@ test('#562B joined stage 1 routes original vs scratch builds, enforces eligibili
    expect((await lateImgRes!.json()).error).toBe(stageDraftRefusals.STAGE_DRAFT_STALE);
   }
 
-  // 6. Cache-hit revalidation catches mutated scratch model bytes while keeping `inspected` intact.
+  // Cache-hit revalidation catches mutated scratch model bytes while keeping `inspected` intact.
   expect((await route(req(buildId)))!.status).toBe(200);
   await writeFile(scratchModelPath,JSON.stringify({...rawModel,tampered:true}));
   const tamperedModelRes=await route(req(buildId));
@@ -249,7 +248,7 @@ test('#562B joined stage 1 routes original vs scratch builds, enforces eligibili
   expect((await route(req('inspected')))!.status).toBe(200);
   await writeFile(scratchModelPath,JSON.stringify(rawModel));
 
-  // 7. Raw project.json whitespace mutation invalidates cached `inspected` and scratch reads (INTERVIEW_OPTIONS_STALE).
+  // Raw project.json whitespace mutation invalidates cached `inspected` and scratch reads (INTERVIEW_OPTIONS_STALE).
   const projectPath=join(root,'project.json'),projectBytes=await readFile(projectPath);
   try{
    await writeFile(projectPath,Buffer.concat([projectBytes,Buffer.from('\n')]));
@@ -260,8 +259,8 @@ test('#562B joined stage 1 routes original vs scratch builds, enforces eligibili
    }
   }finally{await writeFile(projectPath,projectBytes);}
 
-  // 8. View-only and locked-stage (rig-review-only reopen / later approval) set inspectionOnly: true and refuse scratch builds.
-  const viewOnlyRoute=stagePartsRoutes({single:f.p},undefined,draftReader,{joined:f.joined,readInput:async r=>r.json(),viewOnly:true});
+  // View-only and locked-stage (rig-review-only reopen / later approval) set inspectionOnly: true and refuse scratch builds.
+  const viewOnlyRoute=stagePartsRoutes({single:f.p},undefined,draftReader,{joined:f.joined,viewOnly:true});
   expect((await (await viewOnlyRoute(req('inspected')))!.json()).draft.inspectionOnly).toBe(true);
   expect((await (await viewOnlyRoute(req(buildId)))!.json()).error).toBe(stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE);
 
@@ -274,7 +273,7 @@ test('#562B joined stage 1 routes original vs scratch builds, enforces eligibili
    const lockedOpen=await loadOpenPackage({input:f.input,project:{root,draftId:f.project.draftId,picksDir:f.project.picksDir}});
    if(lockedOpen.mode!=='single'||!lockedOpen.joined?.draft)throw new Error('Expected locked joined draft');
    expect(lockedOpen.joined.draft.editable).toBe(false);
-   const lockedRoute=stagePartsRoutes({single:lockedOpen.p},undefined,draftReader,{joined:lockedOpen.joined,readInput:async r=>r.json(),viewOnly:false});
+   const lockedRoute=stagePartsRoutes({single:lockedOpen.p},undefined,draftReader,{joined:lockedOpen.joined,viewOnly:false});
    expect((await (await lockedRoute(req('inspected')))!.json()).draft.inspectionOnly).toBe(true);
    expect((await (await lockedRoute(req(buildId)))!.json()).error).toBe(stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE);
   }finally{await writeFile(projectPath,projectBytes);}

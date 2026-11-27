@@ -1780,7 +1780,7 @@ async function start(): Promise<void> {
 }
 /** Parts have a verdict and image-space pixels, never fabricated model/session fields. */
 async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,writes:{capabilityRequired:boolean}):Promise<void>{
- const subject=opened.parts,issues=saved.issues;let partsBaseline=structuredClone(saved);const submittedIssues=new Set(host? saved.issues.map(issue=>issue.id):[]);
+ const subject=opened.parts,issues=saved.issues;const partsBaseline=structuredClone(saved);const submittedIssues=new Set(host? saved.issues.map(issue=>issue.id):[]);
  if(!host){
   localCommentSource={publicationId:'local-parts:'+access.key,sourceHash:subject.sourceHash};
   for(const issue of saved.issues)submittedIssues.add(issue.id);
@@ -1859,24 +1859,6 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  const state=rigInspector.actBar;state.setSaveState({kind:actReadOnly?'read-only':'unsaved',text:actReadOnly??'Not submitted'});
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
  button('save').disabled=saveBlocked();
- if(host)button('save').onclick=async()=>{
-  if(saving||saveBlocked())return;
-  if(partsSubject?.hasPendingComment()){if(!await partsSubject.commitDraft())return;}
-  if(saving||saveBlocked())return;
-  saving=true;text('review-message','');el('review-message').classList?.toggle('error',false);button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});renderDraftState();
-  const unsentIssues=issues.filter(fresh),verdictRows=generalRows?.filter(fresh);
-  const all=structuredClone(issues),frozen=structuredClone(unsentIssues);
-  let submissionFailure:ReturnType<typeof jobSubmissionRefusal>|null=null;
-  try{
-   await request('/api/stage-parts/verdict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:frozen.length?'changes-requested':'approved',issues:frozen})});
-   if(generalRows&&verdictRows?.length){const sentIds=new Set(verdictRows.map(row=>row.id));generalRows.splice(0,generalRows.length,...generalRows.filter(row=>!sentIds.has(row.id)));persistRecordComments();}
-   if(disposed)return;
-   for(const issue of frozen)submittedIssues.add(issue.id);
-   if(verdictRows?.length){partsSubject?.refreshComments();showCommentCount();}
-   dirty=JSON.stringify(issues)!==JSON.stringify(all);partsBaseline={subject:'parts',issues:all};await persistence?.submitted(partsBaseline);if(disposed)return;state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
-  }catch(error){submissionFailure=jobSubmissionRefusal(error);message(submissionFailure.text,true);}
-  finally{saving=false;button('save').disabled=saveBlocked();renderDraftState();if(submissionFailure){state.setSaveState({kind:'failed',text:submissionFailure.text,title:submissionFailure.title});}}
- };
  viewDisposers.push(viewport.bindControls(unitScaleMessage),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  if(!host)renderPendingSubjects([]);

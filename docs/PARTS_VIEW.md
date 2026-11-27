@@ -62,7 +62,8 @@ The reference camera aligns only when camera sync is currently on; stale source 
 are refused. Atlas inspection remains read only for pointed comments. A standalone compiled session (`open --project --project-version N`) saves comments locally.
 Feedback that must reach the producer goes through a
 [live job](REVIEW_PACKAGE.md#live-job-contract). A joined draft open refuses that save with `MODEL_UNAVAILABLE`.
-The legacy joined draft verdict API retains its `PARTS_JOINED_ISSUE_UNSUPPORTED` refusal for pointed issues.
+The former joined draft verdict writer refused pointed issues with
+`PARTS_JOINED_ISSUE_UNSUPPORTED`. Review #1318 retired that writer.
 
 `rig-review-parts-verdict/4` stores `issues[]` of closed `rig-review-parts-comment/2` records (historical `rig-review-parts-verdict/2` and `/3` stored `comments[]` of `rig-review-parts-comment/1`; a historical `/1` verdict file reads with an empty array).
 Each historical closed `rig-review-parts-comment/1` carries `id`, original reviewer `summary`, `part`,
@@ -249,7 +250,11 @@ exports supported saved corrections for Create. Existing
 comments and feedback preserve reviewer wording, but are not a substitute for
 that shared export or for create-owned structure decisions.
 
-When `--project` and `--project-draft` select a recorded Create draft that declares its `config`, `parts`, `rig` and `check` directories, Stage 1 also enables the mesh correction instruments before a rig version exists while the draft is editable (`parts` or `parts-review` stage without an effective `parts-review` sign-off, and not `--view-only`). The status bar reports the recorded draft producer version as provenance alongside the installed producer and compiler versions; Apply runs the installed producer and compiler resolved by `resolveProducer` and its operation-capability floors (`REMESH_SINCE` and `REMESH_DELTA_SINCE`, plus `EDIT_PRODUCER_MISMATCH` if a patch's `producer` differs from the installed producer), without an equality version gate against the recorded draft producer. Opening an instrument switches to the Setup inspector for that mesh correction. Animate remains disabled with `RIG_VERSION_UNAVAILABLE` until a recorded rig review package is available. When the project stage is outside `parts`/`parts-review`, an effective `parts-review` sign-off is already recorded, or `--view-only` is set, Stage 1 remains inspection-only (`draft.inspectionOnly: true`) and hides the correction instruments; omitting `--parts-verdict-dir` or viewing an applied scratch build keeps the Stage 1 parts verdict save/export controls read-only (`PARTS_VERDICT_READ_ONLY`) while leaving the correction instruments available on an editable draft.
+When `--project` and `--project-draft` select a recorded Create draft that declares its `config`, `parts`, `rig` and `check` directories, Stage 1 also enables the mesh correction instruments before a rig version exists while the draft is editable (`parts` or `parts-review` stage without an effective `parts-review` sign-off, and not `--view-only`). The status bar reports the recorded draft producer version as provenance alongside the installed producer and compiler versions; Apply runs the installed producer and compiler resolved by `resolveProducer` and its operation-capability floors (`REMESH_SINCE` and `REMESH_DELTA_SINCE`, plus `EDIT_PRODUCER_MISMATCH` if a patch's `producer` differs from the installed producer), without an equality version gate against the recorded draft producer. Opening an instrument switches to the Setup inspector for that mesh correction. Animate remains disabled with `RIG_VERSION_UNAVAILABLE` until a recorded rig review package is available. When the project stage is outside `parts`/`parts-review`, an effective `parts-review` sign-off is already recorded, or `--view-only` is set, Stage 1 remains inspection-only (`draft.inspectionOnly: true`) and hides the correction instruments.
+
+On the `inspected` build, `--parts-verdict-dir` locates a source-bound historical
+verdict for reading. Before #1318, the Stage 1 verdict writer required that
+directory and refused scratch builds with `PARTS_VERDICT_READ_ONLY`.
 
 ### Reviewer name and saved-result read
 
@@ -369,8 +374,8 @@ The occlusion-coverage report (rig-c/parts#998) is not read yet; the footprint t
 Historically, **Approve all** marked every pending part and available mesh clean and saved an approved
 sign-off. It preserved notes and existing clean outcomes, and refused flagged items.
 Per-part approval and mesh outcomes belong to that historical UI and `/1`–`/3` read compatibility.
-`tests/parts-view.test.ts` exercises the shared verdict writer and historical
-readers. The shared writer refuses approvals with issues as
+`tests/parts-view.test.ts` exercises verdict validation and historical
+readers. Verdict validation refuses approvals with issues as
 `PARTS_VERDICT_NOT_CLEAN`.
 
 In historical `/1`–`/3` saves, each item was pending, clean or flagged with a note
@@ -402,12 +407,12 @@ In historical `/1`–`/3` saves, each item was pending, clean or flagged with a 
   flagged part, and otherwise `pending`.
 
 Historical per-part validation refusals include `PARTS_VERDICT_MISSING_PART`, `PARTS_VERDICT_UNKNOWN_PART`, `PARTS_VERDICT_NOTE_REQUIRED`,
-`PARTS_VERDICT_NOT_CLEAN` and `PARTS_VERDICT_NOTHING_FLAGGED`. Current saves retain `PARTS_VERDICT_INVALID`
-for invalid verdicts and `PARTS_VIEW_SOURCE_CHANGED` when an inspected file changes after opening.
+`PARTS_VERDICT_NOT_CLEAN` and `PARTS_VERDICT_NOTHING_FLAGGED`. Verdict validation uses `PARTS_VERDICT_INVALID`
+for invalid verdicts. A changed inspected file can trigger `PARTS_VIEW_SOURCE_CHANGED` on source revalidation.
 
-A verdict destination matching a protected part, producer report, rig/package input, model or atlas image is
-refused as `PARTS_VERDICT_INPUT_COLLISION`, including normalized paths, symbolic links and filesystem aliases.
-Choose a separate verdict file; saving an existing verdict again remains supported.
+A verdict path that matches a protected part, producer report, rig/package input, model or atlas image
+still refuses with `PARTS_VERDICT_INPUT_COLLISION`, including normalized paths, symbolic links and filesystem
+aliases. Use a separate historical verdict file.
 
 Standalone local comment requests are limited to 4 MiB (4,194,304 bytes) of
 UTF-8 while streaming. An over-limit body is cancelled before its remainder
@@ -524,7 +529,7 @@ Explicit CLI file paths are the user's designation, as with `--mesh-report`;
 discovered paths cannot escape the package. This view never writes geometry,
 bones, weights or source images. Repairs remain producer config changes.
 
-**Historical UI:** The four-stage navigator preserves this entry and its explicit save behavior. Compiled sessions reuse the atlas surface read-only; see [Four inspection stages](PANELS.md#four-inspection-stages).
+**Historical UI:** The four-stage navigator exposed this entry and its explicit verdict save. Compiled sessions reuse the atlas surface read-only. See [Four inspection stages](PANELS.md#four-inspection-stages).
 
 The superseded #387 byte-equality comparator scripts are retired; commit #388 retains their
 original reproduction. Camera persistence wiring tests with live callers remain.
@@ -533,8 +538,8 @@ Native-crop revalidation checks the stored PNG file hash/dimensions and decoded 
 original subrectangle, rather than requiring a particular encoder's PNG bytes. Verdict reads never
 create or rewrite crop files. Missing/unreadable stored evidence surfaces
 `COMMENT_CROP_STATE_UNAVAILABLE`; invalid native pixels surface `PARTS_COMMENT_NATIVE_CROP_TAMPERED`.
-These are validation failures, not a stale-source warning or a reset: a subsequent save also refuses
-while the existing verdict cannot be revalidated. Real source/flag identity changes retain their
+These are validation failures. The former writer also refused to save while the existing verdict
+could not be revalidated. Real source/flag identity changes retain their
 separate stale warning. `PARTS_PAINTING_OUTSIDE` and `PARTS_PAINTING_PNG` refuse external or non-PNG
 painting inputs. `tests/parts-comments.test.ts` covers these read and cross-encoding boundaries;
 `tests/parts-async-navigation.test.ts` guards reordered painting loads and actionable atlas clicks.

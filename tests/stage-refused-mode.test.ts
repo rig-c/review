@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {mkdtemp,readFile,readdir,realpath,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,readdir,realpath,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {startServer} from '../src/server.ts';
@@ -311,7 +311,7 @@ test('#735 no-model header is refused by name and a supported header keeps real 
  });
 });
 
-test('pre-rig joined project preserves source-bound refusal and verdict output alongside refused Stage 3 navigation',async()=>{
+test('pre-rig joined project keeps Stage 1 reads and historical verdicts after verdict POST retires',async()=>{
  const root=await mkdtemp(join(await realpath(tmpdir()),'review-441-'));
  let server:Awaited<ReturnType<typeof startServer>>|undefined;
  try{
@@ -339,33 +339,41 @@ test('pre-rig joined project preserves source-bound refusal and verdict output a
   expect(commentRes.status).toBe(409);
   expect(await commentRes.json()).toEqual({error:'MODEL_UNAVAILABLE'});
 
-  // Source-bound Stage 1 verdict mismatch is refused and exact binding writes the verdict cleanly.
-  const partsData=await (await fetch(origin+'/api/stage-parts')).json();
+  const partsUrl=origin+'/api/stage-parts';
+  const parts=await fetch(partsUrl);
+  expect(parts.status).toBe(200);
+  const partsData=await parts.json();
   expect(partsData.readOnly).toBe(false);
-  const payload={
-   binding:partsData.joinedVerdictBinding,
-   status:'approved',
-   issues:[],
-  };
-  const mismatch=await fetch(origin+'/api/stage-parts/verdict',{
+  expect(partsData.joinedVerdictBinding).toBe('b750adfeef68b4ae4988085fa5f82f4f984be7dec17659083b6c1f58f09a3f9e');
+  expect(partsData.verdict).toBeNull();
+  const head=await fetch(partsUrl,{method:'HEAD'});
+  expect(head.status).toBe(200);
+  expect(head.headers.get('Content-Type')).toBe(parts.headers.get('Content-Type'));
+  expect(await head.text()).toBe('');
+
+  const retired=await fetch(partsUrl+'/verdict',{
    method:'POST',
    headers:{Origin:origin,'X-Review-Capability':capability,'Content-Type':'application/json'},
-   body:JSON.stringify({...payload,binding:'0'.repeat(64)}),
+   body:JSON.stringify({binding:partsData.joinedVerdictBinding,status:'approved',issues:[]}),
   });
-  expect(mismatch.status).toBe(409);
-  expect(await mismatch.json()).toEqual({error:'PARTS_VERDICT_SOURCE_MISMATCH'});
+  expect(retired.status).toBe(405);
+  expect(await retired.json()).toEqual({error:'Method not allowed'});
   expect(await readdir(fixture.output)).toEqual([]);
 
-  const saved=await fetch(origin+'/api/stage-parts/verdict',{
-   method:'POST',
-   headers:{Origin:origin,'X-Review-Capability':capability,'Content-Type':'application/json'},
-   body:JSON.stringify(payload),
+  const recordedBytes=await readFile(new URL('./fixtures/joined-verdict-1318.json',import.meta.url));
+  const verdictPath=join(fixture.output,partsData.verdictFile);
+  await writeFile(verdictPath,recordedBytes);
+  const historical=await fetch(partsUrl);
+  expect(historical.status).toBe(200);
+  const historicalData=await historical.json();
+  expect(historicalData).toMatchObject({
+   joinedVerdictBinding:partsData.joinedVerdictBinding,
+   verdictFile:partsData.verdictFile,
+   verdict:JSON.parse(recordedBytes.toString('utf8')),
   });
-  expect(saved.status).toBe(200);
-  const savedBody=await saved.json();
-  expect(savedBody.verdict).toMatchObject({schema:'rig-review-parts-verdict/4',status:'approved',issues:[]});
+  expect(historicalData.verdict).toMatchObject({schema:'rig-review-parts-verdict/4',status:'approved',issues:[]});
   expect(await readdir(fixture.output)).toEqual([partsData.verdictFile]);
-  expect(JSON.parse(await readFile(join(fixture.output,partsData.verdictFile),'utf8'))).toEqual(savedBody.verdict);
+  expect(await readFile(verdictPath)).toEqual(recordedBytes);
   await fixture.assertFixture();
  }finally{
   server?.stop(true);

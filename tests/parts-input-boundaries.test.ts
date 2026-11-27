@@ -1,15 +1,15 @@
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
-import {partsIssueSubmission} from './helpers/parts-comments-package.ts';
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { copyFile, link, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LOCAL_COMMENTS_ROUTE } from '../src/local-comments.ts';
-import { loadPartsView, saveVerdict, verdictSource, type PartsViewPackage } from '../src/parts-view.ts';
+import { loadPartsView, readVerdict, verdictSource, type PartsViewPackage } from '../src/parts-view.ts';
 import { startPartsServer } from '../src/parts-server.ts';
 import { writePartsPackage } from './helpers/parts-package.ts';
+import { seedPartsVerdictFixture } from './helpers/parts-verdict-fixture.ts';
 
 const roots: string[] = [];
 const LIMIT = 4 * 1024 * 1024;
@@ -33,25 +33,12 @@ async function unchangedAfterRefusal(target: string, action: () => Promise<unkno
 }
 
 for (const relative of ['rig/parts.json', 'rig/parts/front.png', 'rig/mesh_report.json', 'check/check.json']) {
-  test(`#372: verdict cannot replace generated input ${relative}`, async () => {
+  test(`#372: verdict reads refuse a path to generated input ${relative}`, async () => {
     const root = await fixture(), target = join(root, relative);
-    const before = digest(await readFile(target));
-    let error: unknown;
-    try { await saveVerdict(await loadPartsView(root, { verdict: target }), input); } catch (e) { error = e; }
-    const after = digest(await readFile(target));
-    console.log(JSON.stringify({ case: relative, before, after, refused: error instanceof Error ? error.message : null }));
-    expect(after).toBe(before);
-    expect(error).toBeInstanceOf(Error);
+    await unchangedAfterRefusal(target, () => loadPartsView(root, { verdict: target }));
     expect((await readdir(join(root, relative.startsWith('check/') ? 'check' : relative.includes('/parts/') ? 'rig/parts' : 'rig'))).filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
 }
-
-test('#372: ordinary verdict replacement remains supported', async () => {
-  const pkg = await loadPartsView(await fixture());
-  await saveVerdict(pkg, input);
-  await saveVerdict(pkg, await partsIssueSubmission(pkg));
-  expect(JSON.parse(await readFile(pkg.verdictPath, 'utf8')).status).toBe('changes-requested');
-});
 
 for (const mode of ['parts', 'atlas'] as const) {
   test(`${mode} verdict preserves the leaf under a physical parent and names invalid parents`, async () => {
@@ -75,8 +62,10 @@ for (const mode of ['parts', 'atlas'] as const) {
     const view = await loadPartsView(pkg, { verdict: output });
     expect(view.mode).toBe(mode);
     expect(view.verdictPath).toBe(join(physical, 'missing', 'verdict.json'));
-    const saved = await saveVerdict(view, input);
-    expect(JSON.parse(await readFile(output, 'utf8')).source).toEqual(saved.source);
+    await mkdir(join(physical, 'missing'));
+    const saved = await seedPartsVerdictFixture(view, input);
+    const reopened = await loadPartsView(pkg, { verdict: output });
+    expect(await readVerdict(reopened)).toEqual({ verdict: saved, stale: null });
     expect(await readFile(join(physical, 'file'), 'utf8')).toBe('sentinel');
   });
 }
@@ -146,11 +135,11 @@ for (const alias of ['normalized', 'symlink-file', 'symlink-parent', 'hardlink']
   });
 }
 
-test('#372: a filesystem alias introduced after load is refused at save', async () => {
+test('#372: reopening refuses a verdict path that has become an input hardlink', async () => {
   const root = await fixture(), verdict = join(root, 'late.json'), target = join(root, 'rig', 'parts.json');
-  const pkg = await loadPartsView(root, { verdict });
+  await loadPartsView(root, { verdict });
   await link(target, verdict);
-  await unchangedAfterRefusal(target, () => saveVerdict(pkg, input));
+  await unchangedAfterRefusal(target, () => loadPartsView(root, { verdict }));
   expect((await readdir(root)).filter(name => name.endsWith('.tmp'))).toEqual([]);
 });
 
@@ -175,14 +164,6 @@ for (const relative of ['review.json', 'rig.json', 'skeleton.model.json', 'page.
     await unchangedAfterRefusal(join(atlas, relative), () => loadPartsView(atlas, { verdict: join(atlas, relative) }));
   });
 }
-
-test('#372: a failed atomic replacement cleans its temporary output', async () => {
-  const root = await fixture(), verdict = join(root, 'output'), pkg = await loadPartsView(root, { verdict });
-  await mkdir(verdict);
-  await expect(saveVerdict(pkg, input)).rejects.toThrow();
-  expect((await readdir(root)).filter(name => name.endsWith('.tmp'))).toEqual([]);
-  expect(await readdir(verdict)).toEqual([]);
-});
 
 test('#372: local comment sends at the exact byte cap still enforce origin, JSON type and capability', async () => {
   const pkg = await loadPartsView(await fixture()), capability = 'd'.repeat(64);

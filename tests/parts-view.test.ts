@@ -5,12 +5,13 @@ import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildVerdict, checkFlags, loadPartsAtlas, loadPartsView, meshReportFlags, partsDifference, partsViewJson, readVerdict, saveVerdict, sourceSha256, verdictSource } from '../src/parts-view.ts';
+import { assertPartsUnchanged, buildVerdict, checkFlags, loadPartsAtlas, loadPartsView, meshReportFlags, partsDifference, partsViewJson, readVerdict, sourceSha256, verdictSource } from '../src/parts-view.ts';
 import { preparePartsComment } from '../src/parts-comment-crops.ts';
 import { startPartsServer } from '../src/parts-server.ts';
 import { FOOTPRINT_ALPHA, frontParts, paintPart } from '../web/parts-render.ts';
 import { candidate, partsIssueSubmission } from './helpers/parts-comments-package.ts';
 import { BACK_CONTROL, BACK_DEFECT, FAINT, FRONT, frontHolds, writePartsPackage } from './helpers/parts-package.ts';
+import { seedPartsVerdictFixture } from './helpers/parts-verdict-fixture.ts';
 
 const roots: string[] = [];
 afterEach(async () => { for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }); });
@@ -85,7 +86,7 @@ test('#348: source.sha256 is sha256 over "<path>\\t<sha256>\\n" lines sorted by 
   expect(sourceSha256([{ path: 'a', sha256: a }, { path: 'B', sha256: b }])).toBe(sourceSha256([{ path: 'B', sha256: b }, { path: 'a', sha256: a }]));
 });
 
-test('#348: the verdict records parts.json and every PNG relative to the verdict file, and the writer refuses by name', async () => {
+test('#348: the verdict records parts.json and every PNG relative to the verdict file, and buildVerdict refuses invalid inputs by name', async () => {
   const root = await planted(), elsewhere = await mkdtemp(join(tmpdir(), 'parts-verdict-'));
   roots.push(elsewhere);
   const pkg = await loadPartsView(root, { verdict: join(elsewhere, 'v.json') });
@@ -106,21 +107,23 @@ test('#348: the verdict records parts.json and every PNG relative to the verdict
   expect(ok.mode).toBe('parts');
 });
 
-test('#348: the sign-off is saved beside parts.json, reloads while the files hold, and is not offered once a part changes', async () => {
+test('#348: a historical verdict beside parts.json reloads while the files hold and goes stale once a part changes', async () => {
   const root = await planted(), pkg = await loadPartsView(root);
-  // A build root opens on its rig/ (assemble's output); the sign-off lands beside parts.json there.
+  // A build root opens on its rig/ (assemble's output) and looks for the verdict beside parts.json.
   expect(pkg.verdictPath).toBe(join(await realpath(root), 'rig', 'parts-review.json'));
   expect((await loadPartsView(join(root, 'rig'))).verdictPath).toBe(pkg.verdictPath);
   const raw = candidate(pkg);
   raw.rigRegion = { x: pkg.items[0]!.x + raw.imageRegion!.x, y: pkg.items[0]!.y + raw.imageRegion!.y, width: raw.imageRegion!.width, height: raw.imageRegion!.height };
   const issue = await preparePartsComment(pkg, raw);
-  const saved = await saveVerdict(pkg, { status: 'changes-requested', issues: [issue] });
-  const disk = JSON.parse(await readFile(join(root, 'rig', 'parts-review.json'), 'utf8'));
-  expect(disk).toEqual(JSON.parse(JSON.stringify(saved)));
-  expect(disk.source.files[0]).toMatchObject({ path: 'parts.json' });
-  expect((await readVerdict(await loadPartsView(root))).verdict?.status).toBe('changes-requested');
+  const saved = await seedPartsVerdictFixture(pkg, { status: 'changes-requested', issues: [issue] });
+  const before = await readFile(pkg.verdictPath, 'utf8');
+  const reopened = await readVerdict(await loadPartsView(root));
+  expect(reopened).toEqual({ verdict: saved, stale: null });
+  expect(reopened.verdict?.source.files[0]).toMatchObject({ path: 'parts.json' });
   await writeFile(join(root, 'rig', 'parts', 'front.png'), Buffer.from('changed'));
-  await expect(saveVerdict(pkg, { status: 'approved', issues: [] })).rejects.toThrow('PARTS_VIEW_SOURCE_CHANGED');
+  await expect(assertPartsUnchanged(pkg)).rejects.toThrow('PARTS_VIEW_SOURCE_CHANGED');
+  expect(await readVerdict(await loadPartsView(root))).toEqual({ verdict: null, stale: 'files' });
+  expect(await readFile(pkg.verdictPath, 'utf8')).toBe(before);
 });
 
 test('#348 atlas bar: atlas mode on the public example shows every region named in the atlas file, with its box', async () => {
@@ -134,7 +137,7 @@ test('#348 atlas bar: atlas mode on the public example shows every region named 
 
 test('#348: the server serves saved /4 verdicts and refuses standalone writes', async () => {
   const root = await planted(), pkg = await loadPartsView(root), capability = 'c'.repeat(64);
-  const saved = await saveVerdict(pkg, await partsIssueSubmission(pkg));
+  const saved = await seedPartsVerdictFixture(pkg, await partsIssueSubmission(pkg));
   const before = await readFile(pkg.verdictPath);
   const server = await startPartsServer(pkg, { port: 0, capability });
   try {
@@ -181,7 +184,7 @@ test('#348 P1: a part image or a discovered producer file that symlinks outside 
 
 test('#348 P1: a saved sign-off is not restored when only the producer flags changed, and the page is told why', async () => {
   const root = await planted();
-  await saveVerdict(await loadPartsView(root), { status: 'approved', issues: [] });
+  await seedPartsVerdictFixture(await loadPartsView(root), { status: 'approved', issues: [] });
   const same = await loadPartsView(root);
   expect(await readVerdict(same)).toMatchObject({ stale: null, verdict: { status: 'approved' } });
   // Only check.json changes: the part files, and so source.sha256 (what create gates on), are the same.
@@ -233,7 +236,7 @@ async function runPartsSwapProbe(
         return data;
       }}));
       const { loadReview } = await import(${JSON.stringify(manifestPath)});
-      const { loadPartsAtlas, loadPartsView, saveVerdict } = await import(${JSON.stringify(sourcePath)});
+      const { assertPartsUnchanged, loadPartsAtlas, loadPartsView } = await import(${JSON.stringify(sourcePath)});
       const pkg = ${mode === 'atlas'} ? (await (async () => { const rev = await loadReview(${JSON.stringify(root)}); armed = true; return loadPartsAtlas(rev); })()) : await loadPartsView(${JSON.stringify(root)});
       const loadReads = reads;
       const entry = pkg.files.find(f => f.abs === path) ?? pkg.flagFiles.find(f => f.abs === path);
@@ -241,7 +244,7 @@ async function runPartsSwapProbe(
       const checkFlag = pkg.flags.find(f => f.kind === 'check');
       const checkReading = pkg.readings?.find(f => f.kind === 'check');
       let refused = false;
-      try { await saveVerdict(pkg, { status: 'approved', issues: [] }); }
+      try { await assertPartsUnchanged(pkg); }
       catch (e) { if (!String(e).includes('PARTS_VIEW_SOURCE_CHANGED')) throw e; refused = true; }
       console.log(JSON.stringify({
         swapped, reads: loadReads,
@@ -282,7 +285,7 @@ async function runPartsSwapProbe(
   }
 }
 
-test('#546: parts.json parse and recorded hash bind to one buffer, and replaced B is refused at sign-off', async () => {
+test('#546: parts.json parse and recorded hash bind to one buffer, and the freshness check refuses replaced B', async () => {
   const root = await planted(), partsPath = join(await realpath(root), 'rig', 'parts.json');
   const bytesA = await readFile(partsPath);
   const docB = JSON.parse(bytesA.toString('utf8')); docB.rig_size = [96, 64];
