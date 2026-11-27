@@ -199,8 +199,12 @@ try{
  await writeFile(join(artifacts,'inspected-rig.json'),await readFile(join(pkg,'out/rig/rig.json')));await writeFile(join(artifacts,'inspected-model.json'),await readFile(join(pkg,'out/check/build/skeleton.model.json')));
  const original=await hashes(pkg),p=await loadReview(pkg);server=await startServer(p,{port:0,stateDir:join(root,'state'),cwd:bench,capability:'a'.repeat(64),graceMs:600000,unopenedTimeoutMs:600000,exitOnClose:false});
  const base=`http://127.0.0.1:${server.port}`;
- page=await launchCdpSession(join(tmpdir(),'c'),{sendDeadlineMs:CDP_SEND_DEADLINE_MS});await page.setViewport(1440,1000);
  for(const lang of process.env.RV367_FOCUS?['en']:['en','ko']){
+  // Stage Reset preserves browser draft ops, so each locale starts with an independent profile.
+  await page?.close();
+  page=undefined;
+  page=await launchCdpSession(join(root,lang),{sendDeadlineMs:CDP_SEND_DEADLINE_MS});
+  await page.setViewport(1440,1000);
   await page.goto(base+'/?lang='+lang+'#cap='+'a'.repeat(64));
   await waitForStage1Readiness(page, 'PAGE_NOT_READY');
   await page.evaluate(`document.querySelector('[data-mode="rig"]').click()`);

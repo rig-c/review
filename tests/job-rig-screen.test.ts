@@ -21,7 +21,7 @@ const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
 async function fixture() { const f = await jobFixture(); fixtures.push(f); return f; }
 const feedback: Feedback = {id: 'one', frameStart: 3, frameEnd: 5, target: {kind: 'slot', name: 'sleeve'}, category: 'defect',
-  summary: 'Sleeve tears at the elbow\nduring the swing'};
+  summary: 'Sleeve tears at the elbow during the swing'};
 test('#715 and #1229 mixed rig verdict, supported modal asks and legacy pending checkpoint asks stay on the shared screen without mounting a checkpoint form', async () => {
   const f = await fixture(), publication = await f.publish();
   const display = {publication} as unknown as DisplayPublicationV3, ids = new Set(['step-one']);
@@ -73,14 +73,14 @@ test('#709 and #1229 historical act@6 checkpoint acts preserve projected words w
 
 test('#746 historical rig verdict comments retain their anchor and exact human text in the reader', () => {
   const recorded = JSON.parse(legacy.records['@3'].raw);
-  const rows = [feedback, {...feedback, id: 'two', summary: '  원문 그대로\n둘째 줄  '}];
-  const comments = feedbackItemComments(rows);
+  const rows = [feedback, {...feedback, id: 'two', summary: '  원문 그대로  '}];
+  const comments = [...feedbackItemComments(rows), {text: '  가벼운 흔들림\n둘째 줄  '}];
   const act = parseCommentsAct({...recorded, schema: 'rig-review/act@6', value: {
     stage: 'rig-review', verdict: 'changes-requested', comments,
   }});
   expect(act.value.comments).toEqual(comments);
   expect(projectComments(act.value.comments)).toBe(
-    '[["slot","sleeve",3,5,null]]\nSleeve tears at the elbow\nduring the swing\n\n[["slot","sleeve",3,5,null]]\n  원문 그대로\n둘째 줄  ',
+    '[["slot","sleeve",3,5,null]]\nSleeve tears at the elbow during the swing\n\n[["slot","sleeve",3,5,null]]\n  원문 그대로  \n\n[general]\n  가벼운 흔들림\n둘째 줄  ',
   );
 });
 
