@@ -61,11 +61,15 @@ test.each([
 test('#1316 a declared /1 changes source identity without changing inspection metadata', async () => {
  const f = await fixture();
  const model = 'skeleton.model.json';
- const manifest = {...f.input, model};
+ const posePath = 'pose/report.json';
+ const manifest = {...f.input, model, authoring: [{label: 'Pose report', path: posePath}]};
+ await mkdir(join(f.root, 'pose'));
+ await writeFile(join(f.root, posePath), '{"spec":"rig-pose-report/1","animation":"idle"}');
  await writeFile(join(f.root, model), '{"spec":"rigc-compiled/3","pages":[]}');
  await writeFile(f.path, JSON.stringify(manifest));
  const base = await loadReview(f.path);
- const path = 'scene.json';
+ expect(base.report?.path).toBe(posePath);
+ const path = 'report.json';
  let previousHash = base.sourceHash;
  for (const bytes of ['{"spec":"spine-parts-scene-report/1"}', '{"spec":"spine-parts-scene-report/1"}\n']) {
    const sceneReport = {path, sha256: createHash('sha256').update(bytes).digest('hex')};
@@ -78,6 +82,7 @@ test('#1316 a declared /1 changes source identity without changing inspection me
    previousHash = p.sourceHash;
    expect(p.reviewedSource).toEqual(base.reviewedSource);
    expect(p.feedbackCatalog).toEqual(base.feedbackCatalog);
+   expect(p.report).toEqual(base.report);
    expect(p.scene).toBeUndefined();
  }
 });

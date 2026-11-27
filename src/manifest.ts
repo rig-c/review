@@ -415,7 +415,6 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   const files = new Set([...(directory?[]:[relative(root,manifestPath)]),...manifest.references.map(v=>v.path),...manifest.authoring.map(v=>v.path),...manifest.audio.clips.map(v=>v.path)]);
   if(manifest.frames)files.add(manifest.frames);
   if(manifest.direction)files.add(manifest.direction);
-  if (manifest.sceneReport) files.add(manifest.sceneReport.path);
   if(manifest.sets)files.add(manifest.sets);
   const rootFile=async(name:string):Promise<string|undefined>=>{try{await safeFile(root,name);return name;}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw e;}};
   const authoringPath=(name:string):string|undefined=>{const paths=manifest.authoring.filter(v=>posix.basename(v.path)===name);return paths.length===1?paths[0].path:undefined;};
@@ -463,6 +462,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     for(const j of joints) if(j.parent&&!joints.some(v=>v.id===j.parent&&v.id!==j.id)) fail(`pose ${r.id} joint ${j.id}.parent`,'another declared joint id');
   }
   const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let frames:ReviewFrames|null=null;let modelMetadata:Record<string,unknown>|null=null;let directionInput:unknown;
+  if (manifest.sceneReport) files.add(manifest.sceneReport.path);
   // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
   const {handoff,reason:handoffReason}=options.handoff===false?{handoff:null,reason:null}:
     await resolveHandoff(root,manifest.producer,options.handoff,{starts:options.handoffStarts??[options.cwd??process.cwd()],originalProducerRoot:options.originalProducerRoot});
