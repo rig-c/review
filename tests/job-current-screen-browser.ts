@@ -158,8 +158,13 @@ try {
               : `!!document.querySelector('#rig-root canvas')`;
           await wait(`document.body.dataset.ready==='true'&&!document.body.inert&&document.querySelector('#send-comments')?.checkVisibility()===true&&document.querySelector('#save')?.hidden===true&&document.querySelector('#message')?.textContent===${JSON.stringify(setup.title)}&&${stageReady}`);
           if (kind === 'direction') {
-            await page.evaluate(`(()=>{const d=document.querySelector('#direction-panel');if(d&&!d.open)d.querySelector('summary').click();})()`);
-            await wait(`!!document.querySelector('#direction-panel')?.open&&document.querySelectorAll('#direction-panel li').length>0`);
+            await page.evaluate(`(()=>{
+              const s=document.querySelector('#scrub');
+              if(s){s.value='0';s.dispatchEvent(new Event('input',{bubbles:true}));}
+              const d=document.querySelector('#direction-panel');
+              if(d&&!d.open)d.querySelector('summary').click();
+            })()`);
+            await wait(`!!document.querySelector('#direction-panel')?.open&&document.querySelectorAll('#direction-panel li').length>0&&(document.querySelector('#time-label')?.textContent??'').startsWith('0.0000')`);
           }
           await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
           assert.equal(await page.evaluate(`document.documentElement.lang`), language);
