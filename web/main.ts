@@ -261,7 +261,7 @@ let answerInFlightRows:readonly CommentRow[]=[];let recordAnswered=false;
 let partsSubmittedIssues:ReadonlySet<string>=new Set();
 let localCommentSource:{publicationId:string;sourceHash:string;jobId?:undefined;draftId?:undefined;previousPublicationId?:undefined}|null=null;
 let localCommentAttempt:{key:string;sendId:string}|null=null;
-const localCommentNotes={rows:[] as {id:string;summary:string}[],available:()=>true};
+const localCommentNotes={rows:[] as {id:string;summary:string}[]};
 let view: 'compare' | 'reference' | 'rig' = 'compare';
 // Requested layout persists in the source-bound draft; the effective one follows actual load events only.
 let rigInput:InputState={state:'pending'},referenceInput:InputState={state:'absent'},effectiveView:SingleLayout|null=null;
@@ -579,9 +579,15 @@ function renderCheckpoint(): void {
   el('checkpoint-detail').hidden=!checkpoint;
   text('checkpoint-title', checkpoint?.title ?? 'Review entire package');
   text('detail-title', checkpoint?.title ?? 'No checkpoint supplied');
-  text('detail-note', checkpoint?.note ?? 'Record checkpoint notes and outcomes.');
+  const detailNote = checkpoint?.note ?? '';
+  el('detail-note').hidden = !detailNote;
+  text('detail-note', detailNote);
   const entry = checkpoint ? session.checkpoints[checkpoint.id] : undefined;
-  el('checkpoint-note').textContent = entry?.note ?? '';
+  const reviewNote = entry?.note ?? '';
+  const noteNode = el('checkpoint-note');
+  noteNode.hidden = !reviewNote;
+  if (noteNode.previousElementSibling instanceof HTMLElement) noteNode.previousElementSibling.hidden = !reviewNote;
+  noteNode.textContent = reviewNote;
 }
 
 function setView(value: typeof view): void {leavePreviousBuild();view=value;renderLayout();}

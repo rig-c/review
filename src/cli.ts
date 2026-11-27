@@ -20,7 +20,7 @@ import { startServer } from './server.ts';
 import { loadCompare } from './compare.ts';
 import { startCompareServer } from './compare-server.ts';
 import { loadPartsView, readPartsVerdictForCli, readPartsVerdictExport, exportPartsCorrection, assertPartsUnchanged, assertPartsCanOpen, type PartsViewOptions } from './parts-view.ts';
-import { readPackageCommentCorrection, readPackageComments, readPartsComments, type LocalCommentsExport } from './local-comments.ts';
+import { partsCommentsPath, readPackageCommentCorrection, readPackageComments, readPartsComments, type LocalCommentsExport } from './local-comments.ts';
 import { startPartsServer } from './parts-server.ts';
 import { readSession, parseSession, sessionFile, type Feedback } from './session.ts';
 import { readCompareSession } from './compare-session.ts';
@@ -234,7 +234,7 @@ function commandHelpRequested(args:readonly string[],command:'open'|'review'|'ch
  }
  return false;
 }
-const partsUsage='Usage: rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--by <name>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       A directory holding parts.json (or a build root whose rig/ holds it) opens in parts mode, before rigging. Atlas-only inputs refuse PARTS_ATLAS_NOT_CARRIED; open the rig review for inspection.\n       --format json|issue still reads saved parts or atlas verdicts. The sign-off is written to parts-review.json beside parts.json, or to --verdict.';
+const partsUsage='Usage: rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--by <name>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       A directory holding parts.json (or a build root whose rig/ holds it) opens in parts mode, before rigging. Atlas-only inputs refuse PARTS_ATLAS_NOT_CARRIED; open the rig review for inspection.\n       --format json|issue still reads saved parts or atlas verdicts. Sent comments are written to review-comments.json beside parts.json; --format json|issue also reads a saved verdict there or at --verdict.';
 /** `rig-review parts` (#348): parts inspection in the foreground, or read-only parts/atlas verdict export. */
 async function partsCommand(args:string[]){
  const input=args.shift();if(!input||input==='--help'||input==='-h'){console.log(partsUsage);return;}
@@ -251,7 +251,7 @@ async function partsCommand(args:string[]){
  const pkg=await loadPartsView(input,options);
  if(format&&itemId&&inventory){
    const verdict=await readPartsVerdictForCli(pkg);
-   if(!verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a current verdict first');
+   if(!verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE: no saved current verdict to project');
    await assertPartsUnchanged(pkg);
    const projected=projectPartsDescription({verdict,source:verdict.source,selector:{stage:'parts-review',kind:'parts',inventory},selection:partNote?{kind:'note',itemId,part:partNote}:{kind:'comment',itemId}});
    process.stdout.write(format==='json'?exportPartsCorrection(verdict,projected):formatCorrectionIssue(projected)+'\n');
@@ -259,7 +259,7 @@ async function partsCommand(args:string[]){
  }
  if(format){
    const verdict=await readPartsVerdictExport(pkg,format), localComments=await readPartsComments(pkg);
-   if(!verdict&&!localComments)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a verdict first');
+   if(!verdict&&!localComments)throw new Error('PARTS_VERDICT_UNAVAILABLE: no saved verdict or sent comments to read');
    if(!localComments){process.stdout.write(verdict!);return;}
    await assertPartsUnchanged(pkg);
    process.stdout.write(format==='json' ? JSON.stringify({...(verdict?JSON.parse(verdict):{}),localComments},null,2)+'\n'
@@ -277,7 +277,7 @@ async function partsCommand(args:string[]){
  const interrupt = () => stop('SIGINT'), terminate = () => stop('SIGTERM');
  try {
    process.once('SIGINT', interrupt);process.once('SIGTERM', terminate);
-   console.log(`Parts view ready: http://127.0.0.1:${server.port}/#cap=${capability}\nMode: ${pkg.mode} · ${pkg.items.length} ${pkg.mode==='parts'?'parts':'regions'} · ${pkg.flags.length} producer flags\nSign-off: ${pkg.verdictPath}\nPress Ctrl+C to stop.`);
+   console.log(`Parts view ready: http://127.0.0.1:${server.port}/#cap=${capability}\nMode: ${pkg.mode} · ${pkg.items.length} ${pkg.mode==='parts'?'parts':'regions'} · ${pkg.flags.length} producer flags\nComments: ${partsCommentsPath(pkg)}\nPress Ctrl+C to stop.`);
    await server.live.exited;
    if (stopping) await stopping;
  } finally {

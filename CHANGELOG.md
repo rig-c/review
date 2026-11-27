@@ -25,6 +25,7 @@
 * Fresh `parts-verdict` and `review-verdict` job submissions refuse with `JOB_ACT_KIND_DISABLED`. A committed submission still replays its stored act (#1233).
 * Retired standalone parts verdict and package session writes, including the parts CLI's durable save notifications. Send comments saves feedback locally, and existing verdicts and sessions remain readable (#1233).
 * Retired the joined rig+parts verdict POST. The standalone server returns HTTP 405 for `POST /api/stage-parts/verdict`. Send comments saves comments locally on the joined package, and existing joined verdict files remain readable through GET and HEAD exports (#1318).
+* **Breaking in 5.0.0.** `GET /api/stage-parts` drops `verdictReadOnlyReason` when the stage parts view is read-only. `readOnly` remains on the response (#1225).
 * **Breaking in 5.0.0.** In-process job status drops `enabledActKinds` from `JobStatus` and `JobStatusV3` with no replacement field. The public historical tuple `JOB_ENABLED_ACT_KINDS` and its member type `JobEnabledActKind` remain available (#1319).
 * **Breaking in 5.0.0.** `JobReviewStage` and the review-verdict values in `JobActValues`, `JobUIActValues` and `JobCommentsActValues` drop `image-review`. Stored image-review asks and `JobLegacyAct` image verdicts at act@2 remain readable and replayable (#1104).
 

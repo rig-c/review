@@ -171,7 +171,7 @@ test('checkpoint 2 exposes only the registered pending bones set, while its part
     expect(await saved.json()).toEqual(submission);
     const parts=await (await fetch(origin+'/api/stage-parts')).json();
     expect(parts.readOnly).toBe(true);
-    expect(parts.verdictReadOnlyReason).toStartWith('PARTS_VERDICT_READ_ONLY');
+    expect('verdictReadOnlyReason' in parts).toBe(false);
     const verdict=await fetch(origin+'/api/stage-parts/verdict',{method:'POST',headers,body:JSON.stringify({status:'changes-requested',issues:[null]})});
     expect(verdict.status).toBe(405);
     expect(await verdict.json()).toEqual({error:'Method not allowed'});

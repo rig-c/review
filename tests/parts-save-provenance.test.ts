@@ -7,8 +7,8 @@ import {mkdir, mkdtemp, open, readFile, realpath, rm, writeFile} from 'node:fs/p
 import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {resolve, join} from 'node:path';
-import {LOCAL_COMMENTS_ROUTE} from '../src/local-comments.ts';
-import {loadPartsView, readVerdict, exportPartsVerdict, verdictSource} from '../src/parts-view.ts';
+import {LOCAL_COMMENTS_ROUTE, partsCommentsPath} from '../src/local-comments.ts';
+import {loadPartsView, readVerdict, readPartsVerdictJson, exportPartsVerdict, verdictSource} from '../src/parts-view.ts';
 import {startPartsServer} from '../src/parts-server.ts';
 import {writePartsPackage} from './helpers/parts-package.ts';
 import {seedPartsVerdictFixture} from './helpers/parts-verdict-fixture.ts';
@@ -205,6 +205,9 @@ test('#1233 parts CLI sends attributed local comments without a standalone verdi
     });
     expect(removed.status).toBe(404);
     expect(await removed.json()).toEqual({error: 'Not found'});
+    const emptyExport = await fetch(launched.origin + '/api/parts/export');
+    expect(emptyExport.status).toBe(409);
+    expect(await emptyExport.json()).toEqual({error: 'PARTS_VERDICT_UNAVAILABLE: no saved verdict to read'});
     const sendId = crypto.randomUUID(), value = {comments: [{text: 'Inspect the edge'}]};
     const sent = await fetch(launched.origin + LOCAL_COMMENTS_ROUTE, {
       method: 'POST', headers, body: JSON.stringify({sendId, value, sourceHash: verdictSource(pkg).sha256}),
@@ -218,6 +221,8 @@ test('#1233 parts CLI sends attributed local comments without a standalone verdi
   } finally {
     const result = await launched.stop();
     expect({exit: result.exit, stderr: result.stderr}).toEqual({exit: 0, stderr: ''});
+    expect(result.stdout).toContain('Comments: ' + partsCommentsPath(pkg));
+    expect(result.stdout).not.toContain('Sign-off:');
     expect(result.stdout).toContain('review parts: exiting — received SIGTERM.');
     expect(result.stdout).not.toContain('RIG_REVIEW_PARTS_SAVED ');
   }
@@ -225,8 +230,12 @@ test('#1233 parts CLI sends attributed local comments without a standalone verdi
 
 test('#568 missing, corrupt, invalid-date, stale files and stale flags keep existing CLI failure behavior', async () => {
   const pkg = await fixture();
+  await expect(readPartsVerdictJson(pkg)).rejects.toThrow('PARTS_VERDICT_UNAVAILABLE: no saved verdict to read');
+  const correction = await cli([pkg.root, '--format', 'json', '--correction', 'item-1', '--parts-file', 'evidence/parts.json']);
+  expect({exit: correction.exit, stdout: correction.stdout}).toEqual({exit: 1, stdout: ''});
+  expect(correction.stderr).toContain('PARTS_VERDICT_UNAVAILABLE: no saved current verdict to project');
   let result = await cli([pkg.root, '--format', 'json']);
-  expect(result.exit).toBe(1);expect(result.stdout).toBe('');expect(result.stderr).toContain('PARTS_VERDICT_UNAVAILABLE');
+  expect(result.exit).toBe(1);expect(result.stdout).toBe('');expect(result.stderr).toContain('PARTS_VERDICT_UNAVAILABLE: no saved verdict or sent comments to read');
   const core = await seedPartsVerdictFixture(pkg, input);
   for (const [text, code] of [
     ['{', 'PARTS_VERDICT_INVALID'],
