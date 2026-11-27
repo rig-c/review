@@ -535,8 +535,8 @@ test('standing SYNTHETIC completed agent_decision, covers-only decision, broken 
  }
 });
 test('legacy transport SYNTHETIC nonfatal warning survives actual GET /api/interview',async()=>{
- const root=fixture();legacy(root);const output='review551-picks';mkdirSync(join(root,output));
- const routes=interviewRoutes(root,output,'test-capability');
+ const root=fixture();legacy(root);
+ const routes=interviewRoutes(root,'test-capability');
  const response=await routes(new Request('http://127.0.0.1:19484/api/interview',{headers:{'X-Review-Capability':'test-capability'}}),'http://127.0.0.1:19484');
  expect(response?.status).toBe(200);expect(diagnostics(await response!.json())).toContain('INTERVIEW_OPTIONS_SCENE_LEGACY');
 });
@@ -622,8 +622,7 @@ test('history SYNTHETIC unavailable retained set preserves its original answer s
 test('legacy transport SYNTHETIC historical issues keep full original records through actual GET', async () => {
  const root = fixture('writer-history'), answer = historicalOnly(root);
  alterProject(root, project => {addScene(project, root, DRAFT + 2500); item(project).history[0].at = iso(DRAFT + 3000);});
- const output = 'review551-picks'; mkdirSync(join(root, output));
- const route = interviewRoutes(root, output, 'test-capability');
+ const route = interviewRoutes(root, 'test-capability');
  const response = await route(new Request('http://127.0.0.1:19484/api/interview'), 'http://127.0.0.1:19484');
  expect(response?.status).toBe(200);
  const body = await response!.json();

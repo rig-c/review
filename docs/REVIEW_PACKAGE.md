@@ -886,10 +886,9 @@ See [the parts contract and validation instruments](PARTS_VIEW.md#pointed-parts-
 
 ### Interview-stage project subject
 
-`rig-review open <project-root> --project <project-root> --picks-dir <dir>`
+`rig-review open <project-root> --project <project-root>`
 opens an interview-stage Create project before a draft or recorded review
-package exists. Both roots must resolve to the same directory. The picks output
-is an existing dedicated project-relative directory disjoint from inputs.
+package exists. Both roots must resolve to the same directory.
 No version/draft selector is inferred: demo/build version records and unrelated
 derived evidence are allowed, while an actual draft or a non-null
 `versions[].review_package` requires its existing explicit package designation.
@@ -904,9 +903,11 @@ reviewed-package identity or package session. The workspace renders the named
 `INTERVIEW_PICKS_DISABLED` refusal instead of an answer form ([Review #1230](https://github.com/rig-c/review/issues/1230)).
 Model APIs refuse `MODEL_UNAVAILABLE`; source drift refuses `INTERVIEW_OPTIONS_STALE`.
 Reads do not write sources. Review shows neither an interview answer form nor a
-read-only display of historical answers or notes (owner ruling 2026-11-26);
-existing saved `rig-review/interview-picks@1` files, historical interview records
-and finalized acts remain readable byte for byte to agents and the CLI.
+read-only display of historical answers or notes (owner ruling 2026-11-26).
+Review 5.0.0 removed `--picks-dir` and the picks writer. The file parser
+still reads existing `rig-review/interview-picks@1` records with their original
+selections and notes. Historical interview records and finalized acts remain
+readable byte for byte to agents and the CLI.
 Historical records, picks/act/verdict schemas and explicit
 version/draft joins retain their existing readers and checks.
 This opening form does not replace the semantic standing review cycle.

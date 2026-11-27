@@ -50,7 +50,7 @@ export async function loadOpenReview(inputs:OpenInputs,options:{cwd?:string;stat
 }
 export async function loadOpenPackage(inputs:OpenInputs,options:{cwd?:string;stateDir?:string}={}):Promise<OpenPackage>{
  if(inputs.project&&inputs.project.version===undefined&&inputs.project.draftId===undefined){
-  if(inputs.compare!==undefined||inputs.reference!==undefined||inputs.animation!==undefined||inputs.control||inputs.direct||inputs.viewOnly||handoffFlags(inputs))throw new Error('OPEN_OPTION_INVALID --project: interview-only open takes only the project root, --project and --picks-dir');
+  if(inputs.compare!==undefined||inputs.reference!==undefined||inputs.animation!==undefined||inputs.control||inputs.direct||inputs.viewOnly||handoffFlags(inputs))throw new Error('OPEN_OPTION_INVALID --project: interview-only open takes only the project root and --project');
   const joined=joinProject(null,inputs.project);
   if(await realpath(resolve(inputs.input))!==joined.opened.root)throw new Error('INTERVIEW_SOURCE_MISMATCH: interview input must be the designated project root');
   await joined.assertCurrent();

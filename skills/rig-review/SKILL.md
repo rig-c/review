@@ -17,23 +17,21 @@ recorded draft nor a non-null `versions[].review_package`, the approved
 single-target form is:
 
 ```sh
-rig-review open /path/to/project --project /path/to/project --picks-dir scratch/review-picks
+rig-review open /path/to/project --project /path/to/project
 ```
 
-The picks directory must already exist and be disjoint from declared inputs.
 Both root operands must resolve to the same project. Demo/build version records
 and unrelated derived evidence are allowed; `derived/` may be absent. Explicit
 version/draft selectors stay strict and never fall back. This form takes no
 additional inspection flags and adds no `feedback` or `control` grammar.
 
-The existing Review workspace hosts the interview in its existing modal.
+The Review workspace reports `INTERVIEW_PICKS_DISABLED` for the retired answer form.
 Model-dependent capabilities are named unavailable (`MODEL_UNAVAILABLE`); no
 manifest, model or package session is synthesized. Project, option-set and input
 hashes bind the inspection, and changed bytes require reopening
-(`INTERVIEW_OPTIONS_STALE`). The joined dialog and standing record form use one shared list | image | survey
-answer builder. There is no interview Note input. Existing saved or historical
-notes remain readable as read-only text and are carried unchanged. Joined picks
-omit `note` when none exists; the job act retains its required string field.
+(`INTERVIEW_OPTIONS_STALE`). Since 5.0.0, Review no longer writes picks.
+Existing `rig-review/interview-picks@1` files retain their selections,
+inline Other text and notes and remain readable through the file parser.
 Historical records, picks/act/verdict schemas and explicit
 version/draft joins retain their existing readers and checks. Use the
 semantic standing cycle for active consumer ingestion; do not construct or
@@ -161,7 +159,7 @@ rig-review session close http://127.0.0.1:<port>/jobs/<job-id> \
 
 ## What an agent drives vs. what the person drives
 
-The one-shot CLI file-handoff instructions in this section and in Correction readback below (`--picks-dir`, `--picks-file`, `--parts-verdict-dir`, `--verdict`, `--correction`, reshaped feedback JSON and `--verbatim-file`) are preserved as legacy/history compatibility for standalone and historical runs. Using those file handoffs in the active standing live-job cycle is a bypass finding ([Create #182](https://github.com/rig-c/create/issues/182), [Create #184](https://github.com/rig-c/create/issues/184)).
+Review 5.0.0 removed `--picks-dir`. The one-shot CLI file-handoff instructions in this section and in Correction readback below (`--picks-file`, `--parts-verdict-dir`, `--verdict`, `--correction`, reshaped feedback JSON and `--verbatim-file`) are preserved as legacy/history compatibility for standalone and historical runs. Using those file handoffs in the active standing live-job cycle is a bypass finding ([Create #182](https://github.com/rig-c/create/issues/182), [Create #184](https://github.com/rig-c/create/issues/184)).
 
 Use the installed CLI. For compiled packages, run `rig-review check <package>`
 before handoff to validate the package and read its source SHA-256. Use managed
@@ -171,10 +169,10 @@ arguments. The direct-server path also prints a copyable feedback command on std
 The stage buttons navigate within that source binding.
 
 1. **Parts + mesh.** Open the recorded Create draft's compiled check directory.
-   The picks and verdict directories must already exist inside the project,
-   separate from its inputs.
+   The verdict directory must already exist inside the project and be separate
+   from its inputs.
    ```sh
-   rig-review open <draft-check-dir> --project <project> --project-draft <id> --picks-dir <picks-dir> --parts-verdict-dir <verdict-dir>
+   rig-review open <draft-check-dir> --project <project> --project-draft <id> --parts-verdict-dir <verdict-dir>
    ```
    The person inspects separated parts and their mapped draft meshes, leaves
    notes or described corrections, and inspects scratch results when available.
@@ -187,18 +185,15 @@ The stage buttons navigate within that source binding.
    geometry is structure evidence. Without a
    compatible draft, `rig-review parts <parts> --verdict <output-file>` provides
    standalone inspection and named limits on direct correction.
-2. **Interview.** In the joined draft workspace choose **2 Interview**. For
-   choices bound to a recorded rig, open its package with the Stage 3 command.
-   Beside the bound parts or source image, the person chooses among the saved
-   options with the agent's recommendation and rationale, then uses
-   **Save explicit picks**. Read the `rig-review/interview-picks@1` file for the
-   exact question set, including the person's picks and note. Ingest it in
-   Create for the `rigging-interview` or `post-interview` sign-off as appropriate.
-   Other and Auto can remain pending. Follow [Create's interview guide](https://github.com/rig-c/create/blob/main/docs/INTERVIEW.md).
+2. **Interview.** Discuss published option-set pictures through live Review
+   comments. Follow [Create's interview guide](https://github.com/rig-c/create/blob/main/docs/INTERVIEW.md)
+   to record answers in Create. Before 5.0.0, **Save explicit picks** wrote a
+   `rig-review/interview-picks@1` file for the exact question set. Existing
+   records remain readable with the original picks and note.
 3. **Rig + animation.** Open the recorded rig version's materialized package
    and choose **3 Rig + animation**.
    ```sh
-   rig-review open <rig-package> --project <project> --project-version <rig> --picks-dir <picks-dir>
+   rig-review open <rig-package> --project <project> --project-version <rig>
    ```
    The person inspects setup and motion, marks details with **Comment · C (n)**,
    and can Apply · Rebuild supported edits through the installed producer in
@@ -214,7 +209,7 @@ The stage buttons navigate within that source binding.
 4. **Direction.** Open the rig package with the post that explicitly names
    that rig and binds its authored direction.
    ```sh
-   rig-review open <rig-package> --project <project> --project-version <rig> --picks-dir <picks-dir> --post-version <post>
+   rig-review open <rig-package> --project <project> --project-version <rig> --post-version <post>
    ```
    For direction inspection, the person reviews framing, depth and timing,
    inspects authored camera keys and timing read-only, and presses **Send comments**
