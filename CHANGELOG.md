@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+* Output from a build on one side no longer appears while the other side is selected, and its result is shown when you return.
+
 ### Fixed
 
 * Compare's view controls read Zoom in · Zoom out · Fit · 1:1 like Rig's, and 1:1 works as it does on Rig: the active pane goes to native scale and synced panes keep their relative view (#1282). The View switch follows with the Compare toolbar migration.

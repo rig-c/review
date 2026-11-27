@@ -35,10 +35,8 @@ import {rendererStatus} from './renderer-status.ts';
 import {panelMake,createRigLayerControls,createViewControls,inspectionViewSwitch,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,idlePreviewOnOpen,bookmarkCameraKept,bindLayerShortcuts,describeLayerToggles,type ViewPoint,type ViewSwitchGroup} from './view-controls.ts';
 import {RigOverlays,type OverlayCircle,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
 import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
-import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
-import {densityField,densityPath} from '../src/density-strip.ts';
-import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,setEntryValue,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
-import {worstLine} from '../src/readings.ts';
+import {bindDensityStrip,bindDensityStripJobs,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
+import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
 import {chestOverlayPolygons,chestInputIds,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
 import {bindChestEditor,canvasToCrop,chestField,chestCircles as readChestCircles,exportChest as exportChestFiles,chestMarkers as readChestMarkers,chestPoseOffset,LANDMARKS,posedChestMapping,type ChestEditor} from './chest-editor.ts';
 import {bindMeshEditor,exportMesh as exportMeshFiles,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
@@ -50,7 +48,7 @@ import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {animationAppliedRecord,animationOutcomeLine,retargetAppliedRecord,retargetOutcomeLine,stageChanged as updateDensityPending,type AnimationJobView,type AnimationRequestBody,type AnimationSourceOp,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {appliedStatus as setAppliedStatus,inspectedCheckView as readInspectedCheck,renderApplied as renderAppliedPanel,renderAppliedBlocks as reconcileAppliedBlocks,isPatchJob,recordFor,retargetStage,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuildApply,runRebuildUndo,runReadingsRequest,seedFields,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {createHandoffRefresh,directJobUiSink,bindRequirementsCatalog,bindMeshFolds,bindPanelRebuilds,preparePanelPatch,appliedStatus as setAppliedStatus,inspectedCheckView as readInspectedCheck,renderApplied as renderAppliedPanel,renderAppliedBlocks as reconcileAppliedBlocks,isPatchJob,recordFor,retargetStage,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuildApply,runRebuildUndo,runReadingsRequest,seedFields,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import type {MeshEditDocument} from '../src/mesh-edit.ts';
 import {cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {mountWorkspaceShell,mountStatusBar,bindWorkspaceUI,bindHeaderModeAvailability,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -78,8 +76,7 @@ import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPac
 import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {bindReadingsPanel,readingsContext as buildReadingsContext,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
 import {readingSeekTime,type ReadingsContext} from '../src/readings.ts';
-import {bindEnvironmentInputs,checkAnimation as selectCheckAnimation,windClockOnMove,type ClipMove,environmentCheckRows,scheduleContext,worldExport,type EnvironmentCheckView,type StageWorld,type WorldExport} from './environment-world.ts';
-import {barLine,beforeLine} from '../src/physics-tuning.ts';
+import {bindEnvironmentInputs,checkAnimation as selectCheckAnimation,windClockOnMove,type ClipMove,bindEnvironmentCheck,scheduleContext,worldExport,type StageWorld,type WorldExport} from './environment-world.ts';
 import {bindRequirementsPanel,runRequirementsRequest,type RequirementsCatalogView,type RequirementsJobView,type RequirementsPanel,type RequirementsRefusal} from './requirements-panel.ts';
 import type {RequirementsRequest} from '../src/requirements.ts';
 import {patchRoute} from '../src/retune-route.ts';
@@ -90,8 +87,8 @@ import {bindIdlePanel,type BoneSetup,type IdlePanel} from './idle-panel.ts';
 import {composeAdjust,PhysicsPreview} from './preview.ts';
 import {advancePlayback,cueDue} from './playback-clock.ts';
 import {bindRigFieldsPanel,type RigFieldsPanel} from './rig-fields-panel.ts';
-import {assertRigFieldOps,RIG_FIELDS_READOUT_BARS,TURN_BONE} from '../src/rig-fields.ts';
-import {IDLE_READOUT_BARS,type LocalChannel} from '../src/idle-tracks.ts';
+import {TURN_BONE} from '../src/rig-fields.ts';
+import {type LocalChannel} from '../src/idle-tracks.ts';
 import type {PatchOp} from '../src/config-patch.ts';
 
 /** Mount the existing composition again for a live publication; each instance owns its source-bound state. */
@@ -1506,7 +1503,7 @@ function bind(): void {
    token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
   viewDisposers.push(()=>meshPanel?.dispose());
   // #173: the density strip beside the Mesh panel's density field.
-  densityStrip=bindDensityStrip({part:()=>meshPanel?.part()??null,entry:()=>meshPanel?.entry()??null,build:async values=>{await buildDensityStrip(values);},load:async i=>{await loadStripRow(i);},back:async()=>{await stripBack();},close:async()=>{await closeDensityStrip();}});
+  densityStrip=bindDensityStrip({part:()=>meshPanel?.part()??null,entry:()=>meshPanel?.entry()??null,build:buildDensityStrip,load:async i=>{await loadStripRow(i);},back:stripBack,close:closeDensityStrip});
   idlePanel=bindIdlePanel({apply:async(ops,keys)=>{await applyIdle(ops,keys);},reset:resetIdleBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
    preview:fn=>{idleAdjust=fn;setAdjust();},
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name);out.set(name,project(b.x,b.y));}catch{/* a bone this model lacks has no handle */}}return out;}});
@@ -2753,28 +2750,17 @@ function renderSchedule():void {
 function feedbackSchedule(){if(!player||!environmentApplied())return null;const world=worldFor(animation);return 'error' in world?null:scheduleContext(world,useWorld());}
 let environmentCheckBusy=false;
 /** Check under this world: `rig-parts check --environment` on the build on the stage, beside that build's default-world check. */
-async function runEnvironmentCheck():Promise<EnvironmentCheckView|{status:'refused';error:string}|null> {
- if(environmentCheckBusy)return null;
- const out=el('environment-check-lines'),show=(rows:{kind:string;text:string}[])=>{out.replaceChildren(...rows.map(row=>{const line=document.createElement('div');line.className=`env-${row.kind}`;line.textContent=row.text;return line;}));};
- const name=checkAnimation(),world=worldFor(name);
- if('error' in world){show([{kind:'error',text:world.error}]);return {status:'refused',error:world.error};}
- const build=appliedOnStage?'scratch':'inspected',before=stageCheck;
- environmentCheckBusy=true;button('environment-check').disabled=true;show([{kind:'label',text:`Checking the ${build} build under ${name}'s schedule (${world.schedule.steps.length} step(s), sha256 ${world.sha256.slice(0,16)}) with rig-parts check --environment…`}]);
- try{
-  let job=await api<EnvironmentCheckView|{status:'refused';error:string}>('/api/environment-check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build,schedule:world.schedule})}).catch(error=>({status:'refused' as const,error:errorText(error).replace(/^\d+: /,'')}));
-  if(!('id' in job)){const text=(()=>{try{return (JSON.parse(job.error) as {error?:string}).error??job.error;}catch{return job.error;}})();show([{kind:'error',text}]);return {status:'refused',error:text};}
-  const started=performance.now();
-  while(job.status==='running'){show([{kind:'label',text:`check --environment running on the ${build} build · ${((performance.now()-started)/1000).toFixed(0)} s · ${job.lines.at(-1)?.trim()??''}`}]);await new Promise(resolve=>setTimeout(resolve,1500));job=await api<EnvironmentCheckView>(`/api/environment-check/${job.id}`);}
-  const checked=job;
-  const label=build==='inspected'?'default world (the inspected build\'s own check)':`the scratch build's Apply check${appliedOnStage&&'environment' in appliedOnStage&&appliedOnStage.environment?` (under schedule sha256 ${appliedOnStage.environment.sha256.slice(0,16)})`:' (default world)'}`;
-  // No inspected check exists when the baseline did not reproduce the inspected rig; say why, verbatim (a schedule of wind [1, 0], gravity [0, 1] reads the default world).
-  const baseline=rebuildStatus?.baseline,noDefault=build==='inspected'&&!inspectedCheckView()&&baseline&&baseline.status!=='running'&&baseline.status!=='reproduced';
-  const draw=()=>show(environmentCheckRows(checked,name=>noDefault?`${name}: no default-world check — ${baseline!.line} (check a schedule of wind 1, gravity 1 for the runtime's world)`:build==='inspected'?beforeLine(name,null,inspectedCheckView()):barLine(name,before?.lines??null,before?.check??null),label));
-  draw();if(build==='inspected'&&inspectedCheckView()?.status!=='checked')void followInspectedCheck(draw);
-  return job;
- }catch(error){show([{kind:'error',text:`ENVIRONMENT_CHECK_FAILED: ${errorText(error)}`}]);return null;}
- finally{environmentCheckBusy=false;button('environment-check').disabled=!player;}
-}
+const runEnvironmentCheck=bindEnvironmentCheck({
+ api,path:'/api/environment-check',ui:directJobUiSink,out:()=>el('environment-check-lines'),
+ busy:()=>environmentCheckBusy,setBusy:value=>{environmentCheckBusy=value;},
+ paintBusy:value=>{button('environment-check').disabled=value||!player;},
+ animation:checkAnimation,worldFor,applied:()=>!!appliedOnStage,before:()=>stageCheck,
+ baseline:()=>rebuildStatus?.baseline,inspected:inspectedCheckView,follow:show=>followInspectedCheck(show),
+ scratchLabel:()=>`the scratch build's Apply check${appliedOnStage&&'environment' in appliedOnStage&&appliedOnStage.environment?` (under schedule sha256 ${appliedOnStage.environment.sha256.slice(0,16)})`:' (default world)'}`,
+ missingDefault:(name,line)=>`${name}: no default-world check — ${line} (check a schedule of wind 1, gravity 1 for the runtime's world)`,
+ initial:(name,build,scheduled)=>`Checking the ${build} build under ${name}'s schedule (${scheduled.schedule.steps.length} step(s), sha256 ${scheduled.sha256.slice(0,16)}) with rig-parts check --environment…`,
+ progress:(build,job,started)=>`check --environment running on the ${build} build · ${((performance.now()-started)/1000).toFixed(0)} s · ${job.lines.at(-1)?.trim()??''}`,
+});
 /** Every control change engages the environment; until then the player stands at the runtime start values. */
 function engage(change:()=>void):void {
  try{change();input('environment-applied').checked=true;environmentNote='';applyEnvironment();persistence?.save();}
@@ -2970,12 +2956,9 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  return rebuildStatus;
 }
 /** The handoff line (#101): path, hash and how it was found, then the baseline; re-read while the baseline runs. */
-let handoffTimer:ReturnType<typeof setTimeout>|null=null;
-function renderHandoff(status:RebuildStatusView):void {
- const line=el('handoff-line'),shown=handoffText(status);line.textContent=shown.text;line.title=shown.text;line.classList.toggle('error',shown.error);
- if(handoffTimer)clearTimeout(handoffTimer);handoffTimer=null;
- if(status.baseline?.status==='running')handoffTimer=setTimeout(()=>{void api<RebuildStatusView>('/api/rebuild').then(next=>{rebuildStatus=next;renderHandoff(next);}).catch(()=>{});},2000);
-}
+const {renderHandoff,followInspectedCheck}=createHandoffRefresh(()=>el('handoff-line')).bind({
+ api,path:'/api/rebuild',ui:directJobUiSink,read:()=>rebuildStatus,save:next=>{rebuildStatus=next;},
+});
 function rebuildState():void {chestEditor?.rebuildState({busy:rebuildBusy,applied:!!appliedOnStage});renderApplied();comments?.refresh();if(!rebuildBusy)void refreshApplied();}
 /** #166: the session's applied records (the server's stack), the last one on the stage when the stage shows it. */
 let appliedHistory:AppliedHistoryView|null=null;
@@ -3243,6 +3226,27 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  },
  stage:()=>({modelHash:stageModelHash,inspectedHash:inspectedModel?.sha256??null,applied:appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,animation,time:player?.time??time,playing,busy:rebuildBusy}),
 };
+const panelRebuilds=bindPanelRebuilds({
+ bones:()=>bonesPanel,cloth:()=>clothPanel,cuts:()=>cutsPanel,idle:()=>idlePanel,
+ mesh:()=>meshPanel,physics:()=>physicsPanel,'rig-fields':()=>rigFieldsPanel,
+},{
+ origin:()=>undefined,sink:()=>directJobUiSink,status:()=>rebuildStatus,loadStatus:loadRebuildStatus,
+ stageWorld,canReset:(_origin,key)=>!!appliedOnStage||(key==='mesh'&&!!stripPending),
+ apply:(_origin,patch,world)=>applyPatch(patch,world),reset:(_origin,world)=>resetRebuild(world),
+ before:()=>stageCheck,inspected:inspectedCheckView,follow:(_origin,show)=>followInspectedCheck(show),
+ redraw:()=>redrawOverlay(true),
+ progress:(_origin,key,patch,status,keys)=>{
+  const {ops,producer}=patch;
+  if(key==='cuts')return `Applying ${ops.length} op(s) with ${producer.name} ${producer.version}: build (assemble → rig → check), compile… (a full build takes minutes)`;
+  if(key==='cloth'){
+   const route=status?.cloth?.route==='build'?'build (assemble → rig → check)':'rig --config, check';
+   return `Applying ${ops.length} op(s) with ${producer.name} ${producer.version}: propose --cloth --write-config, then ${route}, compile…`;
+  }
+  if(key==='idle')return `Applying ${ops.length} op(s) with ${producer.name} ${producer.version}: ${patchRoute(ops,producer.version)} --config${keys?` --idle-keys ${keys}`:''}, compile, check…`;
+  return `Applying ${ops.length} op(s) with ${producer.name} ${producer.version}: ${patchRoute(ops,producer.version)} --config, compile, check…`;
+ },
+});
+
 /**
  * Physics Apply (#103): the pending ops become one config patch (`rig`, then check) against the handoff config; the
  * scratch build reloads under the world Apply was pressed in, and the readout shows the two check lines before (the
@@ -3250,34 +3254,14 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  */
 async function applyPhysics(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|null> {
  const status=rebuildStatus??await loadRebuildStatus();
- const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
- if(!patch){const reason=!ops.length?'PHYSICS_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';physicsPanel?.status(reason,true);return null;}
+ const job=panelRebuilds.beginPanelRebuild('physics');
+ const patch = preparePanelPatch(status, ops, 'PHYSICS_NOTHING_PENDING: no pending ops', job);
+ if(!patch)return null;
  physicsPanel?.clearPreview();
- const world=stageWorld(),before=stageCheck;
- physicsPanel?.busy(true);physicsPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: ${patchRoute(patch.ops,patch.producer.version)} --config, compile, check…`,false);
- try{
-  const result=await applyPatch(patch,world);
-  const outcome=patchOutcomeLine(result);physicsPanel?.status(outcome.text,outcome.error);
-  if('id' in result&&result.status==='built'){
-   physicsPanel?.applied(result.request.patch.ops);
-   // BEFORE for the inspected build is its stored background check (#108, HQ ruling); re-read while it still runs.
-   const after={lines:[...result.lines],check:result.check};
-   const show=()=>physicsPanel?.readout(readoutRows(before,before?null:inspectedCheckView(),after));
-   show();if(!before)void followInspectedCheck(show);
-  }
-  return result;
- }finally{physicsPanel?.busy(false);}
+ const world=stageWorld();
+ return panelRebuilds.applyPanelPatch(job,patch,status,null,()=>applyPatch(patch,world));
 }
 function inspectedCheckView():InspectedCheckView|null {return readInspectedCheck(rebuildStatus);}
-/** While the inspected check runs, re-read the status and redraw the readout once it settles. */
-async function followInspectedCheck(show:()=>void):Promise<void> {
- for(let i=0;i<120&&(!rebuildStatus?.inspectedCheck||rebuildStatus.inspectedCheck.status==='running');i++){
-  try{rebuildStatus=await api<RebuildStatusView>('/api/rebuild');}catch{return;}
-  show();if(rebuildStatus.inspectedCheck&&rebuildStatus.inspectedCheck.status!=='running')return;
-  if(!rebuildStatus.inspectedCheck&&rebuildStatus.baseline?.status!=='running')return;
-  await new Promise(resolve=>setTimeout(resolve,3000));
- }
-}
 /**
  * Readings (#108): the pickers' readings of the drawn animation go to `POST /api/readings`, which runs `rigc render`
  * once per reading on the inspected build and on the latest scratch build; the finished job's frames become ticks and
@@ -3312,10 +3296,7 @@ async function runReadings(override?:{readings:import('../src/readings.ts').Read
 }
 function readingsContext():ReadingsContext|null {return buildReadingsContext(readingsJob);}
 /** Requirements (#113): what the handoff's rig spec offers the panel, or why nothing does. */
-async function loadRequirements():Promise<void> {
- try{const catalog=await api<RequirementsCatalogView>('/api/requirements');requirementsPanel?.load(catalog,catalog.reason);}
- catch(error){requirementsPanel?.load(null,`REQUIREMENTS_UNAVAILABLE: ${errorText(error)}`);}
-}
+const loadRequirements=bindRequirementsCatalog({api,path:'/api/requirements',ui:directJobUiSink,panel:()=>requirementsPanel});
 function runRequirements(body:RequirementsRequest):Promise<RequirementsJobView|RequirementsRefusal|null> {
  return runRequirementsRequest(body,{api,path:'/api/requirements',refresh:loadRequirements});
 }
@@ -3328,136 +3309,44 @@ async function checkBones(ops:PatchOp[]):Promise<BonesCheckView> {
  * whole-rig op, so the server refuses it (`EDIT_BASELINE_MISMATCH`) unless the baseline reproduced the inspected rig.
  * On a build the re-weighted rig reloads in place (the Weights view reads the revision); a refusal is shown verbatim.
  */
-async function applyBones(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|null> {
- const status=rebuildStatus??await loadRebuildStatus();
- const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
- if(!patch){const reason=!ops.length?'BONES_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';bonesPanel?.status(reason,true);return null;}
- bonesPanel?.busy(true);bonesPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: ${patchRoute(patch.ops,patch.producer.version)} --config, compile, check…`,false);
- try{
-  const result=await applyPatch(patch,stageWorld());
-  const outcome=patchOutcomeLine(result);bonesPanel?.status(outcome.text,outcome.error);
-  if('id' in result&&result.status==='built'){bonesPanel?.applied(result.request.patch.ops);redrawOverlay(true);}
-  return result;
- }finally{bonesPanel?.busy(false);}
-}
+const applyBones=panelRebuilds.apply.bind(null,'bones');
 /**
  * Cuts Apply (#115): the pending cut / patch / range / joint ops become one `rig` patch, which the server runs as
  * `rig-parts build` (assemble → rig → check) from the handoff's painting and runs; the scratch build reloads in place
  * and the panel shows the refusals, the recomposite, the seam pairs and the build's wall clock.
  */
-async function applyCuts(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|null> {
- const status=rebuildStatus??await loadRebuildStatus();
- const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
- if(!patch){const reason=!ops.length?'CUTS_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';cutsPanel?.status(reason,true);return null;}
- cutsPanel?.busy(true);cutsPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: build (assemble → rig → check), compile… (a full build takes minutes)`,false);
- try{
-  const result=await applyPatch(patch,stageWorld());
-  const outcome=patchOutcomeLine(result);cutsPanel?.status(outcome.text,outcome.error);
-  if('id' in result&&result.status==='built')redrawOverlay(true);
-  return result;
- }finally{cutsPanel?.busy(false);}
-}
+const applyCuts=panelRebuilds.apply.bind(null,'cuts');
 /**
  * Cloth Apply (#111): the pending recipe ops become one `rig` patch, which the server runs as `rig-parts propose --cloth
  * --write-config` and then builds the written config; the scratch build reloads in place under the stage's world.
  */
-async function applyCloth(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|null> {
- const status=rebuildStatus??await loadRebuildStatus();
- const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
- if(!patch){const reason=!ops.length?'CLOTH_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';clothPanel?.status(reason,true);return null;}
- const route=status?.cloth?.route==='build'?'build (assemble → rig → check)':'rig --config, check';
- clothPanel?.busy(true);clothPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: propose --cloth --write-config, then ${route}, compile…`,false);
- try{
-  const result=await applyPatch(patch,stageWorld());
-  const outcome=patchOutcomeLine(result);clothPanel?.status(outcome.text,outcome.error);
-  if('id' in result&&result.status==='built')redrawOverlay(true);
-  return result;
- }finally{clothPanel?.busy(false);}
-}
+const applyCloth=panelRebuilds.apply.bind(null,'cloth');
 /** Cloth Reset: the inspected build back on the stage (same world), and no pending op. */
-async function resetClothBuild():Promise<void> {
- clothPanel?.clear();clothPanel?.shown(null);
- if(appliedOnStage){clothPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{clothPanel?.busy(false);}}
- clothPanel?.status('Reset: the inspected build is on the stage; no pending ops.',false);
-}
+const resetClothBuild=panelRebuilds.reset.bind(null,'cloth');
 /** Cuts Reset: the inspected build back on the stage (same world), and no pending op. */
-async function resetCutsBuild():Promise<void> {
- cutsPanel?.clear();cutsPanel?.shown(null);
- if(appliedOnStage){cutsPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{cutsPanel?.busy(false);}}
- cutsPanel?.status('Reset: the inspected build is on the stage; no pending ops.',false);
-}
+const resetCutsBuild=panelRebuilds.reset.bind(null,'cuts');
 /** Bones Reset: the inspected build back on the stage (same world), and no pending op. */
-async function resetBonesBuild():Promise<void> {
- bonesPanel?.clear();bonesPanel?.applied(null);
- if(appliedOnStage){bonesPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{bonesPanel?.busy(false);}}
- bonesPanel?.status('Reset: the inspected build is on the stage; no pending ops.',false);
-}
+const resetBonesBuild=panelRebuilds.reset.bind(null,'bones');
 /**
  * Rig fields Apply (#110): the pending ops (in the block's scope, `RIG_FIELDS_OP_OUT_OF_SCOPE` otherwise) become one
  * config patch (`rig`, then check) against the handoff config — a whole-rig op behind the baseline guard (`/stops`,
  * `/bones`, `/regions`, `/turn` and the blink still are outside retune's scope, #136). On a build the revision reloads in place and the readout shows BLINK_NO_HOLE and FEET_STAY_LEVEL
  * before and after; a refusal shows the producer's line verbatim and leaves the stage as it was.
  */
-async function applyRigFields(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|null> {
- const status=rebuildStatus??await loadRebuildStatus();
- try{assertRigFieldOps(ops);}catch(error){rigFieldsPanel?.status(errorText(error),true);return null;}
- const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
- if(!patch){const reason=!ops.length?'RIG_FIELDS_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';rigFieldsPanel?.status(reason,true);return null;}
- const world=stageWorld(),before=stageCheck;
- rigFieldsPanel?.busy(true);rigFieldsPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: ${patchRoute(patch.ops,patch.producer.version)} --config, compile, check…`,false);
- try{
-  const result=await applyPatch(patch,world);
-  const outcome=patchOutcomeLine(result);rigFieldsPanel?.status(outcome.text,outcome.error);
-  if('id' in result&&result.status==='built'){
-   rigFieldsPanel?.applied(result.request.patch.ops);
-   const after={lines:[...result.lines],check:result.check};
-   const show=()=>rigFieldsPanel?.readout(readoutRows(before,before?null:inspectedCheckView(),after,RIG_FIELDS_READOUT_BARS));
-   show();if(!before)void followInspectedCheck(show);
-  }
-  return result;
- }finally{rigFieldsPanel?.busy(false);}
-}
+const applyRigFields=panelRebuilds.apply.bind(null,'rig-fields');
 /** Rig fields Reset: the dial off, no pending op, and the inspected build back under the same world. */
-async function resetRigFieldsBuild():Promise<void> {
- rigFieldsPanel?.setDial(0);rigFieldsPanel?.clear();rigFieldsPanel?.applied(null);rigFieldsPanel?.readout([]);
- if(appliedOnStage){rigFieldsPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{rigFieldsPanel?.busy(false);}}
- rigFieldsPanel?.status('Reset: the inspected build is on the stage; no pending ops; the dial is at 0.',false);
-}
+const resetRigFieldsBuild=panelRebuilds.reset.bind(null,'rig-fields');
 /** Physics Reset: the inspected build back under the same world, and no pending op. */
-async function resetPhysicsBuild():Promise<void> {
- physicsPanel?.clear();physicsPanel?.applied(null);physicsPanel?.readout([]);
- if(appliedOnStage){physicsPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{physicsPanel?.busy(false);}}
- physicsPanel?.status('Reset: the inspected build is on the stage; no pending ops.',false);
-}
+const resetPhysicsBuild=panelRebuilds.reset.bind(null,'physics');
 /**
  * Idle tracks Apply (#104): the pending ops become one config patch (`rig --idle-keys <the inspected rig's keys>`, no
  * flag when they could not be read, then check) against the handoff config. The preview was cleared when Apply was pressed; on a built job the scratch build
  * reloads under the same world and its built idle plays, and the readout shows CHAIN_LAG, TIP_OVER_ROOT, BREATH_VISIBLE
  * and the loop line before and after. A refusal shows the producer's line verbatim and leaves the stage as it was.
  */
-async function applyIdle(ops:PatchOp[],keys:'ctl'|'direct'|null):Promise<PatchJobView|RebuildRefusal|null> {
- const status=rebuildStatus??await loadRebuildStatus();
- const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig',args:keys?['--idle-keys',keys]:[]}):null;
- if(!patch){const reason=!ops.length?'IDLE_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';idlePanel?.status(reason,true);return null;}
- const world=stageWorld(),before=stageCheck;
- idlePanel?.busy(true);idlePanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: ${patchRoute(patch.ops,patch.producer.version)} --config${keys?` --idle-keys ${keys}`:''}, compile, check…`,false);
- try{
-  const result=await applyPatch(patch,world);
-  const outcome=patchOutcomeLine(result);idlePanel?.status(outcome.text,outcome.error);
-  if('id' in result&&result.status==='built'){
-   const after={lines:[...result.lines],check:result.check};
-   const show=()=>idlePanel?.readout(readoutRows(before,before?null:inspectedCheckView(),after,IDLE_READOUT_BARS));
-   show();if(!before)void followInspectedCheck(show);
-  }
-  return result;
- }finally{idlePanel?.busy(false);}
-}
+const applyIdle=panelRebuilds.apply.bind(null,'idle');
 /** Idle Reset: the preview cleared, no pending op, and the inspected build back under the same world. */
-async function resetIdleBuild():Promise<void> {
- idlePanel?.clear();idlePanel?.applied(null);idlePanel?.readout([]);
- if(appliedOnStage){idlePanel?.busy(true);try{await resetRebuild(stageWorld());}finally{idlePanel?.busy(false);}}
- idlePanel?.status('Reset: the inspected build is on the stage; no pending ops; the preview is cleared.',false);
-}
+const resetIdleBuild=panelRebuilds.reset.bind(null,'idle');
 /**
  * Keyed animation Apply (#235): sends the entire cumulative pending op list with the handoff's `configHash` and
  * `animationsFromHash` to `POST /api/rebuild {animation}`. A second Apply sends the first edits too. On a built job the
@@ -3632,11 +3521,7 @@ async function applyMesh(part:string,entry:MeshEntry):Promise<PatchJobView|Rebui
  }finally{meshPanel?.busy(false);}
 }
 /** Mesh Reset: the inspected build back on the stage (same world); the panel already holds the config's entry again. */
-async function resetMeshBuild():Promise<void> {
- meshPanel?.counts([]);meshPanel?.readout([]);
- if(appliedOnStage||stripPending){meshPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{meshPanel?.busy(false);}}
- meshPanel?.status('Reset: the inspected build is on the stage; the pending entry is the config\'s.',false);
-}
+const resetMeshBuild=panelRebuilds.reset.bind(null,'mesh');
 /**
  * #173 · Density strip. Build: one Mesh-panel patch per value (the pending entry with its density field at that value),
  * sent together to `POST /api/density-strip` and polled until every candidate settles. Load: a built row's revision on
@@ -3650,33 +3535,13 @@ let stripPending:{index:number;id:string;candidate:string;back:{url:string;prefi
 function stageChanged(change:StageChange<NonNullable<typeof stripPending>>):void {updateDensityPending(readAppliedStage(),change,refreshDensityStrip);}
 const densityLine=(text:string,error=false)=>{densityStrip?.status(text,error);if(error)message(text,true);};
 const renderStrip=()=>densityStrip?.show(stripView,stripPending&&stripView?.id===stripPending.id?stripPending.index:null,densityBusy||rebuildBusy||!!readOnly);
-async function refreshDensityStrip():Promise<void>{try{const r=await api<{strip:DensityStripViewLike|null}>('/api/density-strip');stripView=r.strip;}catch{/* keep the last view */}renderStrip();}
-async function buildDensityStrip(values:number[]):Promise<DensityStripViewLike|{error:string}>{
- if(densityBusy)return {error:'DENSITY_STRIP_BUSY: a strip is still building'};
- if(readOnly){densityLine(readOnly,true);return {error:readOnly};}
- const status=rebuildStatus??await loadRebuildStatus(),part=meshPanel?.part()??null,entry=meshPanel?.entry()??null;
- if(!status||!part||!entry){const t=status?.reason??'MESH_PANEL_NO_PART: select a mesh part';densityLine(t,true);return {error:t};}
- const problems=meshPanel?.precheck()??[];if(problems.length){const t=`${problems[0]} (review pre-check; nothing sent)`;densityLine(t,true);return {error:t};}
- let patches:ConfigPatch[];
- try{const field=densityField(entry,part);patches=values.map(v=>{const patch=makePatch(status,meshPatchOps(part,setEntryValue(entry,densityPath(field),v)),{cmd:'remesh',args:['--part',part]});if(!patch)throw new Error(status.reason??'REBUILD_STATUS_UNAVAILABLE');assertMeshPatch(patch,part);return patch;});}
- catch(error){const t=errorText(error);densityLine(t,true);return {error:t};}
- // A pending row goes back first: the strip it came from is about to be replaced.
- if(stripPending)await stripBack();
- densityBusy=true;renderStrip();densityLine(`Building a strip of ${values.length} on ${part}: ${values.join(', ')} — remesh, compile and remesh's own check per value…`);
- const t0=performance.now();
- try{
-  let view:DensityStripViewLike|{status:string;error:string};
-  try{view=await api<DensityStripViewLike|{status:string;error:string}>('/api/density-strip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patches})});}
-  catch(error){const t=errorText(error);densityLine(t,true);return {error:t};}
-  if('error' in view){densityLine(view.error,true);return {error:view.error};}
-  stripView=view;renderStrip();
-  while(stripView.status==='running'){await new Promise(resolve=>setTimeout(resolve,1500));stripView=await api<DensityStripViewLike>(`/api/density-strip/${stripView.id}`);renderStrip();
-   const settled=stripView.rows.filter(r=>r.status!=='running').length;densityLine(`Strip ${stripView.id.slice(0,12)}…: ${settled} of ${stripView.rows.length} settled · ${((performance.now()-t0)/1000).toFixed(0)} s`);}
-  const passing=stripView.rows.filter(r=>r.verdict==='PASS').length;
-  densityLine(`Strip of ${stripView.rows.length} on ${stripView.part} settled in ${((stripView.wallMs??0)/1000).toFixed(1)} s (at most ${stripView.concurrency} at once): ${passing} passing, ${stripView.rows.length-passing} refused or failing. Labels only — nothing is applied; Load puts a row on the stage as pending.`);
-  return stripView;
- }finally{densityBusy=false;renderStrip();}
-}
+const {refresh:refreshDensityStrip,build:buildDensityStrip,close:closeDensityStrip}=bindDensityStripJobs({
+ api,path:'/api/density-strip',ui:directJobUiSink,view:()=>stripView,save:next=>{stripView=next;},render:renderStrip,
+ busy:()=>densityBusy,setBusy:value=>{densityBusy=value;},pendingId:()=>stripPending?.id,back:stripBack,panel:()=>densityStrip,
+ footer:text=>message(text,true),readOnly:()=>readOnly,status:()=>rebuildStatus,loadStatus:loadRebuildStatus,mesh:()=>meshPanel,
+ initial:(part,values)=>`Building a strip of ${values.length} on ${part}: ${values.join(', ')} — remesh, compile and remesh's own check per value…`,
+ summary:(view,passing)=>`Strip of ${view.rows.length} on ${view.part} settled in ${((view.wallMs??0)/1000).toFixed(1)} s (at most ${view.concurrency} at once): ${passing} passing, ${view.rows.length-passing} refused or failing. Labels only — nothing is applied; Load puts a row on the stage as pending.`,
+});
 async function loadStripRow(index:number):Promise<{line:string;ok:boolean}|{error:string}>{
  const view=stripView,row=view?.rows[index];
  if(!view||!row)return {error:'DENSITY_STRIP_NOT_FOUND'};
@@ -3714,25 +3579,7 @@ async function stripBack():Promise<void>{
  }catch(error){densityLine(`DENSITY_STRIP_BACK_FAILED: ${errorText(error)}`,true);}
  finally{rebuildBusy=false;rebuildState();renderStrip();}
 }
-async function closeDensityStrip():Promise<{status:string;error?:string}>{
- const view=stripView;if(!view)return {status:'closed'};
- if(stripPending&&stripPending.id===view.id)await stripBack();
- try{
-  const r=await api<{status:string;error?:string}>('/api/density-strip/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:view.id})});
-  if(r.status!=='closed'){densityLine(r.error??'DENSITY_STRIP_CLOSE_REFUSED',true);return r;}
-  stripView=null;renderStrip();densityLine('Strip closed; its scratch is removed.');return r;
- }catch(error){const t=errorText(error);densityLine(t,true);return {status:'refused',error:t};}
-}
-/** The folds reading (#108) of the drawn animation, on the inspected build and on the latest scratch build: one line per build. */
-async function meshFolds():Promise<string[]> {
- meshPanel?.status(`Running the folds reading of ${animation||'(no animation)'}…`,false);
- const job=await runReadings({readings:[{kind:'folds'}]});
- if(!job||!('runs' in job)){const text=job&&'error' in job&&job.error?job.error:'READINGS_UNAVAILABLE: no reading ran';meshPanel?.status(text,true);return [text];}
- const lines=job.runs.map(run=>{const r=run.results[0];return r?worstLine(run.build,r):`${run.build} · folds: not run`;});
- if(job.runs.length<2)lines.push('scratch · folds: no scratch build yet (Apply builds one)');
- meshPanel?.status(lines.join(' | '),job.runs.some(run=>run.results.some(r=>r.status!=='read')));
- return lines;
-}
+const meshFolds=bindMeshFolds(directJobUiSink,()=>animation||'(no animation)',runReadings,()=>meshPanel);
 void start();
 
 

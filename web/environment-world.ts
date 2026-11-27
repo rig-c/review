@@ -1,5 +1,5 @@
 /**
- * The Environment block's "Use for readings" (issue #112), the DOM-free half: the controls as the exported
+ * The Environment block's "Use for readings" (issue #112), the controls as the exported
  * `rigc-environment/1` schedule for a clip, its bytes and their hash, the feedback context that carries them, and the
  * "Check under this world" rows (each readout bar under the default world beside the same bar under this one).
  */
@@ -7,7 +7,8 @@ import { scheduleSummary, scheduleText, sha256Hex, SCHEDULE_CONTEXT_SCHEMA, wind
 import { dueJolts, environmentFor, type JoltStep, type WindModel, type WindSnapshot, type WindState } from '../src/environment.ts';
 import type { RigPlayer } from '@rig-c/play';
 import type { CheckSummary } from '../src/applied-context.ts';
-import { READOUT_BARS } from '../src/physics-tuning.ts';
+import { barLine, beforeLine, READOUT_BARS, type InspectedCheckView } from '../src/physics-tuning.ts';
+import { jsonPost, refusalBodyText, type BaselineView, type ScopedJobUiSink } from './rebuild-client.ts';
 
 /** The world an Apply's reload resumes: wind (clock and active pulse), pending jolts, whether the controls are engaged, gravity. */
 export interface StageWorld { wind: WindState; jolts: JoltStep[]; applied: boolean; gravity: number }
@@ -83,6 +84,75 @@ export interface EnvironmentCheckView {
   bars: { name: string; line: string }[]; error: string | null; lines: string[];
 }
 export interface EnvironmentRow { kind: 'label' | 'bar' | 'error'; text: string }
+
+function renderEnvironmentCheckRows(out:HTMLElement,rows:readonly EnvironmentRow[]):void {
+ out.replaceChildren(...rows.map(row=>{
+  const line=document.createElement('div');line.className=`env-${row.kind}`;line.textContent=row.text;return line;
+ }));
+}
+
+type EnvironmentCheckResult=EnvironmentCheckView|{status:'refused';error:string}|null;
+const checkErrorText=(error:unknown)=>error instanceof Error?error.message:String(error);
+
+export function bindEnvironmentCheck({
+ api,path,ui,out,paintBusy,busy,setBusy,animation,worldFor,applied,before,baseline,inspected,follow,scratchLabel,missingDefault,
+ initial,progress,guardRevisions,
+}:{
+ api:<T>(path:string,init?:RequestInit)=>Promise<T>;path:string;ui:ScopedJobUiSink;
+ out:()=>HTMLElement;paintBusy:(value:boolean)=>void;busy:()=>boolean;setBusy:(value:boolean)=>void;
+ animation:()=>string;worldFor:(name:string)=>WorldExport|{error:string};applied:()=>boolean;
+ before:()=>{lines:readonly string[];check:CheckSummary|null}|null;baseline:()=>BaselineView|null|undefined;
+ inspected:()=>InspectedCheckView|null;follow:(show:()=>void)=>Promise<void>;
+ scratchLabel:()=>string;missingDefault:(name:string,line:string)=>string;
+ initial:(name:string,build:EnvironmentCheckView['build'],world:WorldExport)=>string;
+ progress?:(build:EnvironmentCheckView['build'],job:EnvironmentCheckView,started:number)=>string;
+ guardRevisions?:boolean;
+}):()=>Promise<EnvironmentCheckResult> {
+ let latest=0;
+ const key='environment-check';
+ const updateBusy=(value:boolean)=>{setBusy(value);ui.projectBusy(key,value,paintBusy);};
+ return async()=>{
+  if(busy())return null;
+  const revision=++latest,node=out();
+  const clear=()=>node.replaceChildren();
+  const show=(rows:EnvironmentRow[])=>renderEnvironmentCheckRows(node,rows);
+  const outcome=(rows:EnvironmentRow[])=>{
+   if(!guardRevisions||revision===latest)ui.outcome(key,()=>show(rows),clear);
+  };
+  const label=(text:string)=>ui.transient(key,()=>show([{kind:'label',text}]),clear);
+  ui.clearOutcome(key);
+  const name=animation(),world=worldFor(name),build=applied()?'scratch':'inspected',original=before();
+  if('error' in world){outcome([{kind:'error',text:world.error}]);return {status:'refused',error:world.error};}
+  updateBusy(true);label(initial(name,build,world));
+  try{
+   let job=await api<EnvironmentCheckView|{status:'refused';error:string}>(path,jsonPost({build,schedule:world.schedule}))
+    .catch(error=>({status:'refused' as const,error:checkErrorText(error).replace(/^\d+: /,'')}));
+   if(!('id' in job)){
+    const text=refusalBodyText(job.error);
+    outcome([{kind:'error',text}]);
+    return {status:'refused',error:text};
+   }
+   const started=performance.now();
+   while(job.status==='running'){
+    if(progress)label(progress(build,job,started));
+    await new Promise(resolve=>setTimeout(resolve,1500));
+    job=await api<EnvironmentCheckView>(`${path}/${job.id}`);
+   }
+   const checked=job,currentBaseline=baseline();
+   const readoutLabel=build==='inspected'?'default world (the inspected build\'s own check)':scratchLabel();
+   // No inspected check exists when the baseline did not reproduce the inspected rig; say why, verbatim (a schedule of wind [1, 0], gravity [0, 1] reads the default world).
+   const noDefault=build==='inspected'&&!inspected()&&currentBaseline&&currentBaseline.status!=='running'&&currentBaseline.status!=='reproduced';
+   const draw=()=>outcome(environmentCheckRows(checked,name=>noDefault?missingDefault(name,currentBaseline.line)
+    :build==='inspected'?beforeLine(name,null,inspected()):barLine(name,original?.lines??null,original?.check??null),readoutLabel));
+   draw();
+   // The follow-up may finish offside. The sink retains its terminal outcome for the origin.
+   if(build==='inspected'&&inspected()?.status!=='checked')void follow(draw);
+   return job;
+  }catch(error){outcome([{kind:'error',text:`ENVIRONMENT_CHECK_FAILED: ${checkErrorText(error)}`}]);return null;}
+  finally{updateBusy(false);}
+ };
+}
+
 /** The panel's lines: which schedule check read, then per bar the default world's line and this world's, or the refusal verbatim. */
 export function environmentCheckRows(job: EnvironmentCheckView, defaultLine: (name: string) => string, defaultLabel: string): EnvironmentRow[] {
   if (job.status !== 'checked') return [{ kind: 'error', text: job.error ?? `ENVIRONMENT_CHECK_FAILED: ${job.status}` }];

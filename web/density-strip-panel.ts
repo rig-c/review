@@ -8,7 +8,9 @@
  */
 import {panelNode as node,panelMake as make} from './view-controls.ts';
 import {barText,densityField,densityPath,refineValues,stripValues,type DensityField,type StripRow} from '../src/density-strip.ts';
-import {entryValue,type MeshEntry} from '../src/mesh-entry.ts';
+import {assertMeshPatch,entryValue,meshPatchOps,setEntryValue,type MeshEntry} from '../src/mesh-entry.ts';
+import {jsonPost,makePatch,type ConfigPatch,type RebuildStatusView,type ScopedJobUiSink} from './rebuild-client.ts';
+import type {MeshPanel} from './mesh-panel.ts';
 
 export interface DensityStripViewLike {
  id:string;status:'running'|'done';part:string;field:DensityField;concurrency:number;wallMs:number|null;rows:StripRow[];labels:{fewest:number|null;widest:number|null};
@@ -16,10 +18,10 @@ export interface DensityStripViewLike {
 export interface DensityStripHost {
  part():string|null;
  entry():MeshEntry|null;
- build(values:number[]):Promise<void>;
+ build(values:number[]):Promise<unknown>;
  load(index:number):Promise<void>;
  back():Promise<void>;
- close():Promise<void>;
+ close():Promise<unknown>;
 }
 export interface DensityStripPanel {
  /** The selected part or its pending entry changed: the field line and the default range follow it. */
@@ -27,6 +29,124 @@ export interface DensityStripPanel {
  show(view:DensityStripViewLike|null,pending:number|null,busy:boolean):void;
  status(text:string,error:boolean):void;
 }
+
+interface DensityStripJobs {
+ api:<T>(path:string,init?:RequestInit)=>Promise<T>;
+ path:string;
+ ui:ScopedJobUiSink;
+ view:()=>DensityStripViewLike|null;
+ save:(view:DensityStripViewLike|null)=>void;
+ render:()=>void;
+ busy:()=>boolean;
+ setBusy:(value:boolean)=>void;
+ pendingId:()=>string|undefined;
+ back:()=>Promise<void>;
+ panel:()=>DensityStripPanel|null;
+ footer:(text:string)=>void;
+ clearFooter?:()=>void;
+ readOnly:()=>string|null;
+ status:()=>RebuildStatusView|null;
+ loadStatus:()=>Promise<RebuildStatusView|null>;
+ mesh:()=>MeshPanel|null;
+ selected?:()=>boolean;
+ initial:(part:string,values:number[])=>string;
+ summary:(view:DensityStripViewLike,passing:number)=>string;
+}
+const densityErrorText=(error:unknown)=>error instanceof Error?error.message:String(error);
+
+export function densityStripPatches(status:RebuildStatusView|null,part:string|null,entry:MeshEntry|null,
+ precheck:()=>string[],values:number[]):{part:string;patches:ConfigPatch[]}|{error:string} {
+ if(!status||!part||!entry)return {error:status?.reason??'MESH_PANEL_NO_PART: select a mesh part'};
+ const problems=precheck();
+ if(problems.length)return {error:`${problems[0]} (review pre-check; nothing sent)`};
+ try{
+  const field=densityField(entry,part);
+  const patches=values.map(value=>{
+   const patch=makePatch(status,meshPatchOps(part,setEntryValue(entry,densityPath(field),value)),{cmd:'remesh',args:['--part',part]});
+   if(!patch)throw new Error(status.reason??'REBUILD_STATUS_UNAVAILABLE');
+   assertMeshPatch(patch,part);
+   return patch;
+  });
+  return {part,patches};
+ }catch(error){return {error:densityErrorText(error)};}
+}
+
+export function bindDensityStripJobs({
+ api,path,ui,view,save,render,busy,setBusy,pendingId,back,panel,footer,clearFooter=()=>{},
+ readOnly,status,loadStatus,mesh,selected,initial,summary,
+}:DensityStripJobs) {
+ const draw=()=>ui.render(render);
+ const clear=()=>panel()?.status('',false);
+ const outcome=(text:string,error:boolean)=>{
+  ui.outcome('density',()=>panel()?.status(text,error),clear);
+  if(error)ui.outcome('message',()=>footer(text),clearFooter);
+ };
+ const progress=(text:string)=>ui.transient('density',()=>panel()?.status(text,false),clear);
+ const clearOutcomes=()=>{ui.clearOutcome('density');ui.clearOutcome('message');};
+
+ async function refresh():Promise<void> {
+  try{const result=await api<{strip:DensityStripViewLike|null}>(path);save(result.strip);}
+  catch{/* Keep the last view. */}
+  draw();
+ }
+
+ async function close():Promise<{status:string;error?:string}> {
+  const current=view();
+  if(!current)return {status:'closed'};
+  clearOutcomes();
+  if(pendingId()===current.id)await back();
+  try{
+   const result=await api<{status:string;error?:string}>(`${path}/close`,jsonPost({id:current.id}));
+   if(result.status!=='closed'){outcome(result.error??'DENSITY_STRIP_CLOSE_REFUSED',true);return result;}
+   save(null);draw();outcome('Strip closed; its scratch is removed.',false);
+   return result;
+  }catch(error){
+   const text=densityErrorText(error);
+   outcome(text,true);
+   return {status:'refused',error:text};
+  }
+ }
+
+ async function build(values:number[]):Promise<DensityStripViewLike|{error:string}> {
+  if(busy())return {error:'DENSITY_STRIP_BUSY: a strip is still building'};
+  clearOutcomes();
+  const refused=readOnly();
+  if(refused){outcome(refused,true);return {error:refused};}
+  const cached=status();
+  // Compare may switch sides during the status read. Keep the originating selection for that case.
+  const origin=!cached&&selected?mesh():null;
+  const snapshot=origin&&{part:origin.part(),entry:origin.entry(),problems:origin.precheck()};
+  const ready=cached??await loadStatus();
+  const offside=selected?.()===false;
+  const current=offside?null:mesh(),picked=offside?snapshot:null;
+  const request=densityStripPatches(ready,picked?.part??current?.part()??null,
+   picked?.entry??current?.entry()??null,()=>picked?.problems??current?.precheck()??[],values);
+  if('error' in request){outcome(request.error,true);return request;}
+  // A pending row goes back first: the strip it came from is about to be replaced.
+  if(pendingId()!==undefined){await back();ui.clearOutcome('density');}
+  setBusy(true);draw();progress(initial(request.part,values));
+  const started=performance.now();
+  try{
+   let result:DensityStripViewLike|{status:string;error:string};
+   try{result=await api<DensityStripViewLike|{status:string;error:string}>(path,jsonPost({patches:request.patches}));}
+   catch(error){result={status:'refused',error:densityErrorText(error)};}
+   if('error' in result){outcome(result.error,true);return {error:result.error};}
+   save(result);draw();
+   while(result.status==='running'){
+    await new Promise(resolve=>setTimeout(resolve,1500));
+    result=await api<DensityStripViewLike>(`${path}/${result.id}`);
+    save(result);draw();
+    const settled=result.rows.filter(row=>row.status!=='running').length;
+    progress(`Strip ${result.id.slice(0,12)}…: ${settled} of ${result.rows.length} settled · ${((performance.now()-started)/1000).toFixed(0)} s`);
+   }
+   const passing=result.rows.filter(row=>row.verdict==='PASS').length;
+   outcome(summary(result,passing),false);
+   return result;
+  }finally{setBusy(false);draw();}
+ }
+ return {refresh,build,close,outcome};
+}
+
 const fieldLabel=(f:DensityField)=>f==='grid'?'grid':'contour.spacing';
 
 export function bindDensityStrip(host:DensityStripHost):DensityStripPanel {
