@@ -36,6 +36,7 @@ import { type LocalChannel } from '../src/idle-tracks.ts';
 import { bindRigFieldsPanel, type RigFieldsPanel } from './rig-fields-panel.ts';
 import { TURN_BONE } from '../src/rig-fields.ts';
 import { bindReadingsPanel, readingsContext as buildReadingsContext, type ReadingsJobView, type ReadingsPanel, type ReadingsRefusal } from './readings-panel.ts';
+import { formatSeconds } from './format-seconds.ts';
 import { readingSeekTime, type ReadingsContext } from '../src/readings.ts';
 import { bindRequirementsPanel, runRequirementsRequest, type RequirementsCatalogView, type RequirementsJobView, type RequirementsPanel, type RequirementsRefusal } from './requirements-panel.ts';
 import type { RequirementsRequest } from '../src/requirements.ts';
@@ -600,11 +601,17 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       list.replaceChildren();
       for (const name of bones ?? []) list.append(option(name, name));
     }
+    const status = currentState().rebuildStatus, seeded = status ? chestSeed(status) : null;
     for (const row of chestRegionRows) {
-      const node = document.getElementById(chestRowId(row, 'bone')) as HTMLSelectElement | null;
+      const id = chestRowId(row, 'bone'), nameId = chestRowId(row, 'name');
+      const node = document.getElementById(id) as HTMLSelectElement | null;
       if (!node) continue;
+      const current = node.value, seededRow = seeded?.rows.find(r => r.row === row);
+      const rowName = (document.getElementById(nameId) as HTMLInputElement | null)?.value.trim() ?? '';
+      const keep = current || (node.disabled && rowName && rowName === (seededRow?.fields[nameId] ?? '').trim() ? (seededRow?.fields[id] ?? '').trim() : '');
       node.replaceChildren(option('', bones ? 'Select bone' : 'No model bones'));
       for (const name of bones ?? []) node.append(option(name, name));
+      if (bones && keep && bones.includes(keep)) node.value = keep;
       node.disabled = !bones;
     }
   }
@@ -723,11 +730,12 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   function refreshPhysics(): void {
     if (!physicsPanel) return;
     const state = currentState();
-    if (state.inspectedDocumentReason) { physicsPanel.load({ available: false, reason: state.inspectedDocumentReason }, []); return; }
+    if (state.inspectedDocumentReason) { physicsPanel.load({ available: false, reason: state.inspectedDocumentReason }, []); refreshIdle(); return; }
     if (!state.inspectedDocument) return;
     if (!state.rebuildStatus) { text('physics-panel-state', 'Reading the producer handoff…'); text('idle-tracks-state', 'Reading the producer handoff…'); return; }
     if (!state.rebuildStatus.inputs || !state.rebuildStatus.producer) {
       physicsPanel.load({ available: false, reason: state.rebuildStatus.reason ?? 'PHYSICS_TUNING_UNAVAILABLE: no producer handoff' }, []);
+      refreshIdle();
       return;
     }
     const bones = (state.inspectedDocument as { bones?: unknown }).bones;
@@ -1712,8 +1720,17 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   function seekReading(clip: string, frame: number, exact: number | null, label: string): void {
     if (exact === null) { host.message(`${label}: F${frame} has no time; no seek was performed.`, true); return; }
-    const at = readingSeekTime(exact, clipDuration(clip));
-    void host.seekTo(Math.min(at, host.duration())).then(() => host.message(`Reading · ${label} → F${frame} · ${exact.toFixed(4)} s`));
+    const at = readingSeekTime(exact, clipDuration(clip)), duration = host.duration();
+    if (!Number.isFinite(at) || at < 0 || at > duration) {
+      host.pause();
+      host.message(`Explicit time ${formatSeconds(at)} s is outside the current range of ${formatSeconds(duration)} s. No substitute time was used.`, true);
+      return;
+    }
+    void host.seekTo(at).then(() => {
+      if (!document.getElementById('message')?.classList.contains('error')) {
+        host.message(`Reading · ${label} → F${frame} · ${exact.toFixed(4)} s`);
+      }
+    });
   }
 
   function sampleLocals(bone: string, dt: number, n: number) {
@@ -2339,9 +2356,9 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         st.inspectedDocumentReason = `PHYSICS_TUNING_UNAVAILABLE: ${errorText(error)}`;
         if (side === pickedSide) refreshPhysics();
       });
+      if (side === pickedSide) populateChestBones();
       updateChestMapping(side);
       if (side === pickedSide) {
-        populateChestBones();
         refreshAnimationInspection();
         weightsView?.refresh();
       }
