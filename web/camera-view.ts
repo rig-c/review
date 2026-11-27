@@ -12,11 +12,27 @@ export function cameraSignature(camera:PaneCamera,frame:CameraFrame):CameraSigna
  const center=camera.center??frame.center,scale=frame.baseScale*camera.zoom;
  return {zoom:camera.zoom,pan:{x:(frame.center.x-center.x)*scale/frame.width,y:(frame.space==='world'?center.y-frame.center.y:frame.center.y-center.y)*scale/frame.height}};
 }
-/** Match the closed numeric observation before a candidate can replace a live camera. */
-export function assertCameraView(camera:PaneCamera,frame:CameraFrame,range={min:.25,max:8}):void {
+export interface CameraViewViolation {
+ field:'camera.limit.zoom'|'camera.limit.scale'|'camera.limit.pane'|'camera.limit.coordinate'|'camera.limit.extent';
+ value:number;min:number;max?:number;exclusiveMin?:true;
+}
+/** Identify the first out-of-range component of the numeric observation. */
+export function cameraViewViolation(camera:PaneCamera,frame:CameraFrame,range={min:.25,max:8}):CameraViewViolation|null {
  const center=camera.center??frame.center,scale=frame.baseScale*camera.zoom,width=frame.width/scale,height=frame.height/scale;
- const coordinate=(value:number)=>Number.isFinite(value)&&Math.abs(value)<=Number.MAX_SAFE_INTEGER;
- if(![center.x,center.y,center.x-width/2,center.y-height/2,(frame.center.x-center.x)*scale,(frame.center.y-center.y)*scale].every(coordinate)||![width,height].every(value=>Number.isFinite(value)&&value>0&&value<=Number.MAX_SAFE_INTEGER)||!Number.isFinite(scale)||scale<=0||!Number.isFinite(camera.zoom)||camera.zoom<range.min||camera.zoom>range.max||![frame.width,frame.height].every(value=>Number.isFinite(value)&&value>0&&value<=65536))throw new Error('VIEW_CAMERA_RANGE: derived camera exceeds numeric source-coordinate limits');
+ const max=Number.MAX_SAFE_INTEGER,paneMax=65536;
+ if(!Number.isFinite(camera.zoom)||camera.zoom<range.min||camera.zoom>range.max)return {field:'camera.limit.zoom',value:camera.zoom,...range};
+ if(!Number.isFinite(scale)||scale<=0)return {field:'camera.limit.scale',value:scale,min:0,exclusiveMin:true};
+ const pane=[frame.width,frame.height].find(value=>!Number.isFinite(value)||value<=0||value>paneMax);
+ if(pane!==undefined)return {field:'camera.limit.pane',value:pane,min:0,max:paneMax,exclusiveMin:true};
+ const coordinate=[center.x,center.y,center.x-width/2,center.y-height/2,(frame.center.x-center.x)*scale,(frame.center.y-center.y)*scale]
+  .find(value=>!Number.isFinite(value)||Math.abs(value)>max);
+ if(coordinate!==undefined)return {field:'camera.limit.coordinate',value:coordinate,min:-max,max};
+ const extent=[width,height].find(value=>!Number.isFinite(value)||value<=0||value>max);
+ return extent===undefined?null:{field:'camera.limit.extent',value:extent,min:0,max,exclusiveMin:true};
+}
+/** Match the closed numeric observation before a candidate can replace a live camera. */
+export function assertCameraView(camera:PaneCamera,frame:CameraFrame,range?:{min:number;max:number}):void {
+ if(cameraViewViolation(camera,frame,range))throw new Error('VIEW_CAMERA_RANGE: derived camera exceeds numeric source-coordinate limits');
 }
 export function cameraFromSignature(value:CameraSignature,frame:CameraFrame,range={min:.25,max:8}):PaneCamera {
  if(![value.zoom,value.pan.x,value.pan.y].every(Number.isFinite)||value.zoom<range.min||value.zoom>range.max)throw new Error('Camera signature requires finite pan and zoom 0.25..8');

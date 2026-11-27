@@ -147,7 +147,7 @@ test('the page records its evaluated environment; physics preview is explicit an
  const scope={
   advancePlayback,time:0,duration:2,playbackCarry:0,lastFrame:1000,idleHeld:false,video:null,previousBuildView:null,
   player:{current:'idle',advance:(seconds:number)=>calls.push({kind:'advance',seconds}),draw:()=>calls.push({kind:'draw'})},
-  canRepeatIdle:()=>false,activeScene:()=>undefined,input:()=>({checked:false}),
+  canRepeatIdle:()=>false,activeScene:()=>undefined,selectedSceneCamera:()=>null,input:()=>({checked:false}),
   stepEnvironment:(seconds:number)=>calls.push({kind:'environment',seconds}),drawRig:(action:()=>void)=>action(),
   renderSequenceFrame:noop,renderTransport:noop,pause:noop,message:(value:string)=>{throw Error(value);},errorText:String,
  };
@@ -161,7 +161,7 @@ test('the page records its evaluated environment; physics preview is explicit an
   {kind:'draw'},
  ]);
  expect(main).toContain('environment: feedbackEnvironment(),');
- expect(main).toContain('player.environment(null);if(player.current){player.seek(time);');
+ expect(main).toContain('player.environment(null);if(player.current){seekSceneCameraPose(player,time);');
  const animate=html.slice(html.indexOf('<section id="inspector-playback"'),html.indexOf('</main>'));
  for(const id of ['environment','wind-base','wind-breeze','wind-gust','wind-gust-peak','wind-gust-duration','wind-repeat','wind-readout','gravity','jolt','physics-reset','physics-panel','physics-rows','physics-row-editor','physics-locked','physics-pending-list','physics-apply','physics-reset-build','physics-readout','physics-pending'])expect(animate).toContain(`id="${id}"`);
  const block=animate.slice(animate.indexOf('<section id="environment"'),animate.indexOf('</section>',animate.indexOf('<section id="environment"')));

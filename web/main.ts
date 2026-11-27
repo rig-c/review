@@ -26,9 +26,11 @@ import {PartExplorer,loadPartModel,partBounds,partCatalog,type PartEntry} from '
 import {AnimationInspectionPanel} from './animation-inspection.ts';
 import {formatSeconds} from './format-seconds.ts';
 import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
-import { CanvasRenderer, loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBounds } from '@rig-c/play';
+import { CanvasRenderer, loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBounds, type PosedFrame } from '@rig-c/play';
+import {bindSceneCamera,renderSceneCameraFrame,sceneCameraProjection,ComposedTakeError,SCENE_CAMERA_REPORT_MAX_BYTES,type BoundSceneCamera,type SceneCameraFrame} from '@rig-c/play/composed-take';
 import {createViewportController,createViewportState,type CameraTarget} from './viewport-controller.ts';
-import {createRigViewportProvider,rigPanCarry} from './rig-viewport-provider.ts';
+import {authoredPaneProjection,createRigViewportProvider,rigPanCarry} from './rig-viewport-provider.ts';
+import {cameraFromSignature,cameraSignature} from './camera-view.ts';
 import {mountViewportPair} from './viewport-pair.ts';
 import {createPreviousBuildView} from './previous-build-view.ts';
 import {rendererStatus} from './renderer-status.ts';
@@ -211,7 +213,14 @@ const rigRaster={el,canvas:partsCanvas,message,reference:()=>null,
  pairedRig:()=>previousBuildView?.pane()??null};
 if(partsOnly){partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);el('reference-content').append(partsReference);}
 let sceneComposite:ReturnType<typeof bindScenePlates>|undefined;
-const activeScene=()=>sceneComposite&&data.direction&&(!stageSource||stageSource.url===inspectedModel?.url)?data.direction:undefined;
+let sceneCameraBinding:{bound:BoundSceneCamera;assets:ModelAssets}|null=null;
+let sceneCameraTrack:SceneCameraFrame|null=null;
+let drawnSceneCamera:{player:RigPlayer;frame:SceneCameraFrame;projection:ReturnType<typeof sceneCameraProjection>;canvas:HTMLCanvasElement;pose:PosedFrame}|null=null;
+let sceneCameraRefusal:string|null=null;
+const boundSceneCamera=()=>sceneCameraBinding?.assets===assets?sceneCameraBinding?.bound:null;
+const selectedSceneCamera=()=>boundSceneCamera()&&sceneCameraTrack?.animation===animation?sceneCameraTrack:null;
+const heldSceneCamera=()=>drawnSceneCamera?.player===player?drawnSceneCamera:null;
+const activeScene=()=>!selectedSceneCamera()&&sceneComposite&&data.direction&&(!stageSource||stageSource.url===inspectedModel?.url)?data.direction:undefined;
 const sceneBox=()=>{const direction=activeScene();return direction?takeSample(direction,time).box:null;};
 const rebuildFramingBoxes=new WeakMap<ModelAssets,PoseBounds>();
 let viewportProvider=partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>target==='reference'&&activeInterviewImage&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',framingBox:()=>sceneBox()??(assets?rebuildFramingBoxes.get(assets)??null:null),el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,raster:rigRaster,pairedRig:rigRaster.pairedRig},viewportState);
@@ -220,6 +229,8 @@ const viewport=createViewportController(new Proxy(viewportProvider,{get:(_target
  const value=Reflect.get(viewportProvider,key,viewportProvider);return typeof value==='function'?value.bind(viewportProvider):value;
 }}),viewportState);
 const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera}=viewport;
+if('bindAuthoredFraming' in viewportProvider&&typeof viewportProvider.bindAuthoredFraming==='function')
+ viewportProvider.bindAuthoredFraming({output:()=>selectedSceneCamera()?.output??null,projection:()=>heldSceneCamera()?.projection??null});
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
 if(!host)connectLiveWindow(access);
 let readOnly: string | null = null;
@@ -315,7 +326,7 @@ let idlePanel:IdlePanel|null=null;
 /** Setup · Rig fields (#110): the panel; its turn dial and the idle preview share `player.adjust` (both run, idle first). */
 let rigFieldsPanel:RigFieldsPanel|null=null,idleAdjust:BoneAdjust|null=null,dialAdjust:BoneAdjust|null=null;
 let turnPad:TurnPad|null=null,turnAdjust:BoneAdjust|null=null,animAdjust:BoneAdjust|null=null,inDrawRig=false;
-function setAdjust():void {if(!player)return;player.adjust=composeStageAdjust(idleAdjust,dialAdjust,turnAdjust,animAdjust);if(!playing&&!inDrawRig)drawRig(()=>player!.draw());}
+function setAdjust():void {if(!player)return;player.adjust=composeStageAdjust(idleAdjust,dialAdjust,turnAdjust,animAdjust);if(!playing&&!inDrawRig)drawRig(()=>drawPlayer(player!));}
 /** #106: the Setup Mesh panel, and the overlay's last snapshot (bar 1 reads its per-slot triangle count). */
 let meshPanel:MeshPanel|null=null,lastOverlay:OverlaySnapshot|null=null,densityStrip:DensityStripPanel|null=null;
 const physicsPreview=new PhysicsPreview();
@@ -839,7 +850,7 @@ function feedbackAnimation(): string | null { return player && player.current !=
 
 function renderFrameTransport(): void {
   const active = activeTransportClock(), clock = active?.clock ?? null;
-  const last = lastProducerFrame(clock), frame = frameAtTime(clock, time);
+  const last = lastProducerFrame(clock), frame = frameAtTime(clock, active?.time??time);
   text('rig-label', host?.direction&&data.direction ? `Take · ${formatSeconds(data.direction.take.duration)} s` : rigPaneLabel({ hasPlayer: !!player, animation: player?.current ?? animation, time, frame }));
   el('frame-controls').hidden = last === null;
   if (!clock) { text('frame-label', data.report?.clock ? data.report.animation ? 'Frame unknown · report and current clip do not match' : 'Frame unknown · report animation not supplied' : 'rate unknown'); return; }
@@ -857,15 +868,19 @@ function renderFrameTransport(): void {
 function activeTransportClock() {
   if(activeScene())return null;
   const active = player && player.current !== animation ? '' : animation;
-  return transportClock({ clock: data.report?.clock, animation: data.report?.animation, frameClocks: data.feedbackCatalog?.frameClocks }, active, !!player, stageClock, stageModelHash);
+  const clock=transportClock({ clock: data.report?.clock, animation: data.report?.animation, frameClocks: data.feedbackCatalog?.frameClocks }, active, !!player, stageClock, stageModelHash);
+  return clock?{...clock,time:heldSceneCamera()?.frame.compiledSeconds??time}:null;
 }
 function activeFrameClock() { return activeScene()?null:activeTransportClock()?.clock ?? null; }
 
 function seekFrame(frame: number): void {
-  const exact = timeAtFrame(activeFrameClock(), frame);
-  if (exact === null) { message('Select an integer frame within the explicit clock bounds.', true); renderFrameTransport(); return; }
+  const compiled = timeAtFrame(activeFrameClock(), frame);
+  if (compiled === null) { message('Select an integer frame within the explicit clock bounds.', true); renderFrameTransport(); return; }
+  const track=selectedSceneCamera();
+  const exact=track&&compiled<=track.compiledSeconds?(compiled===track.compiledSeconds?track.authoredSeconds:
+   boundSceneCamera()!.sample(track.animation,{basis:'compiled',seconds:compiled})!.authoredSeconds):compiled;
   pause();
-  if ((duration > 0 && exact > duration) || (video && video.readyState >= 1 && Number.isFinite(video.duration) && exact > video.duration)) { message(`F${frame} maps to ${exact} s, outside the current reference range. The requested time was not changed.`, true); renderFrameTransport(); return; }
+  if ((track?compiled>track.compiledSeconds:duration>0&&exact>duration) || (video && video.readyState >= 1 && Number.isFinite(video.duration) && exact > video.duration)) { message(`F${frame} maps to ${exact} s, outside the current reference range. The requested time was not changed.`, true); renderFrameTransport(); return; }
   seek(exact);
   message(`F${frame} · Explicit time ${exact} s${!player && !video && !sequence ? ' (No playback reference · time display only)' : ''}`);
 }
@@ -874,8 +889,23 @@ function drawRig(action:()=>void,previousFrame?:'seek'|((view:NonNullable<typeof
  if(rigDifference&&rigDifference.assets!==assets){leaveRigDifference();renderLayout();}
  inDrawRig=true;
  try{
+  const previousCamera=heldSceneCamera();
   const box=sceneBox();if(box&&player?.renderer instanceof CanvasRenderer)player.renderer.viewport=box;
-  action();if(box&&player)sceneComposite?.draw(player,box);
+  action();
+  const track=selectedSceneCamera();
+  const entry=track&&player?.entry(0);
+  if(track&&entry?.animation===track.animation&&player){
+   const frame=boundSceneCamera()!.sample(track.animation,!entry.loop&&entry.animationTime===track.compiledSeconds
+    ?{endpoint:'terminal'}:{basis:'compiled',seconds:entry.animationTime})!;
+   const renderer=player.renderer;
+   if(!(renderer instanceof CanvasRenderer))throw new ComposedTakeError('SCENE_CAMERA_VIEW_INVALID',
+    t('camera.rendererRequired',[t('DOM renderer')]));
+   const drawn={player,frame,projection:sceneCameraProjection(frame),canvas:renderer.canvas,pose:player.posedFrame()};
+   paintAuthoredRig(drawn,drawn.pose);
+   drawnSceneCamera=drawn;
+  }else drawnSceneCamera=null;
+  sceneCameraRefusal=null;
+  if(box&&player)sceneComposite?.draw(player,box);
   parts?.present('single');chestEditor?.syncJobTarget();
   if(player&&previousBuildView?.active()){
    try{
@@ -883,26 +913,72 @@ function drawRig(action:()=>void,previousFrame?:'seek'|((view:NonNullable<typeof
     else previousBuildView.present(player,previousFrame==='seek');
    }catch(error){leavePreviousBuild();renderLayout();message(errorText(error),true);}
   }
-  if(box)viewport.fitCamera();
+  if(box||!!previousCamera!==!!heldSceneCamera()||previousCamera&&track&&previousCamera.frame.output!==track.output)viewport.fitCamera();
   if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);
   text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);
  }
- catch(error){animationPanel?.capture(null,undefined);overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);throw error;}
+ catch(error){
+  animationPanel?.capture(null,undefined);overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);
+  if(selectedSceneCamera()){
+   drawnSceneCamera=null;sceneCameraRefusal=sceneCameraError(error);
+   if(player?.renderer instanceof CanvasRenderer)player.renderer.canvas.style.visibility='hidden';
+   throw new Error(sceneCameraRefusal,{cause:error});
+  }
+  throw error;
+ }
  finally{inDrawRig=false;}
+}
+
+function paintAuthoredRig(drawn:NonNullable<typeof drawnSceneCamera>,pose:PosedFrame):void {
+ const {frame,canvas,player:current}=drawn;
+ renderSceneCameraFrame(current.renderer as CanvasRenderer,pose,frame);
+ // The integer backing is scaled to the exact authored output. Pane navigation lives on rig-root.
+ canvas.style.transform=`scale(${frame.output.width/canvas.width},${frame.output.height/canvas.height})`;
+ canvas.style.visibility='';
+ drawn.pose=pose;
+}
+
+function drawPlayer(current:RigPlayer):void {
+ const track=selectedSceneCamera();
+ if(!track||current.current!==track.animation)current.draw();
+}
+
+function seekSceneCameraPose(current:RigPlayer,seconds:number):void {
+ const track=selectedSceneCamera();
+ if(!track){current.seek(seconds);return;}
+ const terminal=seconds===track.authoredSeconds;
+ const loop=track.loop&&!terminal;
+ const sample=boundSceneCamera()!.sample(track.animation,terminal?{endpoint:'terminal'}:{basis:'authored',seconds})!;
+ if(current.entry(0)?.loop!==loop)current.play(track.animation,{loop});
+ current.seek(sample.compiledSeconds);
+}
+
+function authoredControlSeek():((seconds:number)=>void)|undefined {
+ return selectedSceneCamera()&&player?seconds=>drawRig(()=>seekSceneCameraPose(player!,seconds),'seek'):undefined;
 }
 
 function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): void {
   if(rigDifference){leaveRigDifference();renderLayout();}
+  const wasAuthored=!!selectedSceneCamera();
+  const oldFrame=boundSceneCamera()?paneFrame('rig'):null;
+  const inspection=oldFrame?cameraSignature(viewport.paneCamera('rig'),oldFrame):null;
   pause(); animation = name; axisInspection = false; el('angle-panel').hidden = true;
   const runtimeAnimation = assets?.animations.find(item => item.name === name);
-  duration = activeScene()?.take.duration??clipDuration(name);
+  sceneCameraTrack=runtimeAnimation?boundSceneCamera()?.sample(name,{endpoint:'terminal'})??null:null;
+  const track=selectedSceneCamera();
+  duration = track?.authoredSeconds??activeScene()?.take.duration??clipDuration(name);
   select('animation-select').value = name;
   // #191: the wind restarts before the clip's first frame is drawn, so the paused stage shows the schedule's t=0 world.
   time = 0; const scene=activeScene();if(!scene)clipMoved(move);
   if (player && runtimeAnimation) {
-    restartSetupPlayer();
+    restartSetupPlayer(wasAuthored!==!!track);
+    if(wasAuthored!==!!track&&inspection){
+     const output=paneFrame('rig');
+     if(output)viewport.writeCamera('rig',cameraFromSignature(inspection,output));
+    }
     if(scene){player.play(name,{loop:canRepeatIdle()});player.pause();seek(0,move);}
-    else drawRig(()=>{player!.play(name,{loop:canRepeatIdle()});player!.pause();refreshAnimationInspection();player!.draw();},'seek');
+    else drawRig(()=>{player!.play(name,{loop:canRepeatIdle()});player!.pause();refreshAnimationInspection();drawPlayer(player!);},'seek');
+    if(wasAuthored&&!track)fitCamera();
   }
   else if (player && name){text('renderer-state',rendererStatus(null,'failed').label);message(`Animation "${name}" is not present in the rig.`, true);}
   renderTransport(); renderCues();renderIdle();
@@ -912,7 +988,11 @@ function seek(value: number, move?: ClipMove): void {
   if(rigDifference){leaveRigDifference();renderLayout();}
   time = duration > 0 ? Math.min(Math.max(0, value), duration) : Math.max(0, value);
   clipMoved(move ?? { kind: 'seek', to: time });
-  if (player && player.current) { try { player.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time); drawRig(()=>player!.draw(),'seek'); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
+  if (player?.current) { try { drawRig(()=>{
+   const scene=activeScene();
+   if(scene){player!.seek(takeSample(scene,time).sourceTime);player!.draw();}
+   else{seekSceneCameraPose(player!,time);drawPlayer(player!);}
+  },'seek'); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
   if (video && video.readyState >= 1 && !previousBuildView?.active()) holdVideoReference(video, referenceGeneration);
   renderSequenceFrame(); renderTransport();
 }
@@ -1050,14 +1130,28 @@ function tick(now: number): void {
 function drawRigSteps(current:RigPlayer,steps:readonly number[],held:boolean,take?:{direction:NonNullable<ReturnType<typeof activeScene>>;from:number}):void {
  const paired=previousBuildView?.active();
  const takeSteps:TakeStep[]|undefined=paired&&take?[]:undefined;
+ const track=!take&&!held?selectedSceneCamera():null;
  const advance=(rig:RigPlayer)=>{for(const step of steps)rig.advance(step);};
  drawRig(()=>{
-  if(take)advanceTake(current,take.direction,take.from,steps,takeSteps);
-  else advance(current);
-  current.draw();
+  if(take){advanceTake(current,take.direction,take.from,steps,takeSteps);current.draw();}
+  else if(track)advanceSceneCameraPose(current,track,steps,time===track.authoredSeconds);
+  else if(held){advance(current);if(activeScene())current.draw();else drawPlayer(current);}
+  else{advance(current);current.draw();}
  },paired?view=>view.step(takeSteps?rig=>{
   for(const {kind,seconds} of takeSteps)applyTakeStep(rig,kind,seconds);
- }:advance,held,take?1:current.timeScale):undefined);
+ }:track?rig=>advanceSceneCameraPose(rig,track,steps,false):advance,held,take||track?1:current.timeScale):undefined);
+}
+
+/** Advance compiled deltas continuously through repeats, using the authored transport's fixed steps. */
+function advanceSceneCameraPose(current:RigPlayer,track:SceneCameraFrame,steps:readonly number[],terminal:boolean):void {
+ const original=current.timeScale;
+ current.timeScale=1;
+ try {
+  const ratio=track.compiledSeconds/track.authoredSeconds;
+  for(const step of steps)current.advance(step*ratio);
+  if(terminal&&!track.loop&&current.time<track.compiledSeconds)
+   current.advance(track.compiledSeconds-current.time);
+ }finally{current.timeScale=original;}
 }
 
 /** Animate steps held physics under the standing environment; wind time and queued jolts stay frozen. */
@@ -1097,7 +1191,7 @@ function configureTurnPad(model:unknown):void {
  const dials=discoverTurnDials(model,assets?.animations);if(!dials.length){setAdjust();workspace?.refresh();return;}
  const host=document.createElement('div');host.id='turn-pad-host';el('stage-layout').before(host);
  turnPad=bindTurnPad({host,stages:[el('rig-viewport')],dials,blocked:()=>!!persistence?.restoring()||!!document.querySelector('dialog[open]')||!!rebuildBusy,
-  draw:state=>{if(!player)return;turnAdjust=state.adjust();setAdjust();if(playing)drawRig(()=>player!.draw());},save:()=>persistence?.save(),error:value=>message(value,true)});
+  draw:state=>{if(!player)return;turnAdjust=state.adjust();setAdjust();if(playing)drawRig(()=>drawPlayer(player!));},save:()=>persistence?.save(),error:value=>message(value,true)});
  if(previous&&turnPad){try{turnPad.restore(previous);}catch{message('TURN_STATE_MODEL_MISMATCH: turn values reset for this build.',true);}}
  workspace?.refresh();
 }
@@ -1107,22 +1201,61 @@ function configureTurnPad(model:unknown):void {
 function stageLoadInputs(modelUrl:string, modelHash:string, previousSignal?:AbortSignal) {
  const setsUrl=!previousSignal&&modelUrl===inspectedModel?.url&&data.manifest.sets&&data.setsHash
   ?new URL(assetUrl(data.manifest.sets),location.href).href:null;
- const verified=new Map<string,Promise<Response>>();
+ const verified=new Map<string,Promise<{response:Response;sha256?:string}>>();
  const checkedFetch=new Proxy(fetch,{apply:async(_target,_this,args:Parameters<typeof fetch>)=>{
   const url=String(args[0]),expected=url===modelUrl?modelHash:url===setsUrl?data.setsHash:null;
   if(!expected)throw new Error('DIRECTION_SOURCE_CHANGED: undeclared playback input');
   let pending=verified.get(url);
   if(!pending){pending=(async()=>{
    const response=previousSignal?await fetch(args[0],{...args[1],signal:previousSignal}):await fetch(...args);
-   if(!response.ok)return response;
+   if(!response.ok)return {response};
    const bytes=await response.arrayBuffer();
-   const sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');
+   const sha256=await playbackDigest(bytes);
    if(sha256!==expected)throw new Error('DIRECTION_SOURCE_CHANGED: playback bytes differ from the bound SHA-256');
-   return new Response(bytes,{status:response.status,statusText:response.statusText,headers:response.headers});
+   return {response:new Response(bytes,{status:response.status,statusText:response.statusText,headers:response.headers}),sha256};
   })();verified.set(url,pending);}
-  return (await pending).clone();
+  return (await pending).response.clone();
  }});
- return {setsUrl,fetch:checkedFetch};
+ return {setsUrl,fetch:checkedFetch,modelDigest:async()=>(await verified.get(modelUrl))?.sha256};
+}
+
+async function playbackDigest(bytes:ArrayBuffer):Promise<string> {
+ return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');
+}
+
+function sceneCameraError(error:unknown):string {
+ const value=errorText(error);
+ return error instanceof ComposedTakeError&&data.manifest.sceneReport
+  ?`${error.code}: ${data.manifest.sceneReport.path} · ${t(value.slice(error.code.length+2))}`:value;
+}
+
+async function loadSceneCamera(loaded:ModelAssets,modelDigest:string|undefined):Promise<typeof sceneCameraBinding> {
+ const report=data.manifest.sceneReport;
+ if(!report)return null;
+ const required=()=>new Error(t('scene.required',[report.path]));
+ const mismatch=()=>new Error(t('SCENE_SOURCE_MISMATCH: {0}',[report.path]));
+ let url:string;
+ try{url=assetUrl(report.path);}catch{throw mismatch();}
+ if(!/^[a-f0-9]{64}$/.test(report.sha256))throw mismatch();
+ const response=await fetch(url,{signal:lifecycle.signal,redirect:'error'}).catch(()=>{throw required();});
+ if(!response.ok)throw required();
+ let size=0;
+ const body=response.body?.pipeThrough(new TransformStream<Uint8Array,Uint8Array>({
+  transform(chunk,controller){
+   size+=chunk.byteLength;
+   if(size>SCENE_CAMERA_REPORT_MAX_BYTES)throw new ComposedTakeError('SCENE_CAMERA_REPORT_TOO_LARGE',
+    t('camera.reportSize',[size,SCENE_CAMERA_REPORT_MAX_BYTES]));
+   controller.enqueue(chunk);
+  },
+ }));
+ const bytes=await new Response(body).arrayBuffer().catch(error=>{
+  if(error instanceof ComposedTakeError)throw error;
+  throw required();
+ });
+ const observed=await playbackDigest(bytes);
+ if(observed!==report.sha256)throw mismatch();
+ const bound=bindSceneCamera(new Uint8Array(bytes),{sha256:modelDigest??'',stage:loaded.stage,animations:loaded.animations});
+ return bound?{bound,assets:loaded}:null;
 }
 
 function configurePartSets(keep=''):void {
@@ -1133,12 +1266,12 @@ function configurePartSets(keep=''):void {
 }
 
 /** One creation path for initial load, rebuilds and a post-Setup single-track restart. */
-function createInspectionPlayer(root:HTMLElement,loaded:ModelAssets,mode?:RigPlayer['mode'],source?:{url:string;sha256:string}):RigPlayer {
+function createInspectionPlayer(root:HTMLElement,loaded:ModelAssets,mode?:RigPlayer['mode'],source?:{url:string;sha256:string},authored=false):RigPlayer {
  const direction=source&&data.direction;
  const declared=source&&direction?.composed&&source.url===inspectedModel?.url&&source.sha256===direction.model.sha256?loaded.stage:null;
  const stage=declared&&declared.width>0&&declared.height>0?declared:null;
- const next=new RigPlayer(root,loaded,{mode:stage?'canvas':mode});
- if(stage&&next.renderer instanceof CanvasRenderer){
+ const next=new RigPlayer(root,loaded,{mode:authored||stage?'canvas':mode});
+ if(!authored&&stage&&next.renderer instanceof CanvasRenderer){
   next.renderer.viewport=stage;
   // Play rounds its canvas origin outward in Y-down space. Clip the rounded raster in canvas-local CSS units.
   const top=-(stage.y+stage.height);
@@ -1156,10 +1289,20 @@ function restartSetupPlayer(force=false):void {
  const skin=previous.skin,sets=[...previous.activeSets],slots=previous.slots,adjust=previous.adjust,world=previous.environment(),mode=previous.mode;
  const entries=partModel&&inspectionSourceState==='ready'?partCatalog(partModel,data.feedbackCatalog.slots??[]):null;
  const source=data.direction?.composed?(stageSource?{url:stageSource.url,sha256:stageSource.hash}:inspectedModel??undefined):undefined;
- previous.dispose();player=createInspectionPlayer(el('rig-root'),loaded,mode,source);
+ const track=selectedSceneCamera(),legacyMode=force&&boundSceneCamera()?(sceneComposite?'canvas':undefined):mode;
+ previous.dispose();player=createInspectionPlayer(el('rig-root'),loaded,legacyMode,source,!!track);
  player.skin=skin;if(sets.length)player.setSets(sets);player.slots=slots;player.adjust=adjust;player.environment(world);
  setupChestWorld=readSetupChest(player);
- if(entries)parts?.register('single',entries,player,new PartThumbnails(pageRegionTable(partModel),loaded.pageImages));
+ if(entries)parts?.register('single',entries,track?authoredPartPlayer(player):player,new PartThumbnails(pageRegionTable(partModel),loaded.pageImages));
+}
+
+/** PartExplorer's Solo draw uses the same committed projection as the whole pose. */
+function authoredPartPlayer(current:RigPlayer):import('./part-selection.ts').PartPlayer {
+ return {
+  get generation(){return current.generation;},get skin(){return current.skin;},get set(){return current.set;},
+  posedFrame:current.posedFrame.bind(current),slotIdentity:current.slotIdentity.bind(current),
+  renderer:{render:pose=>{if('order' in pose&&drawnSceneCamera?.player===current)paintAuthoredRig(drawnSceneCamera,pose);}},
+ };
 }
 async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   text('renderer-state',rendererStatus(null,'pending').label);
@@ -1172,6 +1315,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     assets = await loadModel({ modelUrl, ...inputs, resolvePage: (name, url) => {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith(access.route('/assets/'))) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
+    if(data.manifest.sceneReport)sceneCameraBinding=await loadSceneCamera(assets,await inputs.modelDigest());
     if(data.scene){sceneComposite=bindScenePlates(data.scene,await loadScenePlates(data.scene,assetUrl));input('idle-repeat').checked=data.direction!.take.loop;input('idle-repeat').disabled=true;}
     player = createInspectionPlayer(el('rig-root'), assets,sceneComposite?'canvas':undefined,inspectedModel);
     setupChestWorld = readSetupChest(player);
@@ -1182,7 +1326,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     animations.disabled = assets.animations.length === 0 || !!data.scene;
     if(host?.chestLandmarks?.length)updateChestMapping();
     const names=assets.animations.map(clip=>clip.name),initial=data.scene?.animation??initialIdleAnimation(names,initialPlayerAnimation(names,data.initialAnimation??undefined,initialCheckpoint),!!data.initialAnimation||!!initialCheckpoint?.animation||!!initialCheckpoint?.axis);
-    if(initial)chooseAnimation(initial);else drawRig(()=>player!.draw());
+    if(initial)chooseAnimation(initial);else drawRig(()=>drawPlayer(player!));
     el('rig-empty').hidden = true; text('player-state', '@rig-c/play · Actual rig');
     configurePartSets();
     const validAxes = data.manifest.axes.filter(axis => assets?.animations.some(item => item.name === axis.animation));
@@ -1193,7 +1337,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     enableEnvironment(modelUrl,inputs.fetch);
     describeLayerToggles(document,el('layer-state').textContent??'');
     fitCamera();
-  } catch (error) { turnPad?.dispose();turnPad=null;document.getElementById('turn-pad-host')?.remove();text('renderer-state',rendererStatus(null,'failed').label);player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true); }
+  } catch (error) { const refusal=sceneCameraError(error);turnPad?.dispose();turnPad=null;document.getElementById('turn-pad-host')?.remove();text('renderer-state',rendererStatus(null,'failed').label);player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${refusal}`); message(refusal, true); }
   directionPanel?.refresh();
 }
 
@@ -1383,7 +1527,7 @@ function bind(): void {
     chooseAnimation(select('animation-select').value);
     if (wasPlaying) void playPreview();
   };
-  select('part-set').onchange = () => { try { if(!player)return;player.setSet(select('part-set').value || null);drawRig(()=>player!.draw());fitCamera(); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } };
+  select('part-set').onchange = () => { try { if(!player)return;player.setSet(select('part-set').value || null);drawRig(()=>drawPlayer(player!));fitCamera(); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } };
   select('axis-select').onchange = chooseAxis; input('axis-value').oninput = applyAxis;
   viewport.bindControls(unitScaleMessage);
   input('scrub').oninput = () => { pause(); seek(Number(input('scrub').value)); };
@@ -1496,7 +1640,7 @@ function bind(): void {
   clothPanel=bindClothPanel({project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),pause,changed:()=>redrawOverlay(false),saved:()=>persistence?.save(),
    apply:applyCloth,reset:resetClothBuild,token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
   viewDisposers.push(()=>clothPanel?.dispose());
-  physicsPanel=bindPhysicsPanel({preview:edits=>{const before=JSON.stringify(physicsPreview.read()),next=physicsPreview.sync(player,edits);if(player?.current&&!playing&&before!==JSON.stringify(next)){player.repose();drawRig(()=>player!.draw());}return physicsPreview.read();},previewRead:()=>physicsPreview.read(),apply:async ops=>{await applyPhysics(ops);},reset:resetPhysicsBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
+  physicsPanel=bindPhysicsPanel({preview:edits=>{const before=JSON.stringify(physicsPreview.read()),next=physicsPreview.sync(player,edits);if(player?.current&&!playing&&before!==JSON.stringify(next)){player.repose();drawRig(()=>drawPlayer(player!));}return physicsPreview.read();},previewRead:()=>physicsPreview.read(),apply:async ops=>{await applyPhysics(ops);},reset:resetPhysicsBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),pane=el('rig-pane').getBoundingClientRect(),view=el('rig-root').parentElement!.getBoundingClientRect(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name),p=project(b.x,b.y);out.set(name,{x:p.x+view.left-pane.left,y:p.y+view.top-pane.top});}catch{/* a bone this model lacks is not pickable */}}return out;}});
   viewDisposers.push(()=>physicsPanel?.dispose());
   meshPanel=bindMeshPanel({pane:el('rig-pane'),project:()=>player?rigProject():null,mapping:()=>chestMapping,bones:()=>activeSetupBones()??[],
@@ -1521,7 +1665,7 @@ function bind(): void {
   retargetPanel=bindRetargetPanel({apply:body=>applyRetarget(body),reset:()=>{void resetRebuild(stageWorld());},seek:seekReading});
   requirementsPanel=bindRequirementsPanel({check:runRequirements,seek:seekReading,animation:()=>animation,slot:()=>parts?.value()?.slot??stageDraftSelection?.slot??null,hash:sha256Hex});
   const tickResize=new ResizeObserver(()=>renderReadingTicks());tickResize.observe(el('transport'));viewDisposers.push(()=>tickResize.disconnect());
-  viewDisposers.push(viewport.bindNavigation(rigPanCarry({player:()=>player},viewport.state),panOnly=>!comments?.active()||!!panOnly));
+  viewDisposers.push(viewport.bindNavigation(rigPanCarry({player:()=>player},viewport.state,()=>drawnSceneCamera?.frame.zoom??1),panOnly=>!comments?.active()||!!panOnly));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
   viewDisposers.push(bindLayerShortcuts(document));describeLayerToggles(document,el('layer-state').textContent??'');
   input('idle-repeat').onchange=()=>{syncPlayerLoop();renderIdle();if(animation==='idle'&&canRepeatIdle())void playPreview();};
@@ -1619,7 +1763,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';sourceFiles.parentElement!.hidden=!data.manifest.authoring.length;
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(rigDifference){leaveRigDifference();renderLayout();}const part=parts?.value();if(!stageCorrectionRebinding&&(previous?.side!==part?.side||previous?.slot!==part?.slot||previous?.mode!==part?.mode))stageDraftRequestToken++;if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);if(host)chestEditor?.sync();else if(part&&!stageCorrectionRebinding)void openStageCorrection({part:part.slot,instrument:'selection'});requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();}); animationPanel=new AnimationInspectionPanel({hideGateBanner:!!host?.direction,readOnlyReason:sealedRecordRigReadOnly,hasTurnDial:()=>inspectionSourceState==='ready'?!!turnPad:undefined,host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeStageAdjust(idleAdjust,dialAdjust,turnAdjust,animAdjust);if(!inDrawRig&&player.current&&!playing){if(activeScene())seek(time);else{player.seek(time);drawRig(()=>player!.draw());}}},apply:ops=>stageApplyAnimation(rigStageJobs, ops),reset:()=>stageResetAnimation(rigStageJobs),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(rigDifference){leaveRigDifference();renderLayout();}const part=parts?.value();if(!stageCorrectionRebinding&&(previous?.side!==part?.side||previous?.slot!==part?.slot||previous?.mode!==part?.mode))stageDraftRequestToken++;if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);if(host)chestEditor?.sync();else if(part&&!stageCorrectionRebinding)void openStageCorrection({part:part.slot,instrument:'selection'});requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();}); animationPanel=new AnimationInspectionPanel({hideGateBanner:!!host?.direction,readOnlyReason:sealedRecordRigReadOnly,hasTurnDial:()=>inspectionSourceState==='ready'?!!turnPad:undefined,host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeStageAdjust(idleAdjust,dialAdjust,turnAdjust,animAdjust);if(!inDrawRig&&player.current&&!playing){if(activeScene()||selectedSceneCamera())seek(time);else{player.seek(time);drawRig(()=>drawPlayer(player!));}}},apply:ops=>stageApplyAnimation(rigStageJobs, ops),reset:()=>stageResetAnimation(rigStageJobs),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     if(!host&&!data.capabilities.preRig)renderPendingSubjects([{kind:'review-verdict',stage:'rig-review'}]);
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
@@ -1650,7 +1794,7 @@ async function start(): Promise<void> {
       }
       if(!player&&(data.manifest.model||referenceInput.state!=='loaded'))throw new Error('JOB_VISUAL_UNAVAILABLE');
       await restorePublicationNavigation();document.body.dataset.ready='true';
-      const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:navigationBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
+      const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>drawPlayer(player!));},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:navigationBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
         hasMeshEdits:()=>!!meshEditor?.hasJobEdits(),meshEdits:async()=>meshEditor?.jobEdits()??null,chestLandmarks:()=>chestEditor?.jobEdits()??null};
       hostAttached=true;host.attach(screen);showInspector(data.manifest.model?'playback':'rig');host.displayed();
     }
@@ -2422,21 +2566,32 @@ function commenting():boolean {
 /** Something to communicate: a displayed record publication (#1228: its Comments and source stay open without an ask),
  * a pending question or record form, or the person commenting. */
 function communicationPending():boolean {return !!host?.record||commenting()||!!communicationPanel.querySelector('form[data-job-ask], .stage-comment-item[data-comment-id]');}
-function unitScaleMessage(target:CameraTarget):void {message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');}
+function unitScaleMessage(target:CameraTarget):void {message(partsOnly||target==='rig'&&selectedSceneCamera()?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');}
 function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');}
 
 /** Rig world → rig-pane pixels for the current camera. */
-function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*viewport.state.rigScale,y:parseFloat(root.style.top||'0')-y*viewport.state.rigScale});}
+function currentAuthoredProjection(){
+ const drawn=heldSceneCamera();
+ if(!drawn)return null;
+ const pane=el('rig-viewport');
+ return authoredPaneProjection(pane,drawn.canvas,viewport.state.rigScale,viewport.state.zoom,drawn.frame,drawn.projection);
+}
+function rigProject(authored=currentAuthoredProjection()){
+ if(authored)return (x:number,y:number)=>authored.worldToPane({x,y});
+ const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*viewport.state.rigScale,y:parseFloat(root.style.top||'0')-y*viewport.state.rigScale});
+}
 function redrawOverlay(fresh:boolean):void {
  // Fit and editor notifications inside drawRig are followed by its fresh capture.
  if(rigDifference||!fresh&&inDrawRig)return;
+ const authored=currentAuthoredProjection();
  animationPanel?.redraw(layers.bones);
  if(!overlays||!player)return;
- const project=rigProject();
+ const project=rigProject(authored);
  const regions=[...chestRegions(),...(meshPanel?.overlayRegions()??[]),...(cutsPanel?.overlayRegions()??[]),...(clothPanel?.overlayRegions()??[])],circles=[...chestCircles(),...(meshPanel?.overlayCircles()??[])],markers=[...chestMarkers(),...(cutsPanel?.overlayMarkers()??[])];
- const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(activeSetupBones()??[]).map(name=>({name})),project,settings:layers,regions,circles,markers,meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()}):overlays.redraw({project,settings:layers,regions,circles,markers,meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()});
+ const overlayView={project,settings:layers,regions,circles,markers,meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay(),clip:authored?.clip};
+ const value=fresh?overlays.refresh({...overlayView,player,frame:heldSceneCamera()?.pose??parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(activeSetupBones()??[]).map(name=>({name}))}):overlays.redraw(overlayView);
  lastOverlay=value;
- text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');idlePanel?.place(duration);rigFieldsPanel?.place();if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
+ text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');idlePanel?.place(duration);rigFieldsPanel?.place();if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>drawPlayer(player!));
 }
 /**
  * #346: the player loops exactly when Animate repeats, so a repeating clip wraps inside the track and its physics
@@ -2444,11 +2599,12 @@ function redrawOverlay(fresh:boolean):void {
  */
 function syncPlayerLoop():void {
  const want=canRepeatIdle();
+ if(selectedSceneCamera())return; // A terminal seek may hold a looping take on a non-looping entry until Play seeks to zero.
  if(!player?.current||player.composed||player.entry(0)?.loop===want)return;
  try{drawRig(()=>{player!.play(animation,{loop:want});if(!playing)player!.pause();player!.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time);player!.draw();},'seek');}
  catch(error){message(errorText(error),true);}
 }
-function canRepeatIdle():boolean{const direction=activeScene();if(direction)return direction.take.loop;return !!player&&!!assets?.animations.some(clip=>clip.name===animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
+function canRepeatIdle():boolean{const track=selectedSceneCamera();if(track)return track.loop;const direction=activeScene();if(direction)return direction.take.loop;return !!player&&!!assets?.animations.some(clip=>clip.name===animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
 function renderIdle():void {text('idle-state',canRepeatIdle()?animation&&animation!=='idle'?`${data.manifest?.animations?.find(a=>a.id===animation)?.label??animation} · repeating`:'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
 async function playPreview():Promise<void> {
  if((!player&&!video&&!sequence)||duration<=0)return;
@@ -2477,15 +2633,15 @@ async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<v
  if(command.type==='playback'){if(command.value==='pause')pause();else{await playPreview();if(!playing)throw new Error('CONTROL_PLAYBACK_REFUSED');}return;}
  if(command.type==='time'){
   if(!Number.isFinite(command.seconds)||command.seconds<0||command.seconds>duration)throw new Error('CONTROL_TIME_OUTSIDE_DOMAIN');
-  pause();seekingControl=true;try{await inspectControlTime(command.seconds,signal,false,!previousBuildView?.active());}finally{seekingControl=false;}
+  pause();seekingControl=true;try{await inspectControlTime(command.seconds,signal,false,!previousBuildView?.active(),authoredControlSeek());}finally{seekingControl=false;}
  }
 }
-async function inspectControlTime(target:number,signal:AbortSignal,preserveSeconds=false,useReference=true):Promise<void> {
+async function inspectControlTime(target:number,signal:AbortSignal,preserveSeconds=false,useReference=true,authoredSeek?:(seconds:number)=>void):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
  // #191: a control seek is a clip move like the transport's: a seek to 0 restarts the wind clock while the exported world is in use.
  clipMoved({kind:'seek',to:target});
- const media=!useReference||activeScene()?null:video;
- if(!media){time=target;if(player?.current){player.seek(activeScene()?takeSample(activeScene()!,target).sourceTime:target);drawRig(()=>player!.draw(),'seek');}renderSequenceFrame();renderTransport();return;}
+ const media=!useReference||activeScene()||authoredSeek?null:video;
+ if(!media){time=target;if(authoredSeek)authoredSeek(target);else if(player?.current){player.seek(activeScene()?takeSample(activeScene()!,target).sourceTime:target);drawRig(()=>player!.draw(),'seek');}renderSequenceFrame();renderTransport();return;}
  if(media.readyState<1||target>media.duration)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');
  const previousPosition=media.currentTime;
  const commit=(actual:number)=>{
@@ -2530,7 +2686,7 @@ function numericView():ControlView {
 }
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data?.sourceHash??host!.record!.sourceHash,rigs:[data?.reviewedSource.rig?.sha256??null]};}
 // Persist the displayed inspection clock; the runtime clock accumulates across idle loops for physics.
-function inspectionBookmark():InspectionBookmark {if(rigDifference)return structuredClone(rigDifference.bookmark);const turn=turnPad?.snapshot(),turnSelection=turn?{turn}:{};return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...turnSelection,part:parts?.value()??null,view:view==='reference'&&previousBuildView?.active()?'rig':view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode??selectedInspector()??'rig',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
+function inspectionBookmark():InspectionBookmark {if(rigDifference)return structuredClone(rigDifference.bookmark);const turn=turnPad?.snapshot(),turnSelection=turn?{turn}:{};return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time:heldSceneCamera()?.frame.authoredSeconds??time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...turnSelection,part:parts?.value()??null,view:view==='reference'&&previousBuildView?.active()?'rig':view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode??selectedInspector()??'rig',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false,keepCamera=true,feedback?:Feedback):Promise<void> {
  const pictureHost=feedback&&(host?.checkpointPairs||host?.record);
  if(pictureHost){
@@ -2556,6 +2712,8 @@ async function inspectionReferenceInfo(id:string|null,signal:AbortSignal):Promis
 /** One duration bound for validation and carried publication navigation. */
 function inspectionTimeLimit(bookmark:InspectionBookmark,info:{duration:number|null}):number {
  const selection=bookmark.selection;
+ const track=data.manifest.sceneReport&&bookmark.animation&&boundSceneCamera()?.sample(bookmark.animation,{endpoint:'terminal'});
+ if(track)return track.authoredSeconds;
  if(activeScene()&&bookmark.animation===data.scene?.animation)return activeScene()!.take.duration;
  const clipDuration=bookmark.animation?assets?.animations.find(a=>a.name===bookmark.animation)?.duration:undefined,referenceId=selection.reference===undefined?select('reference-select').value:selection.reference,isVideo=data.manifest.references.find(r=>r.id===referenceId)?.type==='video';
  return clipDuration===undefined?info.duration??0:isVideo&&info.duration!==null?Math.min(clipDuration,info.duration):clipDuration;
@@ -2629,10 +2787,10 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,pr
  if(selection.checkpoint!==undefined){checkpoint=data.manifest.checkpoints.find(c=>c.id===selection.checkpoint);renderCheckpoint();renderCheckpoints();}
  if(selection.reference!==undefined&&select('reference-select').value!==(selection.reference??'')){select('reference-select').value=selection.reference??'';await showReference(selection.reference??'');if(selection.reference&&!referenceSize&& !video)throw new Error('Saved reference did not load');}
  if(bookmark.animation&&player)chooseAnimation(bookmark.animation);
- else if(player){restartSetupPlayer(true);player!.clear();animation='';duration=0;time=0;select('animation-select').value='';}
+ else if(player){sceneCameraTrack=null;restartSetupPlayer(true);player!.clear();animation='';duration=0;time=0;select('animation-select').value='';}
  if(selection.axis){select('axis-select').value=selection.axis.id;chooseAxis();input('axis-value').value=String(selection.axis.value);applyAxis();}
  if(selection.partSet!==undefined&&player){if(selection.partSet||player.sets().length)player.setSet(selection.partSet||null);select('part-set').value=selection.partSet??'';}
- if(bookmark.time!==null){if(video&&video.readyState<1)await waitReferenceMetadata(video,signal);await inspectControlTime(bookmark.time,signal,preserveSeconds);}
+ if(bookmark.time!==null){const authoredSeek=authoredControlSeek();if(!authoredSeek&&video&&video.readyState<1)await waitReferenceMetadata(video,signal);await inspectControlTime(bookmark.time,signal,preserveSeconds,true,authoredSeek);}
  if(selection.person!==undefined){selectedPerson=selection.person??'';select('person-select').value=selectedPerson;lastPoseFrame=-1;renderSequenceFrame();}
  if(selection.view)setView(selection.view);
  appearance?.set(bookmark.theme);
@@ -2649,7 +2807,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,pr
  if(nextZoom!==null&&camera){viewport.state.zoom=nextZoom;viewport.state.cameraCenter={...camera.center};}
  if(nextReferenceZoom!==null&&ref){viewport.state.referenceZoom=nextReferenceZoom;viewport.state.referenceCenter={...ref.center};}}
  viewport.state.cameraSync=bookmark.view.cameraSync??false;viewport.state.activeCamera=bookmark.view.activeCamera==='reference'?'reference':'rig';
- if(player)drawRig(()=>player!.draw());if(selection.part)parts?.assertIdentity(selection.part);fitCamera();redrawOverlay(false);pause();renderTransport();renderCameraControls();
+ if(player)drawRig(()=>drawPlayer(player!));if(selection.part)parts?.assertIdentity(selection.part);fitCamera();redrawOverlay(false);pause();renderTransport();renderCameraControls();
  }finally{viewport.state.cameraRestoring=false;}
  if(!keepCamera){viewport.requestFit();fitCamera();}
 }
@@ -2792,7 +2950,7 @@ function bindEnvironment():void {
 function resetPhysics():void {
  if(!player)return;
  joltQueue=[];wind.restore(null);input('environment-applied').checked=false;input('gravity').value='1';syncEnvironmentInputs();
- try{player.environment(null);if(player.current){player.seek(time);drawRig(()=>player!.draw());}environmentNote=` · physics history cleared; re-posed from ${time.toFixed(3)} s`;}
+ try{player.environment(null);if(player.current){seekSceneCameraPose(player,time);drawRig(()=>drawPlayer(player!));}environmentNote=` · physics history cleared; re-posed from ${time.toFixed(3)} s`;}
  catch(error){environmentNote='';message(`Physics reset refused: ${errorText(error)}`,true);}
  renderEnvironment();persistence?.save();
 }
@@ -3016,7 +3174,7 @@ const rigStageJobs:StageJobScreen={
   densityBusy:()=>densityBusy,
   draw:()=>{
    if(!layers.mesh){layers.mesh=true;input('layer-mesh').checked=true;}
-   if(player)drawRig(()=>player!.draw());redrawOverlay(true);
+   if(player)drawRig(()=>drawPlayer(player!));redrawOverlay(true);
   },
   triangles:part=>lastOverlay?.meshTriangles[part]??null,
   pendingCount:(view,row)=>`${view.field} ${row.value} · ${row.counts?`v ${row.counts.vertices} · t ${row.counts.triangles}`:'no counts'} (remesh.json) — not applied`,
@@ -3053,7 +3211,7 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  chest:{drawn:()=>({circles:chestCircles().length,regions:chestRegions().length,markers:chestMarkers().length})},
  physics:{rows:()=>physicsPanel?.rows()??[],chains:()=>physicsPanel?.chains()??[],edits:()=>physicsPanel?.edits()??[],preview:()=>physicsPreview.read(),clearPreview:()=>physicsPanel?.clearPreview(),set:(name:string,field:Parameters<PhysicsPanel['set']>[1],value:number)=>physicsPanel?.set(name,field,value),ramp:(id:string,field:Parameters<PhysicsPanel['set']>[1],root:number,tip:number)=>physicsPanel?.ramp(id,field,root,tip),select:(name:string)=>physicsPanel?.select(name),apply:()=>applyPhysics(physicsPanel?.edits().map(e=>({op:e.op,path:e.path,value:e.value,name:e.name}))??[]),reset:()=>resetPhysicsBuild()},
  /** Inspection only: one slot's posed world geometry on the drawn frame (what the stage drew), for comparing against `rigc render --geometry`. */
- posed:(slot:string)=>{const frame=player?.posedFrame();const found=frame?.order.find(item=>item.slot===slot);return found?JSON.parse(JSON.stringify(found,(key,value)=>key==='bitmap'||key==='image'||key==='page'?undefined:value)):null;},
+ posed:(slot:string)=>{const frame=heldSceneCamera()?.pose??player?.posedFrame();const found=frame?.order.find(item=>item.slot===slot);return found?JSON.parse(JSON.stringify(found,(key,value)=>key==='bitmap'||key==='image'||key==='page'?undefined:value)):null;},
  bone:(name:string)=>player?JSON.parse(JSON.stringify(player.bone(name))):null,
  /** Inspection only (#100): Edit Mesh's setup-space source (crop px per vertex, unrounded) and its drawn vertices as page client pixels. */
  meshEdit:()=>{
@@ -3063,7 +3221,7 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
    drawn:overlay.vertices.map(v=>{const p=project(v.at.x,v.at.y);return {x:p.x+view.left,y:p.y+view.top,state:v.state};})};
  },
  /** Inspection only: a world point (y up) as page client pixels on the rig pane, the projection the overlays draw with. */
- screen:(x:number,y:number)=>{const p=rigProject()(x,y),view=el('rig-root').parentElement!.getBoundingClientRect();return {x:p.x+view.left,y:p.y+view.top};},
+ screen:(x:number,y:number)=>{const p=rigProject()(x,y),pane=el('rig-root').parentElement!,view=pane.getBoundingClientRect(),authored=!!heldSceneCamera();return {x:p.x+view.left+(authored?pane.clientLeft:0),y:p.y+view.top+(authored?pane.clientTop:0)};},
  /**
   * Inspection only, a fixed schedule: pause, reopen the track at 0 and step it `round(t/dt)` times by `dt`. With `steps`
   * (`rigc-environment/1` steps: x right, y down) each step is set before the step that poses the first frame at or after
@@ -3075,7 +3233,7 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   const at=(k:number)=>{for(const step of steps)if(Math.max(0,Math.ceil(step.t/dt-1e-9))===k)player!.environment({...(step.wind?{wind:step.wind}:{}),...(step.gravity?{gravity:step.gravity}:{})});};
   pause();if(steps.length)player.environment(null);at(0);player.seek(0);player.hold(false);player.resume();
   try{for(let k=1,n=Math.round(t/dt);k<=n;k++){at(k);player.frame(dt);}}finally{player.hold(true);player.pause();}
-  drawRig(()=>player!.draw());time=player.time;renderTransport();
+  drawRig(()=>drawPlayer(player!));time=player.time;renderTransport();
   const posedTime=player.time;if(steps.length){if(environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));else player.environment(null);}
   return posedTime;},
  /** Readings (#108): run (the pickers' choice, or the given readings), the last job, the ticks drawn and the worst lines shown. */
@@ -3286,7 +3444,7 @@ function sampleLocals(bone:string,dt:number,n:number):{t:number;rotation:number;
  const read:BoneAdjust=(bones,ctx)=>{inner?.(bones,ctx);if(!recording)return;const l=bones.bone(bone);rows.set(ctx.trackTime??0,{t:ctx.trackTime??0,rotation:l.rotation,x:l.x,y:l.y,scaleX:l.scaleX,scaleY:l.scaleY,shearX:l.shearX,shearY:l.shearY});};
  pause();p.adjust=read;
  try{p.seek(0);recording=true;p.repose();p.hold(false);p.resume();for(let k=1;k<=n;k++)p.frame(dt);}
- finally{recording=false;p.hold(true);p.pause();p.adjust=inner;drawRig(()=>p.draw());time=p.time;renderTransport();}
+ finally{recording=false;p.hold(true);p.pause();p.adjust=inner;drawRig(()=>drawPlayer(p));time=p.time;renderTransport();}
  return [...rows.values()].sort((a,b)=>a.t-b.t);
 }
 async function resetRebuild(world:StageWorld|null=null):Promise<void> {
@@ -3301,18 +3459,27 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  const cameraRestoring=viewport.state.cameraRestoring;
  stageCorrectionRebinding++;try{
  const keepPart=parts?.value()??null,keepStage=assets?.stage;
- const keepFramingBox=rigRaster.active()?undefined:viewportProvider.geometry('rig')?.box;
+ const declaresCamera=!!data.manifest.sceneReport;
+ const wasAuthored=declaresCamera&&!!selectedSceneCamera();
+ const keepFramingBox=rigRaster.active()||wasAuthored?undefined:viewportProvider.geometry('rig')?.box;
  const keepRigCamera=structuredClone(viewport.paneCamera('rig')),keepReferenceCamera=structuredClone(viewport.paneCamera('reference'));
  const keepAnimation=animation,keepTime=time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  inspectionSourceState='pending';partModel=null;pause();refreshAnimationInspection();
  const inputs=stageLoadInputs(modelUrl,sha256);
  const next=await loadModel({modelUrl,...inputs,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}}).catch(error=>{inspectionSourceState='failed';refreshAnimationInspection();throw error;});
- const keepFraming=!!keepStage&&!!next.stage&&(['x','y','width','height'] as const).every(key=>keepStage[key]===next.stage![key]);
+ let nextCamera:typeof sceneCameraBinding=null;
+ if(data.manifest.sceneReport&&modelUrl===inspectedModel?.url){
+  try{nextCamera=await loadSceneCamera(next,await inputs.modelDigest());}
+  catch(error){next.dispose();inspectionSourceState='failed';refreshAnimationInspection();throw new Error(sceneCameraError(error),{cause:error});}
+ }
+ const keepFraming=!!keepStage&&!!next.stage&&!wasAuthored&&!nextCamera&&(['x','y','width','height'] as const).every(key=>keepStage[key]===next.stage![key]);
  viewport.state.cameraRestoring=true;viewport.cancelFit();
  // The fit-relative zoom also depends on the first-draw framing basis, not just the declared stage.
  if(keepFraming&&keepFramingBox)rebuildFramingBoxes.set(next,{...keepFramingBox});
  physicsPanel?.clearPreview();
- pause();player?.dispose();assets?.dispose();assets=next;player=createInspectionPlayer(el('rig-root'),assets,undefined,{url:modelUrl,sha256});setupChestWorld=readSetupChest(player);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
+ pause();player?.dispose();assets?.dispose();assets=next;
+ if(declaresCamera){sceneCameraBinding=nextCamera;sceneCameraTrack=null;}
+ player=createInspectionPlayer(el('rig-root'),assets,undefined,{url:modelUrl,sha256});setupChestWorld=readSetupChest(player);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
  {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
  try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[],inputs.fetch);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();meshEditor?.selectionChanged();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
@@ -3362,7 +3529,7 @@ async function applyMesh(part:string,entry:MeshEntry):Promise<PatchJobView|Rebui
    // #173 / #183: the pending strip row (if any) was cleared by applyPatch's landing, as after every Apply.
    // The new triangulation is drawn: the mesh edges go on and the overlay captures the reloaded pose.
    if(!layers.mesh){layers.mesh=true;input('layer-mesh').checked=true;}
-   if(player)drawRig(()=>player!.draw());redrawOverlay(true);
+   if(player)drawRig(()=>drawPlayer(player!));redrawOverlay(true);
    const counts=result.remesh??null,overlay=lastOverlay?.meshTriangles[part]??null,agree=triangleAgreement(counts,counts?.modelTriangles??null,overlay);
    meshPanel?.counts([
     ...(counts?[{label:'BEFORE',text:`${counts.part} ${countsText(counts.before)} (remesh.json)`},{label:'AFTER',text:`${counts.part} ${countsText(counts.after)} (remesh.json)`}]:[]),
@@ -3403,6 +3570,17 @@ void start();
 
 /** Only live, unrecorded authoring effects block capture; unsent form ops alone do not. */
 function commentCaptureRefusal():string|null {
+ if(player?.renderer){
+  if(sceneCameraRefusal)return sceneCameraRefusal;
+  const authored=currentAuthoredProjection();
+  if(authored?.violation&&el('rig-viewport').clientWidth>0&&el('rig-viewport').clientHeight>0){
+   const {field,value,min,max,exclusiveMin}=authored.violation;
+   const required=max===undefined?t('camera.limit.positive',[min]):
+    t(exclusiveMin?'camera.limit.positiveRange':'camera.limit.range',[min,max]);
+   const detail=t('camera.commentRange',[t(field),String(value),required]);
+   return sceneCameraError(new ComposedTakeError('SCENE_CAMERA_VIEW_INVALID',detail));
+  }
+ }
  if(rigDifference)return 'RIG_DIFFERENCE_COMMENT_UNAVAILABLE: return to Rig or Reference before adding a comment.';
  if(appliedOnStage)return 'COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build';
  if(rebuildBusy)return 'COMMENT_SOURCE_BUSY: wait for the rebuild or candidate model replacement before commenting';
@@ -3472,11 +3650,28 @@ function setupComments():void {
   pose:view=>{
    if(host?.checkpointPairs&&checkpointPair||host?.record&&(!host.record.hasPicture||shownPlanPicture()))return planPicturePose(view);
    if(activeInterviewImages)return null;
-   if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;
-   const renderer=player?.renderer;const current=time,index=frameAtTime(activeFrameClock(),current),referenceId=view==='reference'?select('reference-select').value||null:null,referenceHash=referenceId?data.referenceHashes?.[referenceId]??(data.explicitReference?.id===referenceId?data.explicitReference.sha256:null):null;
-   return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;
+   if(view!=='rig'&&view!=='reference')return null;
+   const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;
+   if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;
+   const drawn=heldSceneCamera(),authored=view==='rig'?currentAuthoredProjection():null;
+   if(view==='rig'&&selectedSceneCamera()&&!authored)return null;
+   const camera=authored?authored.camera:numericView().cameras[view],pane=el(view+'-viewport');
+   if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;
+   const renderer=player?.renderer;
+   const current=drawn?.frame.authoredSeconds??time;
+   const index=frameAtTime(activeFrameClock(),view==='rig'?drawn?.frame.compiledSeconds??current:current);
+   const referenceId=view==='reference'?select('reference-select').value||null:null;
+   const referenceHash=referenceId?data.referenceHashes?.[referenceId]??(data.explicitReference?.id===referenceId?data.explicitReference.sha256:null):null;
+   return {mode:workspaceMode==='playback'?'animate':'setup',
+    capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,
+     canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,
+     backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d',authoredClip:authored?.clip},
+    projection:authored??undefined,camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),
+    time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,
+    referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:
+     {posed:drawn?.pose??parts?.frame('single'),assets:assets??undefined})};
   },
-  pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1&&!video.closest?.('[data-previous-build-active]')){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}const turn=turnPad?.snapshot();if(turn)turnPad?.restore({...turn,held:true},false);else if(turnPad?.state?.releasing)turnPad.restore(undefined);},bookmark:()=>shownPlanPicture()?planPictureBookmark():inspectionBookmark(),restore:restoreCommentInspection,feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
+  pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1&&!heldSceneCamera()&&!video.closest?.('[data-previous-build-active]')){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}const turn=turnPad?.snapshot();if(turn)turnPad?.restore({...turn,held:true},false);else if(turnPad?.state?.releasing)turnPad.restore(undefined);},bookmark:()=>shownPlanPicture()?planPictureBookmark():inspectionBookmark(),restore:restoreCommentInspection,feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
   locked:host?.record||host?.direction?id=>submittedDirectionComments.has(id)||recordComments.some(row=>row.id===id&&isSentAlone(row)):isSubmittedFeedback,add:f=>{if(host?.record||host?.direction)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(/^The source changed, so /.test(draftStatus??''))draftStatus=null;if(host?.record||host?.direction){recordCommentsChanged();if(host?.direction){markDirty();comments?.refresh();}return;}if(host?.verdictComments)persistRecordComments();session.feedbackWarnings=session.feedbackWarnings.filter(warning=>session.feedback.some(row=>row.id===warning.id));markDirty();renderProposals();return persistence?.save();},draftChanged:()=>{if(typeof renderAnswerControls==='function')renderAnswerControls();},error:value=>message(value,true),
   picture:mark=>{
    if(mark.viewport!=='reference'||manifestReferenceMatches(mark,(mark.bookmark as InspectionBookmark).selection.reference))return null;
@@ -3708,7 +3903,7 @@ async function prepareStageDraftBuild(
   // the saved styles so the previous renderer borrows that baseline again.
   if(prevPlayer&&prevAssets&&prevPartModel&&prevCommittedEntries){
    parts?.register('single',prevCommittedEntries,prevPlayer,new PartThumbnails(pageRegionTable(prevPartModel),prevAssets.pageImages));
-   try{drawRig(()=>prevPlayer.draw());}catch{/* ignore */}
+   try{drawRig(()=>drawPlayer(prevPlayer));}catch{/* ignore */}
    try{parts?.select(prevPartValue?{side:prevPartValue.side,slot:prevPartValue.slot,mode:prevPartValue.mode}:null);}catch{/* ignore */}
   }else{
    if(prevPartRefusal)parts?.refuseCatalog('single',prevPartRefusal.message);

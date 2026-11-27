@@ -69,7 +69,7 @@ export interface OverlayAnchors {
  anchors:readonly {at:OverlayPoint;from:OverlayPoint|null;kind:'at'|'point'|'tip';label:string;selected:boolean;hover:boolean}[];
  colors:{line:string;origin:string;point:string;tip:string;pending:string;selected:string;ink:string;labelBg:string};
 }
-export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[];markers?:readonly OverlayMarker[];meshEdit?:OverlayMeshEdit|null;weights?:OverlayWeights|null;anchors?:OverlayAnchors|null}
+export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[];markers?:readonly OverlayMarker[];meshEdit?:OverlayMeshEdit|null;weights?:OverlayWeights|null;anchors?:OverlayAnchors|null;clip?:{x:number;y:number;width:number;height:number}}
 /** Canvas-pixel geometry of a circle designation, the same numbers the editor hit-tests against. */
 export function projectCircle(project:OverlayProject,circle:Pick<OverlayCircle,'center'|'r'|'band'|'ry'>):{center:OverlayPoint;pxR:number;pxBand:number;pxRy?:number}|null {
  const {x,y}=circle.center,ry=circle.ry??circle.r,center=project(x,y),edge=project(x+circle.r,y),top=project(x,y+ry+circle.band);
@@ -176,7 +176,7 @@ export class RigOverlays {
   this.geometry=input.player?captureRigGeometry(input.player,input.bones,input.settings,input.frame,input.selectedSlot):null;
   return this.redraw(input);
  }
- redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[],circles=[],markers=[],meshEdit=null,weights=null,anchors=null}:OverlayView):OverlaySnapshot{
+ redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[],circles=[],markers=[],meshEdit=null,weights=null,anchors=null,clip}:OverlayView):OverlaySnapshot{
   if(this.disposed)return this.unavailable('Overlay has been disposed');
   this.host.rigRoot.style.visibility=settings.images?this.visibility:'hidden';
   const warnings=[...(this.geometry?.warnings??[])],ctx=this.host.canvas.getContext('2d');
@@ -198,6 +198,7 @@ export class RigOverlays {
   };
   const line=(value:OverlayLine)=>{const from=projected(value.from),to=projected(value.to);if(from&&to){ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);}};
   ctx.save();
+  if(clip){ctx.beginPath();ctx.rect(clip.x,clip.y,clip.width,clip.height);ctx.clip();}
   if(settings.mesh&&captured?.mesh){
    ctx.strokeStyle='#007d98';ctx.lineWidth=2.3;ctx.globalAlpha=Math.max(0,Math.min(1,Number.isFinite(settings.meshOpacity)?settings.meshOpacity:0));
    ctx.beginPath();for(const edge of this.geometry!.mesh)line(edge);ctx.stroke();

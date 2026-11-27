@@ -11,9 +11,9 @@ import {loadSetupAssets,setupRoot} from './helpers/setup-mesh.ts';
 const main=readFileSync(new URL('../web/main.ts',import.meta.url),'utf8');
 function fragment(start:string,end:string){const a=main.indexOf(start),b=main.indexOf(end,a);expect(a).toBeGreaterThanOrEqual(0);expect(b).toBeGreaterThan(a);return main.slice(a,b);}
 const lifecycle=fragment('function createInspectionPlayer(', 'async function initPlayer(');
-const controls=fragment('function chooseAnimation(', 'function stopAudio()');
+const controls=fragment('function drawPlayer(', 'function stopAudio()');
 const idle=fragment('function canRepeatIdle(', 'async function playPreview(');
-const setup=fragment(" else if(player){restartSetupPlayer(true);",' if(selection.axis)');
+const setup=fragment(" else if(player){sceneCameraTrack=null;restartSetupPlayer(true);",' if(selection.axis)');
 
 /** Execute the shared screen's actual transport over the published player and native canvas. */
 async function screen(visible=true,direction?:DirectionInspection){
@@ -27,7 +27,7 @@ async function screen(visible=true,direction?:DirectionInspection){
  const scope={player,assets:loaded.assets,source,camera,parts,RigPlayer,ModelAssets:undefined,partModel:doc,inspectionSourceState:'ready',data:{feedbackCatalog:{slots:doc.slots.map((s:{name:string})=>s.name)}},partCatalog,PartThumbnails:class{},pageRegionTable:()=>({}),readSetupChest:()=>null,setupChestWorld:null,animation:'',time:0,duration:0,axisInspection:false,rigDifference:null,video:null,repeat:true,
   pause(){player.pause();},clipMoved(){},leaveRigDifference(){},renderLayout(){},
   el(id:string){if(id==='rig-root')return root as never;if(!nodes.has(id))nodes.set(id,{hidden:false,value:''});return nodes.get(id)!;},select(id:string){return this.el(id);},
-  activeScene:()=>direction,takeSample,
+  activeScene:()=>direction,takeSample,boundSceneCamera:()=>null,selectedSceneCamera:()=>null,sceneCameraTrack:null,
   clipDuration(name:string){return loaded.assets.animations.find(a=>a.name===name)?.duration??0;},canRepeatIdle(){return scope.repeat;},
   drawRig(action:()=>void){action();drawTimes.push(scope.player.entry(0)?.animationTime??0);parts.present('single');},refreshAnimationInspection(){},renderTransport(){clock.value=String(scope.time);},renderCues(){},renderIdle(){},renderSequenceFrame(){},text(){},message(){},rendererStatus(){return {label:''};},errorText:String};
  const code=new Bun.Transpiler({loader:'ts'}).transformSync(lifecycle+'\n'+controls+'\n'+fragment('async function inspectControlTime(', 'async function decodedControlTime('));
@@ -134,7 +134,7 @@ test('#841 and #1090 label repeating direction and standalone clips by name in E
   animation:'look_around',
   duration:2,
   axisInspection:false,
-  activeScene:()=>scene,
+  activeScene:()=>scene,selectedSceneCamera:()=>null,
   input:()=>({checked:true}),
   text:(id:string,value:string)=>{if(id==='idle-state')setSourceText(idleStateEl,value);},
  };
