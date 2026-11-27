@@ -96,8 +96,3 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
   void refresh();
   return stop;
 }
-
-if (typeof document !== 'undefined' && typeof location !== 'undefined' && location.pathname === '/') {
-  const root = document.getElementById('app');
-  if (root && !root.childElementCount) mountOwnerWorkspace(root);
-}

@@ -6,6 +6,7 @@ import type {SceneInspection} from '../src/scene-inspection.ts';
 import type {JobProgressV3,RecordSource} from '../src/job-contract.ts';
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
 import {mountJobScreen,mediaReady,jobSubmissionRefusal} from './job-session.ts';
+import {mountOwnerWorkspace} from './owner-workspace.ts';
 import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding,type PartsIssue} from '../src/parts-comment.ts';
 import type {JobForm} from './job-session.ts';
 import type {JobRigMeshHost,JobRigMeshScreen} from './job-rig-screen.ts';
@@ -4255,4 +4256,4 @@ return {dispose:disposeScreen};
 }
 
 // Package entries mount directly; the live host invokes this same composition for each publication.
-if(!rigHost()){if(/^\/jobs\/[^/]+\/$/.test(location.pathname))void mountJobScreen(document.body);else mountRigScreen();}
+if(!rigHost()){const root=document.getElementById('app');if(root?.dataset.reviewScreen==='workspace')mountOwnerWorkspace(root);else if(/^\/jobs\/[^/]+\/$/.test(location.pathname))void mountJobScreen(document.body);else mountRigScreen();}

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { entryHtml } from '../src/build.ts';
+import { buildWeb, entryHtml } from '../src/build.ts';
 import { loadReview } from '../src/manifest.ts';
 import { startOpenWorkspace } from '../src/open-workspace.ts';
 import { startPartsServer } from '../src/parts-server.ts';
@@ -15,9 +15,10 @@ import { useTemporaryReviewState } from './helpers/temporary-review-state.ts';
 
 useTemporaryReviewState();
 
-/** Pinned from origin/main e4168864 before #655 slice 1 edits. */
+/** Pinned from origin/main e4168864 before #655 slice 1 edits; WORKSPACE_HTML_SHA256 updated in slice 2 for data-review-screen="workspace". */
 const UNMARKED_HTML_SHA256 = 'f015d5f6c5aa6a79c53374c343a4d6b2cca0401d82418f080fe816a925303f55';
 const PARTS_HTML_SHA256 = 'de4aff1ab2d730f9c01014150928aa59614953da79c83d94284faed7ff9679a7';
+const WORKSPACE_HTML_SHA256 = 'fb6ba2f861c171e9b975d07199d345f8d73a87b834a8d182616a00cc0235af68';
 const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 const RIG_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; frame-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
@@ -191,14 +192,14 @@ test('#655 slice 1: owner workspace serves pinned GET and HEAD HTML bytes and he
       status: 200,
       headers: {
         'cache-control': 'no-store',
-        'content-length': '291',
+        'content-length': '322',
         'content-security-policy': WORKSPACE_CSP,
         'content-type': 'text/html; charset=utf-8',
         'referrer-policy': 'no-referrer',
         'x-content-type-options': 'nosniff',
       },
-      byteLength: 291,
-      sha256: UNMARKED_HTML_SHA256,
+      byteLength: 322,
+      sha256: WORKSPACE_HTML_SHA256,
     };
     const expectedHead = {
       ...expectedGet,
@@ -209,13 +210,17 @@ test('#655 slice 1: owner workspace serves pinned GET and HEAD HTML bytes and he
     expect(await snapshot(await fetch(host.record.origin + '/'))).toEqual(expectedGet);
     expect(await snapshot(await fetch(host.record.origin + '/?lang=ko'))).toEqual(expectedGet);
     expect(await snapshot(await fetch(host.record.origin + '/', { method: 'HEAD' }))).toEqual(expectedHead);
+    const mainJs = await fetch(host.record.origin + '/main.js');
+    expect(mainJs.status).toBe(200);
+    expect(mainJs.headers.get('content-type')).toBe('text/javascript');
+    expect(sha256(new Uint8Array(await mainJs.arrayBuffer()))).toBe(sha256(new Uint8Array(await (await buildWeb()).arrayBuffer())));
   } finally {
     await host.stop();
   }
 });
 
 test('#655 slice 1: entryHtml owns web/index.html reads across all four routes and preserves custom assets and marker checks', async () => {
-  for (const screen of ['rig', 'job', 'workspace'] as const) {
+  for (const screen of ['rig', 'job'] as const) {
     const html = await entryHtml(screen);
     expect(sha256(new TextEncoder().encode(html))).toBe(UNMARKED_HTML_SHA256);
     expect(html).not.toContain('data-review-screen');
@@ -223,6 +228,9 @@ test('#655 slice 1: entryHtml owns web/index.html reads across all four routes a
   const partsHtml = await entryHtml('parts');
   expect(sha256(new TextEncoder().encode(partsHtml))).toBe(PARTS_HTML_SHA256);
   expect(partsHtml).toContain('<div id="app" data-review-screen="parts"></div>');
+  const workspaceHtml = await entryHtml('workspace');
+  expect(sha256(new TextEncoder().encode(workspaceHtml))).toBe(WORKSPACE_HTML_SHA256);
+  expect(workspaceHtml).toContain('<div id="app" data-review-screen="workspace"></div>');
 
   const customAssets = await entryHtml('parts', { script: 'custom.js', styles: 'custom.css' });
   expect(customAssets).toContain('href="custom.css"');

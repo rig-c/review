@@ -55,8 +55,6 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
   let record: WorkspaceRecord;
   let stopPromise: Promise<void> | undefined;
   const bundles = new Map<'single' | 'compare', Promise<Blob>>();
-  const ownerBundle = () => buildWeb('workspace');
-  let ownerScript: Promise<Blob> | undefined;
   const busy = () => registrations > 0 || activeStreams > 0 || [...targets.values()].some(target => target.context?.busy());
   const live = createLiveLifecycle({label: 'review workspace', graceMs: options.graceMs,
     unopenedTimeoutMs: options.idleMs, busy, stopServer: () => stop(), log: line => console.error(line)});
@@ -200,7 +198,9 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
       } else if (url.search && !['?lang=en', '?lang=ko'].includes(url.search)) {
         return refused('WORKSPACE_REQUEST_INVALID', 400);
       }
-      const body = url.pathname === '/main.js' ? await (ownerScript ??= ownerBundle())
+      let single = bundles.get('single');
+      if (url.pathname === '/main.js' && !single) {single = buildWeb(); bundles.set('single', single);}
+      const body = url.pathname === '/main.js' ? await single!
         : url.pathname === '/' ? await entryHtml('workspace') : await readFile(appRoot + 'web/styles.css');
       return new Response(request.method === 'HEAD' ? null : body, {headers: {...securityHeaders,
         'Content-Type': url.pathname.endsWith('.js') ? 'text/javascript' : url.pathname.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8'}});
