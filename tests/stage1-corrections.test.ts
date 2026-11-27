@@ -298,7 +298,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
  const {bindInspectorTabs}=await import('../web/view-controls.ts');
  const {modelBoneNames,readSetupPose}=await import('../web/setup-pose.ts');
  const {chestInputIds,chestRegionRows,chestRowId,evaluateChestForm}=await import('../web/chest-regions-tool.ts');
- const {LANDMARKS}=await import('../web/chest-editor.ts');
+ const {LANDMARKS,chestField}=await import('../web/chest-editor.ts');
  const {cropWorldMapping}=await import('../src/chest-regions.ts');
  const {meshEditSource}=await import('../web/mesh-editor.ts');
  const {
@@ -796,7 +796,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    sliceBetween('function drawRig(','function chooseAnimation('),
    sliceBetween('function stageLoadInputs(','async function initPlayer('),
    sliceBetween('function showInspector(','function bindInspector('),
-   sliceBetween('function chestField(','const environmentInputs='),
+   sliceBetween('function chestEvaluation(','const environmentInputs='),
    sliceBetween('function boneSetup(','async function exportMesh('),
    sliceBetween('async function undoApply(','(window as unknown as {rigReviewEditor:unknown}).rigReviewEditor='),
    sliceBetween('async function applyRetarget(','/** The handoff line (#101):'),
@@ -912,6 +912,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    cropWorldMapping,
    evaluateChestForm,
    chestInputIds,
+   chestField,
    chestRegionRows,
    chestRowId,
    LANDMARKS,

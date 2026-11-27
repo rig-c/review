@@ -6,11 +6,12 @@ import {chestPartFields,chestSeed,chestStatusForPart,seedFields,seedLandmarks,no
 
 async function chestPersistenceFixture(){
  const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
- const slice=(start:string,end:string)=>{const a=main.indexOf(start),b=main.indexOf(end,a);if(a<0||b<0)throw Error('CHEST_PERSISTENCE_SOURCE_MISSING');return main.slice(a,b);};
+ const editor=await readFile(new URL('../web/chest-editor.ts',import.meta.url),'utf8');
+ const slice=(start:string,end:string,source=main)=>{const a=source.indexOf(start),b=source.indexOf(end,a);if(a<0||b<0)throw Error('CHEST_PERSISTENCE_SOURCE_MISSING');return source.slice(a,b);};
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync([
   slice('const navigationBookmark=', '/** Read the SELECTED reference'),
   slice('async function setupPersistence(', '/** Setup\'s Chest regions tool:'),
-  slice('function chestField(', 'function chestEvaluation('),
+  slice('function chestField(', '/** The toggle is available', editor),
   slice('let chestFormPart:', '/** The handoff line (#101):'),
   slice('async function openStageCorrection(', '\n\nreturn {dispose:'),
  ].join('\n'));

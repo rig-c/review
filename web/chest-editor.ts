@@ -8,7 +8,7 @@ import {clampNonOverlapping,CHEST_CIRCLE_LIMITS,type ChestCircle,type CropWorldM
 import {BUST_DEFAULTS,deriveBust,parseBustSpec,type BustDerivation,type BustLandmarks,type BustSpec,type RigPoint} from '../src/chest-landmarks.ts';
 import type {JobChestLandmarkValue,JobPublishedChestLandmark} from '../src/job-contract.ts';
 import {canonicalJson} from '../src/canonical-json.ts';
-import {chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
+import {chestRowId,type ChestFieldReader,type ChestFieldValue} from './chest-regions-tool.ts';
 import {projectCircle,type OverlayPoint,type OverlayProject} from './rig-overlays.ts';
 import {textEntryFocused} from './view-controls.ts';
 import {onLanguageChange,setSourceAttribute,setSourceText,t,tr} from './i18n.ts';
@@ -21,6 +21,11 @@ export const bustInputId=(side:BustSide,field:typeof bustFields[number])=>`bust-
 export const CHEST_REGIONS_CLAMPED='CHEST_REGIONS_CLAMPED';
 const sideRow=(side:BustSide)=>side==='r'?0:1;
 const sideTag=(side:BustSide)=>side==='r'?'R':'L';
+
+export function chestField(id:string):ChestFieldValue|undefined {
+ const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;
+ return node?{value:node.value,...(node instanceof HTMLInputElement&&node.type==='checkbox'?{checked:node.checked}:{})}:undefined;
+}
 
 /** The toggle is available in both Setup and Animate so the overlay can be inspected and adjusted on the posed rig (#307). */
 export function chestEditVisible(inspector:string|undefined):boolean {return inspector==='rig'||inspector==='playback';}

@@ -16,7 +16,7 @@ import type { AnimationSourceOp } from '../src/animation-ops.ts';
 import { partBounds, type PartExplorer } from './part-selection.ts';
 import { bindInspectorBlocks, activeBlocksUI, restoreActiveBlocksUI, type InspectorBlocks } from './inspector-blocks.ts';
 import { sourceTextContent, tr } from './i18n.ts';
-import { bindChestEditor, canvasToCrop, bustLabel, bustSides, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, rowShape, type ChestEditor, type LandmarkKey } from './chest-editor.ts';
+import { bindChestEditor, canvasToCrop, bustLabel, bustSides, chestField, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, rowShape, type ChestEditor, type LandmarkKey } from './chest-editor.ts';
 import { chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from './chest-regions-tool.ts';
 import { chestRegionsBinding, cropWorldMapping, type CropWorldMapping } from '../src/chest-regions.ts';
 import { bindMeshEditor, meshEditSource, sha256Hex, type MeshEditor } from './mesh-editor.ts';
@@ -589,11 +589,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       for (const name of bones ?? []) node.append(option(name, name));
       node.disabled = !bones;
     }
-  }
-
-  function chestField(id: string) {
-    const node = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
-    return node ? { value: node.value, ...(node instanceof HTMLInputElement && node.type === 'checkbox' ? { checked: node.checked } : {}) } : undefined;
   }
 
   function chestEvaluation() {

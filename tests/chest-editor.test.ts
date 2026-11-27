@@ -1,12 +1,36 @@
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
-import {bindChestEditor,bustInputId,bustLabel,canvasToCrop,chestEditVisible,chestPoseOffset,circleFields,dragBust,editorStatus,hitBustHandle,mirrorBust,posedChestMapping,rowCircle,settleBust,type BustDrag} from '../web/chest-editor.ts';
+import {bindChestEditor,bustInputId,bustLabel,canvasToCrop,chestEditVisible,chestField,chestPoseOffset,circleFields,dragBust,editorStatus,hitBustHandle,mirrorBust,posedChestMapping,rowCircle,settleBust,type BustDrag} from '../web/chest-editor.ts';
 import {chestRowId,type ChestFieldValue} from '../web/chest-regions-tool.ts';
 import {seedFields} from '../web/rebuild-client.ts';
 
 const html=()=>(rigWorkspaceMarkup.replace('<div data-workspace-view-tools></div>',sharedViewToolsMarkup)+rigReviewDialogMarkup);
 const between=(text:string,start:string,end:string)=>{const a=text.indexOf(start),b=text.indexOf(end,a);if(a<0||b<a)throw new Error(`missing ${start} … ${end}`);return text.slice(a,b+end.length);};
+
+test('#1285 slice 3: chest fields preserve values and expose checked only for checkboxes',()=>{
+ class Input {
+  constructor(readonly value:string,readonly type:string,readonly checked:boolean){}
+ }
+ const fields=new Map<string,{value:string}>([
+  ['chest-bridges',new Input('on','checkbox',false)],
+  ['chest-0-cx',new Input('105','number',false)],
+  ['chest-0-bone',{value:'torso'}],
+ ]);
+ const globals=globalThis as Record<string,unknown>;
+ const previousDocument=globals.document,previousInput=globals.HTMLInputElement;
+ globals.document={getElementById:(id:string)=>fields.get(id)??null};
+ globals.HTMLInputElement=Input;
+ try{
+  expect(chestField('chest-bridges')).toEqual({value:'on',checked:false});
+  expect(chestField('chest-0-cx')).toEqual({value:'105'});
+  expect(chestField('chest-0-bone')).toEqual({value:'torso'});
+  expect(chestField('missing')).toBeUndefined();
+ }finally{
+  globals.document=previousDocument;
+  globals.HTMLInputElement=previousInput;
+ }
+});
 
 test('the three drag modes turn pointer deltas into source pixels through the camera scale',()=>{
  const from={cx:296,cy:650,r:26,band:42},base:Omit<BustDrag,'mode'>={side:'r',start:{x:100,y:100},centre:{x:100,y:100},from};

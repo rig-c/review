@@ -40,7 +40,7 @@ import {densityField,densityPath} from '../src/density-strip.ts';
 import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,setEntryValue,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
 import {worstLine} from '../src/readings.ts';
 import {chestOverlayPolygons,chestInputIds,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
-import {bindChestEditor,canvasToCrop,bustLabel,bustSides,chestPoseOffset,LANDMARKS,landmarkInputId,posedChestMapping,rowShape,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
+import {bindChestEditor,canvasToCrop,bustLabel,bustSides,chestField,chestPoseOffset,LANDMARKS,landmarkInputId,posedChestMapping,rowShape,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
 import {readSetupPose,modelBoneNames} from './setup-pose.ts';
@@ -2671,7 +2671,6 @@ async function setupPersistence(keepCameraOnResume=false):Promise<boolean> {
  return persistence.restored;
 }
 /** Setup's Chest regions tool: designation values, an overlay and a two-file client download. Nothing reaches the session's feedback or the package. */
-function chestField(id:string){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;return node?{value:node.value,...(node instanceof HTMLInputElement&&node.type==='checkbox'?{checked:node.checked}:{})}:undefined;}
 function chestEvaluation(){return evaluateChestForm(chestField,chestMapping,activeSetupBones());}
 function chestRegions():OverlayRegion[]{
  // #345: the chest overlay is drawn only while the Chest regions toggle is on.
