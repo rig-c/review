@@ -4269,11 +4269,9 @@ return {dispose:disposeScreen};
 
 // Package entries mount directly; the live host invokes the rig composition for each publication.
 if (!rigHost()) {
-  if (document.querySelector('template[data-workspace-header]')) mountCompareScreen();
-  else {
-    const root = document.getElementById('app');
-    if (root?.dataset.reviewScreen === 'workspace') mountOwnerWorkspace(root);
-    else if (/^\/jobs\/[^/]+\/$/.test(location.pathname)) void mountJobScreen(document.body);
-    else mountRigScreen();
-  }
+  const root = document.getElementById('app');
+  if (!root && document.querySelector('template[data-workspace-header]')) mountCompareScreen();
+  else if (root?.dataset.reviewScreen === 'workspace') mountOwnerWorkspace(root);
+  else if (/^\/jobs\/[^/]+\/$/.test(location.pathname)) void mountJobScreen(document.body);
+  else mountRigScreen();
 }
