@@ -26,7 +26,7 @@ test('direct opener preserves the malformed scene stale refusal', async () => {
  project.interview = {post: {items: [{id: 'post_composition', pending_options: {path: optionPath, sha256: digest(optionBytes)}}]}};
  await writeFile(join(projectRoot, 'project.json'), JSON.stringify(project));
  const error = await openReview({input: join(projectRoot, 'derived/review/v2/out'),
-  project: {root: projectRoot, version: 2, picksDir: 'reviewer-picks'}}, {stateDir: join(root, 'state'), direct: true})
+  project: {root: projectRoot, version: 2}}, {stateDir: join(root, 'state'), direct: true})
   .then(() => null, error => error as Error);
   expect(error?.message).toBe('INTERVIEW_OPTIONS_STALE: example-post-composition');
 });

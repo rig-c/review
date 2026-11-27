@@ -66,7 +66,7 @@ export async function createReviewRequestContext(p: ReviewPackage | null, option
   const joined = options.joined;
   if(!p&&(!joined||!('interviewOnly' in joined)))throw new Error(interviewUnavailable);
   if (joined && !options.capability) throw new Error('Joined interview requires an instance capability');
-  const interview = joined && interviewRoutes(joined.opened.root, joined.designation.picksDir, options.capability!,
+  const interview = joined && interviewRoutes(joined.opened.root, options.capability!,
     {...joined, sourceHash:p?.sourceHash??(joined as import('./joined-project.ts').JoinedInterview).sourceHash, version:joined.designation.version,draftId:joined.designation.draftId});
   const bundle=options.bundle??await buildWeb();
   const unchanged=()=>p?assertReviewUnchanged(p):joined!.assertCurrent();

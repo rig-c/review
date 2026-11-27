@@ -13,23 +13,22 @@ import { startServer } from '../src/server.ts';
 import { sessionFile, type Feedback } from '../src/session.ts';
 import { postLocalPackageFeedback } from './helpers/local-package-feedback.ts';
 
-test('joined open requires an explicit project, version and picks directory together', () => {
-  const flags = ['--project','create','--project-version','2','--picks-dir','picks'];
-  expect(parseOpenInputs(['out', ...flags]).project).toEqual({root:'create', version:2, picksDir:'picks'});
+test('joined open pairs version selectors with an explicit project', () => {
+  const flags = ['--project','create','--project-version','2'];
+  expect(parseOpenInputs(['out', ...flags]).project).toEqual({root:'create', version:2});
   expect(parseOpenInputs(['out'])).toEqual({input:'out'});
-  expect(() => parseOpenInputs(['out', ...flags.slice(0,-2)])).toThrow('OPEN_OPTION_INVALID --project');
+  expect(() => parseOpenInputs(['out', ...flags.slice(2)])).toThrow('OPEN_OPTION_INVALID --project');
   expect(() => parseOpenInputs(['out', ...flags, '--compare','other'])).toThrow('OPEN_OPTION_INVALID --project');
 });
 
 test('joined front allowlists only the existing bounded interview routes and no frame page', () => {
   for (const path of ['/stage-interview.html','/interview.js','/interview.css']) expect(frontRoute('single','GET',path)).toBeNull();
   expect(frontRoute('single','GET','/api/interview/image/' + 'a'.repeat(64) + '/0')).not.toBeNull();
-  expect(frontRoute('single','POST','/api/interview/picks')?.limit).toBe(256*1024);
+  for(const method of ['POST','PUT','PATCH','DELETE'])expect(frontRoute('single',method,'/api/interview/picks')).toBeNull();
   for (const path of ['/api/interview/project.json','/api/interview/image/../../project.json','/api/interview/image/' + 'a'.repeat(64) + '/00']) {
     expect(frontRoute('single','GET',path)).toBeNull();
   }
   expect(frontRoute('compare','GET','/api/interview')).toBeNull();
-  expect(frontRoute('single','PUT','/api/interview/picks')).toBeNull();
 });
 
 test('real Create v2 joins existing Stage 1 and 2 without changing the feedback address', async () => {
@@ -45,10 +44,9 @@ test('real Create v2 joins existing Stage 1 and 2 without changing the feedback 
     const extracted = Bun.spawnSync(['tar','-xzf','-','-C',root], {stdin:archive});
     if (extracted.exitCode !== 0) throw new Error(extracted.stderr.toString());
     expect(digest(await readFile(join(root,'project.json')))).toBe('e3ec008fc9d1b3977315343d5a59c5f2b8ed0fb932b06f85a1afb8c7b74697f1');
-    await mkdir(join(root,'reviewer-picks'),{recursive:true});
     await cp(root, other, {recursive:true});
     const input = join(root,'derived/review/v2/out');
-    const project = {root, version:2, picksDir:'reviewer-picks'};
+    const project = {root, version:2};
     const old = await loadOpenPackage({input}), connected = await loadOpenPackage({input, project});
     if (old.mode !== 'single' || connected.mode !== 'single' || !connected.joined) throw new Error('Expected joined single open');
     expect(connected.contentHash).toBe(old.contentHash);
@@ -98,7 +96,7 @@ test('real Create v2 joins existing Stage 1 and 2 without changing the feedback 
     expect(interview.questions.map(({set}: {set: unknown}) => set)).toEqual(
       connected.joined.opened.questions.map(({set}) => Object.fromEntries(Object.entries(set).filter(([key]) => key !== 'context'))),
     );
-    expect(interview.questions.every((q:{editable:boolean;saved:unknown}) => !q.editable && q.saved === null)).toBe(true);
+    expect(interview.questions.every((q:{editable:boolean}) => !q.editable && !Object.hasOwn(q,'saved'))).toBe(true);
     expect(interview.historical.map((answer:{verbatim:string}) => answer.verbatim)).toEqual(connected.joined.opened.historical.map(answer=>answer.verbatim));
     const parts = await (await get('/api/stage-parts')).json();
     const sourceParts = JSON.parse(await readFile(join(input,'parts.json'),'utf8'));
@@ -106,9 +104,9 @@ test('real Create v2 joins existing Stage 1 and 2 without changing the feedback 
     expect(parts.items.map((p:{name:string})=>p.name).sort()).toEqual(sourceParts.parts.map((p:{name:string})=>p.name).sort());
     // #726: the stage interview frame is deleted; the API above is the interview's only route.
     for (const path of ['/stage-interview.html?stageEmbed=1&lang=ko','/interview.js','/interview.css']) expect((await get(path)).status).toBe(404);
-    expect((await post({Origin:origin})).status).toBe(403);
-    expect((await post({Origin:'https://example.test','X-Review-Capability':capability})).status).toBe(403);
-    expect((await post({Origin:origin,'X-Review-Capability':capability})).status).toBe(400);
+    const removed = await post({Origin:origin,'X-Review-Capability':capability});
+    expect(removed.status).toBe(405);
+    expect(await removed.json()).toEqual({error:'Method not allowed'});
     expect((await (await get('/api/session')).json()).status).toBe('pending');
 
     // Alter only disposable copies. Restore the exact bytes even when a refusal assertion fails.
@@ -121,9 +119,9 @@ test('real Create v2 joins existing Stage 1 and 2 without changing the feedback 
         expect(stale.status).toBe(409);
         expect(await stale.json()).toEqual({error:'INTERVIEW_OPTIONS_STALE'});
       }
-      const stalePost = await post({Origin:origin,'X-Review-Capability':capability});
-      expect(stalePost.status).toBe(409);
-      expect(await stalePost.json()).toEqual({error:'INTERVIEW_OPTIONS_STALE'});
+      const removed = await post({Origin:origin,'X-Review-Capability':capability});
+      expect(removed.status).toBe(405);
+      expect(await removed.json()).toEqual({error:'Method not allowed'});
     } finally {await writeFile(image,rawImage);}
     try {
       await writeFile(projectPath,Buffer.concat([rawProject,Buffer.from('\n')]));
@@ -159,7 +157,7 @@ test('joined authored post maps the recorded package and isolates feedback and s
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-direction-'));
   const root = join(scratch, 'project'), stateDir = join(scratch, 'state');
   const input = join(root, 'derived/review/v1/out');
-  const flags = ['--project', root, '--project-version', '1', '--picks-dir', 'picks', '--post-version', '2'];
+  const flags = ['--project', root, '--project-version', '1', '--post-version', '2'];
   const inputs = parseOpenInputs([input, ...flags]);
   const capability = 'a'.repeat(64);
   let server: Awaited<ReturnType<typeof startServer>> | undefined;

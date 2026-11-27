@@ -9,11 +9,10 @@ import {join} from 'node:path';
 import {feedbackItemComments,feedbackTimingLabel,hasStageComment,projectComments,timeOnlyBasis} from '../src/stage-comment.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
-import {interviewPicksRecord} from '../web/interview-panel.ts';
 import {jobSubmissionRefusal} from '../web/job-session.ts';
 import {joinProject} from '../src/joined-project.ts';
 import {digest} from '../src/interview-project.ts';
-import {savePicks} from '../src/interview-picks.ts';
+import {readPicks,type Picks} from '../src/interview-picks.ts';
 import {createReviewRequestContext} from '../src/server.ts';
 import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
 import {
@@ -1154,7 +1153,7 @@ test('unsupported interview kind copy retains its named code and meaning in Engl
  }
 });
 
-test('#764 joined server route preserves planted notes through the real route, picks file and reloaded GET',async()=>{
+test('#764 legacy notes remain verbatim in files while the joined GET omits saved picks',async()=>{
  const capability='a'.repeat(64),origin='http://127.0.0.1:4321';
  for(const note of ['  planted\r\n원문 👁 e\u0301\n  ','',undefined]){
   const fixture=await interviewOpenFixture();let context:Awaited<ReturnType<typeof createReviewRequestContext>>|undefined;
@@ -1168,23 +1167,19 @@ test('#764 joined server route preserves planted notes through the real route, p
    const joined=joinProject(null,fixture.inputs.project),question=joined.opened.questions[0]!;
    expect(question.editable).toBe(true);expect(question.images).toHaveLength(0);
    const picks=question.set.asks.map(ask=>({ask:ask.id,option_id:ask.options.find(option=>option.kind==='value')!.id}));
-   const record=interviewPicksRecord(question.ref,picks,note,'2026-11-11T00:00:00Z');
-   if(note!==undefined)savePicks(join(fixture.root,'picks'),question,record);
+   const record:Picks={schema:'rig-review/interview-picks@1',set:question.ref,picks,
+    ...(note===undefined?{}:{note}),by:'user',at:'2026-11-11T00:00:00Z'};
+   const file=join(fixture.root,'picks',question.ref.sha256+'.json'),bytes=JSON.stringify(record)+'\n';
+   await writeFile(file,bytes);
    const inputs=['project.json','evidence/options.json','source.txt','source.svg'];
    const baseline=await Promise.all(inputs.map(path=>readFile(join(fixture.root,path))));
    context=await createReviewRequestContext(null,{joined,capability,stateDir:fixture.stateDir,bundle:new Blob(['// synthetic storage test'])});
-   const postResponse=await context.handle(new Request(origin+'/api/interview/picks',{
-    method:'POST',headers:{Origin:origin,'Content-Type':'application/json','X-Review-Capability':capability},body:JSON.stringify(record),
-   }),4321,{} as never);
-   expect(postResponse?.status).toBe(200);
-   const file=await readFile(join(fixture.root,'picks',question.ref.sha256+'.json'),'utf8'),stored=JSON.parse(file);
-   expect(stored.picks).toEqual(picks);expect(Object.hasOwn(stored,'note')).toBe(note!==undefined);expect(stored.note).toBe(note);
    const response=await context.handle(new Request(origin+'/api/interview'),4321,{} as never);
    expect(response?.status).toBe(200);
-   const reloaded=(await response!.json()).questions[0].saved;
-   expect(Object.hasOwn(reloaded,'note')).toBe(note!==undefined);expect(reloaded.note).toBe(note);
-   if(note!==undefined){expect(Buffer.from(stored.note)).toEqual(Buffer.from(note));expect(Buffer.from(reloaded.note)).toEqual(Buffer.from(note));}
-   else expect(file).not.toContain('"note":');
+   expect((await response!.json()).questions[0]).not.toHaveProperty('saved');
+   const stored=readPicks(join(fixture.root,'picks'),question)!;
+   expect(stored).toEqual(record);expect(Object.hasOwn(stored,'note')).toBe(note!==undefined);
+   expect(await readFile(file,'utf8')).toBe(bytes);
    expect(await Promise.all(inputs.map(path=>readFile(join(fixture.root,path))))).toEqual(baseline);
   }finally{context?.stop();await fixture.close();}
  }

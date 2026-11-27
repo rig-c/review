@@ -9,7 +9,7 @@ test('single-target open retains existing options and literal option values', ()
     ['out', '--animation', '--help'],
     ['out', '--animation', '--format'],
     ['out', '--config', 'config.json', '--parts', 'parts'],
-    ['out', '--project', 'project', '--project-version', '1', '--picks-dir', 'picks'],
+    ['out', '--project', 'project', '--project-version', '1'],
   ];
   for (const args of cases) expect(parseOpenTargets(args)).toEqual([parseOpenInputs([...args])]);
 });
@@ -105,9 +105,10 @@ test('foreground multi consumes option values and preserves single dispatch', ()
 });
 
 test('foreground multi refuses unsupported options, invalid ports and indexed overrides', () => {
-  for (const flag of ['--checkpoint', '--compare', '--direct', '--project', '--project-version', '--picks-dir']) {
+  for (const flag of ['--checkpoint', '--compare', '--direct', '--project', '--project-version']) {
     expect(() => parseForegroundTargets(['a', 'b', flag, 'value'])).toThrow('OPEN_OPTION_INVALID');
   }
+  expect(parseForegroundTargets(['a', 'b', '--picks-dir', 'picks'])).toBeNull();
   for (const port of ['0', '-1', '65536', 'no', '1.5']) {
     expect(() => parseForegroundTargets(['a', 'b', '--port', port])).toThrow('OPEN_OPTION_INVALID --port');
   }
