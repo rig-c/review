@@ -3,10 +3,11 @@ import { mkdtemp, readFile, realpath, rm, unlink, writeFile, symlink } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
-import { loadPartsView, partsViewJson, readPartMeshes, buildVerdict, verdictSource, saveVerdict, readVerdict, readPartsVerdictForCli, assertPartsUnchanged, type ViewItem } from '../src/parts-view.ts';
+import { loadPartsView, partsViewJson, readPartMeshes, buildVerdict, verdictSource, readVerdict, readPartsVerdictForCli, assertPartsUnchanged, type ViewItem } from '../src/parts-view.ts';
 import { meshCoverage, paintMesh, paintPart } from '../web/parts-render.ts';
 import { t } from '../web/i18n.ts';
 import { writeMeshPackage } from './helpers/parts-mesh-package.ts';
+import { seedPartsVerdictFixture } from './helpers/parts-verdict-fixture.ts';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 async function fixture() { const root = await mkdtemp(join(tmpdir(), 'parts-mesh-')); roots.push(root); await writeMeshPackage(root); return root; }
@@ -47,10 +48,10 @@ test('named planted malformed inputs reject unknown part, invalid UV, triangle, 
   expect(() => readPartMeshes(doc({ ...mesh, width: 0 }), item(), [])).toThrow('PARTS_MESH_SIZE');
   expect(() => readPartMeshes({ skins: { a: { a: { a: mesh } }, b: { a: { a: mesh } } } }, item(), [])).toThrow('PARTS_MESH_AMBIGUOUS');
 });
-test('mesh sign-off is source-bound; legacy mesh outcomes retain their validation and absent-mesh controls', async () => {
+test('historical mesh verdicts are source-bound; legacy mesh outcomes retain their validation and absent-mesh controls', async () => {
   const root = await fixture(), pkg = await loadPartsView(root);
   const parts = Object.fromEntries(pkg.items.map(i => [i.name, { outcome: 'clean', mesh: { outcome: 'clean' } }]));
-  const v = await saveVerdict(pkg, { status: 'approved', issues: [] });
+  const v = await seedPartsVerdictFixture(pkg, { status: 'approved', issues: [] });
   expect(v.schema).toBe('rig-review-parts-verdict/4');
   expect(v.issues).toEqual([]);
   expect(() => buildVerdict(pkg, {status: 'approved', parts}, '0')).toThrow('PARTS_VERDICT_INVALID');
@@ -127,7 +128,7 @@ test('16-bit raster comparison refuses a one-sample difference hidden by 8-bit d
   await expect(loadPartsView(root)).rejects.toThrow('PARTS_MESH_IMAGE_MISMATCH');
 });
 
-test('rig snapshot race: bind parsed A; reject B at approval, and planted late-hash mutant approves unseen B', async () => {
+test('rig snapshot race: bind parsed A and refuse replaced B; planted late-hash mutant misses the replacement', async () => {
   const root = await fixture(), rigPath = join(await realpath(root), 'rig.json'), a = await readFile(rigPath);
   const b = JSON.parse(a.toString('utf8')); b.skins.default.gap.gap.uvs[0] = .125;
   const bytesB = Buffer.from(JSON.stringify(b));
@@ -154,11 +155,11 @@ test('rig snapshot race: bind parsed A; reject B at approval, and planted late-h
           return { contents: source.replace(needle, 'files.push(await hashFile(rigPath));'), loader: 'ts' };
         });
       }});
-      const { loadPartsView, saveVerdict } = await import(${JSON.stringify(sourcePath)});
+      const { assertPartsUnchanged, loadPartsView } = await import(${JSON.stringify(sourcePath)});
       const pkg = await loadPartsView(${JSON.stringify(root)});
       const hash = pkg.files.find(f => f.abs === path).sha256;
       let refused = false;
-      try { await saveVerdict(pkg, {status:'approved', issues:[]}); }
+      try { await assertPartsUnchanged(pkg); }
       catch(e) { if (!String(e).includes('PARTS_VIEW_SOURCE_CHANGED')) throw e; refused = true; }
       console.log(JSON.stringify({swapped, reads, firstX:pkg.items[0].mesh.vertices[0],hash,refused}));
     `;
@@ -169,7 +170,7 @@ test('rig snapshot race: bind parsed A; reject B at approval, and planted late-h
     expect(out.swapped).toBe(true); expect(out.firstX).toBe(0);
     const hashA = new Bun.CryptoHasher('sha256').update(a).digest('hex'), hashB = new Bun.CryptoHasher('sha256').update(bytesB).digest('hex');
     expect(out.hash).toBe(mutant ? hashB : hashA); expect(out.refused).toBe(!mutant);
-    console.log(`RIG_RACE ${mutant ? 'PLANTED_LATE_HASH_UNSEEN_B_APPROVED' : 'PARSED_A_BOUND_REPLACED_B_REFUSED'}`);
+    console.log(`RIG_RACE ${mutant ? 'PLANTED_LATE_HASH_MISSED_REPLACEMENT' : 'PARSED_A_BOUND_REPLACED_B_REFUSED'}`);
   }
 });
 
@@ -204,7 +205,7 @@ async function runMeshReportSwapProbe(
         if (String(file) === trigger && !swapped) { swapped = true; await originalWrite(meshPath, replacement); }
         return data;
       }}));
-      const { loadPartsView, saveVerdict } = await import(${JSON.stringify(sourcePath)});
+      const { assertPartsUnchanged, loadPartsView } = await import(${JSON.stringify(sourcePath)});
       const pkg = await loadPartsView(${JSON.stringify(root)});
       const loadReads = reads, loadMeshReadsAfterSwap = meshReadsAfterSwap;
       const flagEntry = pkg.flagFiles.find(f => f.abs === meshPath);
@@ -212,7 +213,7 @@ async function runMeshReportSwapProbe(
       const faintCount = pkg.flags.filter(f => f.kind === 'faint').length;
       const gapFigures = pkg.items.find(i => i.name === 'gap')?.mesh?.figures ?? null;
       let refused = false;
-      try { await saveVerdict(pkg, { status: 'approved', issues: [] }); }
+      try { await assertPartsUnchanged(pkg); }
       catch (e) { if (!String(e).includes('PARTS_VIEW_SOURCE_CHANGED')) throw e; refused = true; }
       console.log(JSON.stringify({
         swapped, reads: loadReads, meshReadsAfterSwap: loadMeshReadsAfterSwap, faintCount,
@@ -443,7 +444,7 @@ test('#626: loadPartsView on mixed inline + generator rig preserves inline mesh 
   ]);
 
   // Legacy verdict mesh outcome remains unavailable on generator-mesh part (hasMesh is false).
-  const saved = await saveVerdict(pkg, { status: 'approved', issues: [] });
+  const saved = await seedPartsVerdictFixture(pkg, { status: 'approved', issues: [] });
   const { issues: _issues, ...core } = saved;
   await writeFile(pkg.verdictPath, JSON.stringify({
     ...core, schema: 'rig-review-parts-verdict/2', status: 'pending',

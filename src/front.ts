@@ -1,6 +1,5 @@
 import {interviewRequest} from './interview-routes.ts';
 import {picksLimit} from './interview-picks.ts';
-import {stageVerdictLimit} from './stage-parts.ts';
 import {LIVE_PATH} from './live-lifecycle.ts';
 import {LOCAL_COMMENTS_ROUTE,PACKAGE_COMMENTS_BODY_LIMIT} from './local-comments.ts';
 export const defaultFrontPort=4318; // Foreground `review <dir>` keeps 4317.
@@ -14,7 +13,6 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  if((mode==='single'?/^\/api\/stage-parts(?:\/(?:image|page)\/\d+)?$/:/^\/api\/compare\/(?:a|b)\/stage-parts(?:\/(?:image|page)\/\d+)?$/).test(path))return read?get:null;
  if(mode==='single'){
   if(path===LOCAL_COMMENTS_ROUTE)return method==='POST'?{...get,mutation:true,limit:PACKAGE_COMMENTS_BODY_LIMIT}:null;
-  if(path==='/api/stage-parts/verdict')return method==='POST'?{...get,mutation:true,limit:stageVerdictLimit}:null;
   if(path==='/api/stage-parts/export/json'||path==='/api/stage-parts/export/issue')return read?get:null;
   if(interviewRequest(path))return path==='/api/interview/picks'?
    method==='POST'?{...get,mutation:true,limit:picksLimit}:null:method==='GET'?get:null;

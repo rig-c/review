@@ -6,11 +6,12 @@ import {createHash} from 'node:crypto';
 import {mkdir, mkdtemp, open, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {tmpdir} from 'node:os';
-import {resolve, join, dirname} from 'node:path';
+import {resolve, join} from 'node:path';
 import {LOCAL_COMMENTS_ROUTE} from '../src/local-comments.ts';
-import {loadPartsView, readVerdict, saveVerdict, saveVerdictWithReceipt, exportPartsVerdict, verdictSource} from '../src/parts-view.ts';
+import {loadPartsView, readVerdict, exportPartsVerdict, verdictSource} from '../src/parts-view.ts';
 import {startPartsServer} from '../src/parts-server.ts';
 import {writePartsPackage} from './helpers/parts-package.ts';
+import {seedPartsVerdictFixture} from './helpers/parts-verdict-fixture.ts';
 
 const roots: string[] = [];
 const children = new Set<ChildProcessWithoutNullStreams>();
@@ -101,8 +102,11 @@ async function launch(args: string[]) {
 
 test('#568 default JSON reads the ordinary verdict plus null attribution and the raw saved digest', async () => {
   const pkg = await fixture();
-  const saved = await saveVerdict(pkg, input);
+  const saved = await seedPartsVerdictFixture(pkg, input);
   const bytes = await readFile(pkg.verdictPath);
+  const stored = JSON.parse(bytes.toString());
+  expect(stored.schema).toBe('rig-review-parts-verdict/4');
+  expect(Object.hasOwn(stored, 'by')).toBe(false);
   const result = await cli([pkg.root, '--format', 'json']);
   expect({exit: result.exit, stderr: result.stderr}).toEqual({exit: 0, stderr: ''});
   expect(JSON.parse(result.stdout)).toEqual({...saved, by: null, savedFileSha256: digest(bytes)});
@@ -111,7 +115,7 @@ test('#568 default JSON reads the ordinary verdict plus null attribution and the
 
 test('#568 historical /1 and /2 ignored extensions and /3 named provenance remain immutable', async () => {
   const pkg = await fixture();
-  const core = await saveVerdict(pkg, input);
+  const core = await seedPartsVerdictFixture(pkg, input);
   const {issues: _issues, ...legacyCore} = core;
   const parts = Object.fromEntries(pkg.items.map(item => [item.name, {outcome: 'clean', note: 'checked', flags: pkg.flags.filter(flag => flag.item === item.name).map(flag => flag.id)}]));
   for (const schema of ['rig-review-parts-verdict/1', 'rig-review-parts-verdict/2']) {
@@ -137,7 +141,7 @@ test('#568 historical /1 and /2 ignored extensions and /3 named provenance remai
 
 test('#568 named /4 verdicts retain attribution in HTTP and CLI reads', async () => {
   const pkg = await fixture(), by = '  나루 "declared"\u2028\u2029  ';
-  const {verdict} = await saveVerdictWithReceipt(pkg, {...input, by: 'ignored'}, undefined, by);
+  const verdict = await seedPartsVerdictFixture(pkg, input, by);
   const bytes = await readFile(pkg.verdictPath);
   const server = await startPartsServer(pkg, {port: 0});
   try {
@@ -156,16 +160,10 @@ test('#568 named /4 verdicts retain attribution in HTTP and CLI reads', async ()
     expect(issue.exit).toBe(0);
     expect(issue.stdout).toBe(exportPartsVerdict(verdict, 'issue'));
   } finally { server.stop(true); }
-
-  await saveVerdict(pkg, {...input, by});
-  const stored = JSON.parse(await readFile(pkg.verdictPath, 'utf8'));
-  expect(stored.schema).toBe('rig-review-parts-verdict/4');
-  expect(Object.hasOwn(stored, 'by')).toBe(false);
-  expect(JSON.parse((await cli([pkg.root, '--format', 'json'])).stdout).by).toBeNull();
 });
 
-test('#568 malformed named records retain PARTS_VERDICT_INVALID and cannot be reset by save', async () => {
-  const pkg = await fixture(), core = await saveVerdict(pkg, input);
+test('#568 malformed named records retain PARTS_VERDICT_INVALID and their original bytes', async () => {
+  const pkg = await fixture(), core = await seedPartsVerdictFixture(pkg, input);
   const {issues: _issues, ...legacyCore} = core;
   const parts = Object.fromEntries(pkg.items.map(item => [item.name, {outcome: 'clean', note: 'checked', flags: pkg.flags.filter(flag => flag.item === item.name).map(flag => flag.id)}]));
   for (const schema of ['rig-review-parts-verdict/3', 'rig-review-parts-verdict/4']) {
@@ -177,7 +175,6 @@ test('#568 malformed named records retain PARTS_VERDICT_INVALID and cannot be re
       const result = await cli([pkg.root, '--format', 'json']);
       expect({exit: result.exit, stdout: result.stdout}).toEqual({exit: 1, stdout: ''});
       expect(result.stderr).toContain('PARTS_VERDICT_INVALID');
-      await expect(saveVerdict(pkg, input)).rejects.toThrow('PARTS_VERDICT_INVALID');
       expect(await readFile(pkg.verdictPath)).toEqual(bytes);
     }
   }
@@ -230,7 +227,7 @@ test('#568 missing, corrupt, invalid-date, stale files and stale flags keep exis
   const pkg = await fixture();
   let result = await cli([pkg.root, '--format', 'json']);
   expect(result.exit).toBe(1);expect(result.stdout).toBe('');expect(result.stderr).toContain('PARTS_VERDICT_UNAVAILABLE');
-  const core = await saveVerdict(pkg, input);
+  const core = await seedPartsVerdictFixture(pkg, input);
   for (const [text, code] of [
     ['{', 'PARTS_VERDICT_INVALID'],
     [JSON.stringify({...core, updatedAt: 'invalid date'}), 'PARTS_VERDICT_INVALID'],
@@ -244,19 +241,9 @@ test('#568 missing, corrupt, invalid-date, stale files and stale flags keep exis
   }
 });
 
-test('#568 shared durable writer returns a normalized core and an independently hashed named-buffer receipt', async () => {
-  const pkg = await fixture();
-  const {verdict, receipt} = await saveVerdictWithReceipt(pkg, {...input, by: 'ignored'}, undefined, ' reviewer ');
-  const bytes = await readFile(pkg.verdictPath);
-  expect(receipt).toEqual({verdictPath: pkg.verdictPath, sha256: digest(bytes), status: 'approved'});
-  expect(verdict.schema).toBe('rig-review-parts-verdict/4');
-  expect(verdict.by).toBe(' reviewer ');
-  expect(JSON.parse(bytes.toString()).by).toBe(' reviewer ');
-});
-
 test('#568 default CLI parses and hashes one saved snapshot and rechecks input freshness', async () => {
   const pkg = await fixture();
-  await saveVerdictWithReceipt(pkg, input, undefined, 'snapshot A');
+  await seedPartsVerdictFixture(pkg, input, 'snapshot A');
   const bytes = await readFile(pkg.verdictPath), other = JSON.parse(bytes.toString());
   other.by = 'snapshot B';Object.assign(other, await partsIssueSubmission(pkg));
   const replacement = Buffer.from(JSON.stringify(other)).toString('base64');
@@ -294,88 +281,9 @@ test('#568 default CLI parses and hashes one saved snapshot and rechecks input f
   expect(stale.stderr).toContain('SAVED_SNAPSHOT_READS=1');
 });
 
-test('#568 filesystem write, file-fsync, rename and directory-fsync failures retain named errors and cleanup', async () => {
-  const pkg = await fixture(), original = await saveVerdict(pkg, input);
-  const bytes = await readFile(pkg.verdictPath);
-  const fixes = await partsIssueSubmission(pkg);
-  for (const phase of ['mkdir', 'open', 'write', 'file-fsync', 'rename', 'directory-fsync']) {
-    await writeFile(pkg.verdictPath, bytes);
-    const result = await probe(`
-      import {mock} from 'bun:test';
-      import * as fs from 'node:fs/promises';
-      const originalOpen = fs.open, originalRename = fs.rename, originalMkdir = fs.mkdir;
-      const phase = ${JSON.stringify(phase)};
-      const destination = ${JSON.stringify(pkg.verdictPath)}, destinationParent = ${JSON.stringify(dirname(pkg.verdictPath))};
-      const fail = () => {throw Object.assign(new Error('planted ENOSPC'), {code: 'ENOSPC'});};
-      mock.module('node:fs/promises', () => ({...fs,
-        mkdir: async (path, ...args) => {if (phase === 'mkdir' && String(path) === destinationParent) fail();return originalMkdir(path, ...args);},
-        rename: async (from, to) => {if (phase === 'rename' && String(to) === destination) fail();return originalRename(from, to);},
-        open: async (path, ...args) => {
-          const temporary = String(path).startsWith(destination + '.') && String(path).endsWith('.tmp');
-          const directory = String(path) === destinationParent;
-          if (temporary && phase === 'open') fail();
-          const handle = await originalOpen(path, ...args);
-          if (!temporary && !directory) return handle;
-          return {
-            writeFile: async (...args) => {if (temporary && phase === 'write') fail();return handle.writeFile(...args);},
-            sync: async () => {
-              if (temporary && phase === 'file-fsync' || directory && phase === 'directory-fsync') fail();
-              return handle.sync();
-            },
-            close: () => handle.close(),
-          };
-        },
-      }));
-      const {loadPartsView, saveVerdict} = await import(${JSON.stringify(resolve('src/parts-view.ts'))});
-      const pkg = await loadPartsView(${JSON.stringify(pkg.root)});
-      try {await saveVerdict(pkg, ${JSON.stringify(fixes)});throw new Error('fault did not fire');}
-      catch (error) {console.log(JSON.stringify({error: error.message}));}
-      console.log(JSON.stringify({temporaryFiles: (await fs.readdir(pkg.root)).filter(name => name.endsWith('.tmp'))}));
-    `);
-    expect({exit: result.exit, stderr: result.stderr}).toEqual({exit: 0, stderr: ''});
-    const rows = result.stdout.trim().split('\n').map(row => JSON.parse(row));
-    expect(rows[0].error).toContain('PARTS_VERDICT_WRITE_FAILED:');
-    expect(rows[0].error).toContain('ENOSPC');
-    expect(rows[1].temporaryFiles).toEqual([]);
-    if (phase === 'directory-fsync') {
-      expect(JSON.parse(await readFile(pkg.verdictPath, 'utf8')).status).toBe('changes-requested');
-    } else expect(await readFile(pkg.verdictPath)).toEqual(bytes);
-  }
-  expect(original.status).toBe('approved');
-});
-
-test('#568 native fsync order covers the saved file and every newly created directory entry', async () => {
-  const pkg = await fixture(), destination = join(pkg.root, 'new-output', 'nested', 'verdict.json');
-  const result = await probe(`
-    import {mock} from 'bun:test';
-    import * as fs from 'node:fs/promises';
-    const originalOpen = fs.open, originalRename = fs.rename;
-    const operations = [];
-    mock.module('node:fs/promises', () => ({...fs,
-      open: async (path, ...args) => {
-        const handle = await originalOpen(path, ...args);
-        return {
-          writeFile: (...args) => handle.writeFile(...args),
-          sync: async () => {await handle.sync();operations.push(String(path).endsWith('.tmp') ? 'file fsync' : String(path));},
-          close: () => handle.close(),
-        };
-      },
-      rename: async (...args) => {await originalRename(...args);operations.push('rename');},
-    }));
-    const {loadPartsView, saveVerdictWithReceipt} = await import(${JSON.stringify(resolve('src/parts-view.ts'))});
-    const pkg = await loadPartsView(${JSON.stringify(pkg.root)}, {verdict: ${JSON.stringify(destination)}});
-    const saved = await saveVerdictWithReceipt(pkg, ${JSON.stringify(input)});
-    console.log(JSON.stringify({operations, receipt: saved.receipt}));
-  `);
-  expect({exit: result.exit, stderr: result.stderr}).toEqual({exit: 0, stderr: ''});
-  const output = JSON.parse(result.stdout);
-  expect(output.operations).toEqual(['file fsync', 'rename', join(pkg.root, 'new-output', 'nested'), join(pkg.root, 'new-output'), pkg.root]);
-  expect(output.receipt).toEqual({verdictPath: destination, sha256: digest(await readFile(destination)), status: 'approved'});
-});
-
-test('#568 shared writer preserves long nonblank reviewer names in saved /4 reads', async () => {
+test('#568 historical /4 reads preserve long nonblank reviewer names and the raw digest', async () => {
   const pkg = await fixture(), by = '  ' + '나루'.repeat(6000) + '  ';
-  await saveVerdictWithReceipt(pkg, input, undefined, by);
+  await seedPartsVerdictFixture(pkg, input, by);
   const bytes = await readFile(pkg.verdictPath);
   expect(JSON.parse(bytes.toString()).by).toBe(by);
   const read = await cli([pkg.root, '--format', 'json']);
@@ -383,10 +291,10 @@ test('#568 shared writer preserves long nonblank reviewer names in saved /4 read
   expect(JSON.parse(read.stdout)).toMatchObject({by, savedFileSha256: digest(bytes)});
 });
 
-test('#568 shared writer preserves the filesystem-limit destination and its raw digest', async () => {
+test('#568 CLI reads a historical verdict near the filesystem path limit and hashes its raw bytes', async () => {
   const pkg = await fixture(), suffix = '.00000000-0000-0000-0000-000000000000.tmp';
-  expect(Buffer.byteLength(suffix)).toBe(41);
-  const probeTemporary = async (path: string) => {
+  // Leave the filename headroom that a historically saved verdict needed.
+  const probeLegacyPath = async (path: string) => {
     const handle = await open(path + suffix, 'wx');
     await handle.close();await rm(path + suffix);
   };
@@ -395,7 +303,7 @@ test('#568 shared writer preserves the filesystem-limit destination and its raw 
   let directoryBound = false;
   for (let depth = 0; depth < 128; depth++) {
     const next = join(directory, '\x01'.repeat(120));
-    try {await mkdir(next);await probeTemporary(join(next, 'v'));directory = next;}
+    try {await mkdir(next);await probeLegacyPath(join(next, 'v'));directory = next;}
     catch (error) {
       expect((error as NodeJS.ErrnoException).code).toBe('ENAMETOOLONG');
       directoryBound = true;break;
@@ -405,7 +313,7 @@ test('#568 shared writer preserves the filesystem-limit destination and its raw 
   let destination = '', firstRejectedBytes = 0;
   for (let length = 1; length <= 4096; length++) {
     const candidate = join(directory, '\x01'.repeat(length));
-    try {await probeTemporary(candidate);destination = candidate;}
+    try {await probeLegacyPath(candidate);destination = candidate;}
     catch (error) {
       expect((error as NodeJS.ErrnoException).code).toBe('ENAMETOOLONG');
       firstRejectedBytes = Buffer.byteLength(candidate + suffix);break;
@@ -414,11 +322,13 @@ test('#568 shared writer preserves the filesystem-limit destination and its raw 
   expect(destination.length).toBeGreaterThan(0);
   expect(firstRejectedBytes).toBe(Buffer.byteLength(destination + suffix) + 1);
   const view = await loadPartsView(pkg.root, {verdict: destination});
-  const {receipt} = await saveVerdictWithReceipt(view, input);
-  expect(receipt).toEqual({verdictPath: destination, sha256: digest(await readFile(destination)), status: 'approved'});
+  expect(view.verdictPath).toBe(destination);
+  const saved = await seedPartsVerdictFixture(view, input);
+  const bytes = await readFile(destination);
   console.log(JSON.stringify({control: 'filesystem-limit-destination', pathBytes: Buffer.byteLength(destination),
-    temporaryPathBytes: Buffer.byteLength(destination + suffix), firstRejectedBytes}));
+    legacyPathBytes: Buffer.byteLength(destination + suffix), firstRejectedBytes}));
   const read = await cli([pkg.root, '--verdict', destination, '--format', 'json']);
   expect({exit: read.exit, stderr: read.stderr}).toEqual({exit: 0, stderr: ''});
-  expect(JSON.parse(read.stdout)).toMatchObject({by: null, savedFileSha256: digest(await readFile(destination))});
+  expect(JSON.parse(read.stdout)).toEqual({...saved, by: null, savedFileSha256: digest(bytes)});
+  expect(await readFile(destination)).toEqual(bytes);
 });

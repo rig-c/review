@@ -330,8 +330,9 @@ A malformed saved record refuses with `LOCAL_COMMENTS_FILE_INVALID` and is
 preserved. Existing session statuses and parts verdicts remain readable
 through their existing exports. Standalone parts no longer accepts
 `POST /api/parts/verdict`, and its CLI no longer emits
-`RIG_REVIEW_PARTS_SAVED` stdout records. The joined stage-parts writer keeps
-its own route.
+`RIG_REVIEW_PARTS_SAVED` stdout records. Review #1318 retired the joined
+`POST /api/stage-parts/verdict` writer. Joined Stage 1 inspection continues to
+read source-bound historical verdicts.
 
 ## Read-only rig-pose report markers
 
@@ -871,9 +872,16 @@ Stage comment capture refuses unrecorded authoring effects, by `COMMENT_UNAPPLIE
 
 ### Parts pointed evidence
 
-The joined stage-parts writer saves `rig-review-parts-verdict/4` with pointed `issues` (`rig-review-parts-comment/2`, carrying `parts: [{name, imageHash}]` and item or assembled view geometry) while preserving historical `rig-review-parts-verdict/1`, `rig-review-parts-verdict/2`, `rig-review-parts-verdict/3` and `rig-review-parts-comment/1` records on read (existing verdict/1 records read with no issues, `/2` and `/3` records with only comment-backed flags convert to `/4`, and `/1`..`/3` records with bare flagged part or mesh notes surface as read-only legacy verdicts with `PARTS_VERDICT_LEGACY_FORMAT`). This identity comes from the existing
-parts verdict source digest and actual original PNG SHA-256, without a fabricated review
-manifest id, revision or compiled model. The rig's `rig-review-comment/1` schema stays closed.
+`rig-review-parts-verdict/4` carries pointed `issues` using
+`rig-review-parts-comment/2`, with `parts: [{name, imageHash}]` and item or
+assembled view geometry. Historical `/1` records read with no issues, and
+`/2` and `/3` records with only comment-backed flags convert to `/4` on read.
+Historical `/1` through `/3` records with bare flagged part or mesh notes
+surface as read-only legacy verdicts with `PARTS_VERDICT_LEGACY_FORMAT`.
+Historical `rig-review-parts-comment/1` evidence remains readable. The parts
+verdict source digest and exact original PNG SHA-256 supply the source and
+image identities independently of any review manifest or compiled model.
+The rig's `rig-review-comment/1` schema stays closed.
 See [the parts contract and validation instruments](PARTS_VIEW.md#pointed-parts-comments).
 
 ### Interview-stage project subject
@@ -919,12 +927,13 @@ Opening another chest-capable part rebinds both region rows and landmarks to
 that part's config and kept-region seed. Reopening the same part keeps its edits.
 
 The draft response adds `draft:{label,buildId,inspectionSourceHash,mappings,evidence}`
-to the existing parts-view response; `mappings` names the exact part,
-skin/slot/attachment and mesh counts. It includes no inherited verdict or
-submission authority. Raster/crop, float32 UV, triangle and source-hash checks
-bind the displayed geometry. `evidence` is the actual applied producer job, not
-a guessed correction-export object. A changed original refuses; scratch is never
-quietly repinned. Every scratch read revalidates the recorded revision and build.
+to the existing parts-view response. `mappings` names the exact part,
+skin/slot/attachment and mesh counts. Raster/crop, float32 UV, triangle and
+source-hash checks bind the displayed geometry. `evidence` is the actual applied
+producer job. A changed original refuses, and every scratch read revalidates
+the recorded revision and build. The inspected joined build retains its
+source-bound historical verdict metadata and reads matching verdicts from the
+designated `--parts-verdict-dir`. Scratch builds carry no inherited verdict.
 
 New `rig-review-applied/1` (Chest regions) and `/3` (Edit Mesh) records add optional
 `check` and `stageInputHash`. Chest records also support `files` and `mesh`, as
@@ -1030,7 +1039,7 @@ Packages without authored direction continue to use their explicit legacy
 selector. Direction patch Apply is unavailable. Existing supported rig and
 draft Apply records keep their producer and result evidence.
 
-When `--project` and `--project-draft` select a recorded draft whose project entry declares `config`, `parts`, `rig` and `check` directories, `/api/rebuild` exposes `draft` metadata with the recorded draft id, producer provenance (`draft.producer`) and input paths alongside the resolved installed `producer` and `compiler` without synthesizing a package `reviewedSource.handoff`. Rebuild status resolves the installed producer and compiler via `resolveProducer` and its operation-capability floors (`REMESH_SINCE` for `remesh --mesh`, `REMESH_DELTA_SINCE` for `remesh --delta`, and `EDIT_PRODUCER_MISMATCH` when a config patch's `producer` differs from the installed producer), without an equality version gate against `draft.producer`. While the draft is editable (`project.stage` in `parts` or `parts-review` without an effective `parts-review` sign-off, and not `--view-only`), `/api/rebuild` accepts region rebuilds, `remesh` config patches and mesh deltas in scratch, and refuses whole-rig, retarget and animation operations with `STAGE_DRAFT_OPERATION`. When the draft is not editable or `--view-only` is set, `/api/rebuild` and `/api/stage-parts` report the draft as inspection-only (`PARTS_VERDICT_READ_ONLY: Stage 1 draft is inspection-only` and `draft.inspectionOnly: true`) and refuse rebuild mutations and scratch Stage 1 build reads (`STAGE_DRAFT_UNAVAILABLE`). Separately, saving or exporting the Stage 1 parts verdict requires an editable draft, `--parts-verdict-dir`, no `--view-only`, and the `inspected` build (`PARTS_VERDICT_READ_ONLY` otherwise).
+When `--project` and `--project-draft` select a recorded draft whose project entry declares `config`, `parts`, `rig` and `check` directories, `/api/rebuild` exposes `draft` metadata with the recorded draft id, producer provenance (`draft.producer`) and input paths alongside the resolved installed `producer` and `compiler` without synthesizing a package `reviewedSource.handoff`. Rebuild status resolves the installed producer and compiler via `resolveProducer` and its operation-capability floors (`REMESH_SINCE` for `remesh --mesh`, `REMESH_DELTA_SINCE` for `remesh --delta`, and `EDIT_PRODUCER_MISMATCH` when a config patch's `producer` differs from the installed producer), without an equality version gate against `draft.producer`. While the draft is editable (`project.stage` in `parts` or `parts-review` without an effective `parts-review` sign-off, and not `--view-only`), `/api/rebuild` accepts region rebuilds, `remesh` config patches and mesh deltas in scratch, and refuses whole-rig, retarget and animation operations with `STAGE_DRAFT_OPERATION`. When the draft is not editable or `--view-only` is set, `/api/rebuild` and `/api/stage-parts` report the draft as inspection-only (`PARTS_VERDICT_READ_ONLY: Stage 1 draft is inspection-only` and `draft.inspectionOnly: true`) and refuse rebuild mutations and scratch Stage 1 build reads (`STAGE_DRAFT_UNAVAILABLE`). Before #1318, the Stage 1 verdict writer required an editable draft, `--parts-verdict-dir`, and the `inspected` build, and refused other cases with `PARTS_VERDICT_READ_ONLY`.
 
 A supported made item must match the server-owned settled Apply seal and
 retained scratch model and pages when the item is added or changed and on

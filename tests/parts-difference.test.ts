@@ -6,10 +6,11 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {PNG} from 'pngjs';
 import {differencePixels,parsePartsComparison} from '../src/parts-comparison.ts';
-import {loadPartsView,partsDifference,saveVerdict,readVerdict,exportPartsVerdict,assertPartsUnchanged,verdictSource} from '../src/parts-view.ts';
+import {loadPartsView,partsDifference,readVerdict,exportPartsVerdict,assertPartsUnchanged,verdictSource} from '../src/parts-view.ts';
 import {preparePartsComment} from '../src/parts-comment-crops.ts';
 import {candidate} from './helpers/parts-comments-package.ts';
 import {writeDifferencePackage} from './helpers/parts-difference-package.ts';
+import {seedPartsVerdictFixture} from './helpers/parts-verdict-fixture.ts';
 import {resolvedCropPath} from '../src/comment-crops.ts';
 import {LOCAL_COMMENTS_ROUTE} from '../src/local-comments.ts';
 const fixture=async(fn:(root:string)=>Promise<void>)=>{const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'difference-'));try{await fn(root);}finally{await rm(root,{recursive:true,force:true});}};
@@ -41,9 +42,9 @@ test('#390 declared raster refuses hash, size, provenance, encoding, alpha, path
  await writeFile(raster,original);await declaration(base.painting_in_rig);const pkg=await loadPartsView(root);await writeFile(raster,Buffer.from('changed'));await expect(assertPartsUnchanged(pkg)).rejects.toThrow('PARTS_VIEW_SOURCE_CHANGED');
  delete base.painting_in_rig;await writeFile(manifest,JSON.stringify(base));const old=await loadPartsView(root);await expect(partsDifference(old,0,0,false)).rejects.toThrow('PARTS_DIFFERENCE_UNAVAILABLE');
 }));
-test('#390 difference comment save/reopen/JSON/issue preserves state and original native RGBA',()=>fixture(async root=>{
+test('#390 reopening a historical difference comment preserves state and original native RGBA in both exports',()=>fixture(async root=>{
  const f=await writeDifferencePackage(root,true),pkg=await loadPartsView(root),before=await Promise.all(pkg.files.map(f=>readFile(f.abs))),c=candidate(pkg);c.parts=[{name:'body',imageHash:c.parts[0]!.imageHash}];if(!c.imageRegion)throw new Error('Expected item region');c.rigRegion={...c.imageRegion,x:6,y:7};c.view.comparison={mode:'difference',opacity:.5,threshold:16};c.view.alpha=false;
- const prepared=await preparePartsComment(pkg,c);await saveVerdict(pkg,{status:'changes-requested',issues:[prepared]});
+ const prepared=await preparePartsComment(pkg,c);await seedPartsVerdictFixture(pkg,{status:'changes-requested',issues:[prepared]});
  const saved=(await readVerdict(await loadPartsView(root))).verdict!;expect(saved.issues[0]).toEqual(prepared);
  const native=PNG.sync.read(await readFile(resolvedCropPath(prepared.nativeCrop!.path))),r=c.imageRegion;
  for(let y=0;y<r.height;y++)expect(native.data.subarray(y*r.width*4,(y+1)*r.width*4)).toEqual(f.part.data.subarray(((r.y+y)*20+r.x)*4,((r.y+y)*20+r.x+r.width)*4));
@@ -52,7 +53,7 @@ test('#390 difference comment save/reopen/JSON/issue preserves state and origina
 
 test('#390 changed declared operand refuses API load, difference, crop, comment send and export before reuse',()=>fixture(async root=>{
  await writeDifferencePackage(root,true);const pkg=await loadPartsView(root),c=candidate(pkg);c.parts=[{name:'body',imageHash:c.parts[0]!.imageHash}];if(!c.imageRegion)throw new Error('Expected item region');c.rigRegion={...c.imageRegion,x:6,y:7};c.view.comparison={mode:'difference',opacity:.5,threshold:16};
- const prepared=await preparePartsComment(pkg,c),body={status:'changes-requested',issues:[prepared]};await saveVerdict(pkg,body);
+ const prepared=await preparePartsComment(pkg,c);await seedPartsVerdictFixture(pkg,{status:'changes-requested',issues:[prepared]});
  const {startPartsServer}=await import('../src/parts-server.ts'),server=await startPartsServer(pkg,{port:0,exitOnClose:false});const base=`http://127.0.0.1:${server.port}`;
  try{
   await writeFile(join(root,'painting_in_rig.png'),Buffer.from('tampered'));
