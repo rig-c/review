@@ -15,11 +15,11 @@ export async function entryHtml(screen:EntryScreen,assets:{script:string;styles:
   const marked=screen==='parts'||screen==='workspace'?html.replace('<div id="app"></div>',`<div id="app" data-review-screen="${screen}"></div>`):html;
   return marked.replace('href="styles.css"',`href="${assets.styles}"`).replace('src="main.js"',`src="${assets.script}"`);
 }
-export async function buildWeb(mode:'single'|'compare'='single',root:string=appRoot):Promise<Blob> {
+export async function buildWeb(root:string=appRoot):Promise<Blob> {
   const conditions=playBuildConditions(root);
-  const entry=join(root,mode==='compare'?'web/compare.ts':'web/main.ts');
+  const entry=join(root,'web/main.ts');
   const result=await Bun.build({entrypoints:[entry],target:'browser',format:'esm',minify:false,...(conditions.length?{conditions}:{})});
   if(!result.success)throw new Error(result.logs.map(v=>v.message).join('\n'));
   const output=result.outputs.find(v=>v.path.endsWith('.js'));if(!output)throw new Error('frontend bundle: JavaScript output missing');return output;
 }
-if(import.meta.main){await buildWeb();await buildWeb('compare');console.log('Frontend bundles built successfully (single and compare).');}
+if(import.meta.main){await buildWeb();console.log('Frontend bundle built successfully.');}

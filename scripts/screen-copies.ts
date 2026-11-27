@@ -88,9 +88,9 @@ export const ROWS: readonly CopyRow[] = [
       'scripts/alias_tarball.ts', 'scripts/confirm-alias.ts', 'scripts/check-readme.ts', 'scripts/screen-copies.ts'],
     plantIn: 'scripts/planted.ts', plant: 'if (import.meta.main) {}',
   }},
-  {name: 'buildWeb entries exact set', step: '801', ceiling: 2, exactSet: {
+  {name: 'buildWeb entries exact set', step: '801', ceiling: 1, exactSet: {
     paths: /^src\/build\.ts$/u, pattern: /['"](web\/[^'"]+\.ts)['"]/gu,
-    expected: ['web/main.ts', 'web/compare.ts'],
+    expected: ['web/main.ts'],
     plantIn: 'src/build.ts', plant: "const plantedEntry = 'web/planted.ts';",
   }},
   {name: 'entry HTML web/parts.html', step: '2', ceiling: 0, files: ['web/parts.html']},

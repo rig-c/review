@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { loadCompare, assertCompareUnchanged, type ComparePackage } from '../src/compare.ts';
 import { freshCompareSession, parseCompareSession, readCompareSession, saveCompareSession } from '../src/compare-session.ts';
 import { startCompareServer } from '../src/compare-server.ts';
+import { buildWeb } from '../src/build.ts';
 
 const dirs:string[]=[];afterEach(async()=>{for(const root of dirs.splice(0))await rm(root,{recursive:true,force:true});});
 // Envelope-only transport probes; actual runtime controls use the separately gated fixture.
@@ -30,6 +31,19 @@ test('comparison refuses missing rig, animation, external package symlink and no
 });
 test('comparison animation refusal identifies each invalid side independently of parallel read order',async()=>{
  for(const side of ['a','b'] as const){const f=await fixture(),other=side==='a'?'b':'a',modelPath=join(f.root,other,'build/skeleton.model.json'),model=JSON.parse(await readFile(modelPath,'utf8'));model.animations.push({name:'only-other-side',duration:2});await writeFile(modelPath,JSON.stringify(model));await expect(loadCompare({...f.inputs,animation:'only-other-side'})).rejects.toThrow(`compare.${side}.animation: model has no animation "only-other-side"`);}
+});
+test('Compare /main.js serves the shared frontend bundle', async () => {
+ const f = await fixture();
+ const server = await startCompareServer(await loadCompare(f.inputs), {port: 0, stateDir: join(f.root, 'state')});
+ try {
+  const response = await fetch(`http://127.0.0.1:${server.port}/main.js`);
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type')).toBe('text/javascript');
+  const digest = (bytes: ArrayBuffer) => Bun.hash(bytes).toString(16);
+  expect(digest(await response.arrayBuffer())).toBe(digest(await (await buildWeb()).arrayBuffer()));
+ } finally {
+  await server.stop(true);
+ }
 });
 test('compare HTTP isolates sides and reference, guards mutations and detects delayed changed input',async()=>{
  const f=await fixture(),p=await loadCompare(f.inputs);const server=await startCompareServer(p,{port:0,stateDir:join(f.root,'state')});const base=`http://127.0.0.1:${server.port}`;try{
