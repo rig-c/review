@@ -3,6 +3,16 @@ import {CameraNode,openCompareCamera} from './helpers/compare-camera-687.ts';
 import recorded from './fixtures/compare-camera-687.json';
 import {decodeBookmark,encodeBookmark,type InspectionBookmark} from '../web/inspection-persistence.ts';
 
+test('#1293 Compare synchronizes both pixel ratios before its first paused pair draw with resize delivery pending',async()=>{
+ const app=await openCompareCamera(false);
+ await app.startInspection();
+ // Deliver the observer's Fit callback only after the initial paused seek completes.
+ app.resize();
+ const {inspectionEvents}=app;
+ expect(inspectionEvents.slice(0,4)).toEqual(['a:ratio','b:ratio','a:draw','b:draw']);
+ expect(inspectionEvents.slice(-2)).toEqual(['a:ratio','b:ratio']);
+});
+
 // Captured by executing HEAD's compare functions before their removal, not by
 // evaluating the shared implementation. Columns and source identity accompany the data.
 for(const row of recorded.rows)test(`#687 three-pane legacy numeric parity: ${row.name}`,async()=>{
