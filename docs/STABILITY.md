@@ -81,6 +81,7 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | `startJobHub` and `JobHubOptions`, `JobHubJobOptions`, `JobHubJob`, `JobOwnerHub` | 4.0.0 (#806) | Standalone [`startJobHost`](#managed-owner-host) or the owner workspace. |
 | Image-set public surface, including `assertJobImageSetCapability` | 4.0.0 (#796, #798) | Direction publications use the existing inspection workspace. |
 | Fresh `image-review` publications and act@2 writer | #796 and #798 for publications, #1106 for the writer | Historical act@2 image-review bytes keep their readers. |
+| `image-review` in `JobReviewStage` and the review-verdict values of `JobActValues`, `JobUIActValues` and `JobCommentsActValues` | 5.0.0 (#1104, breaking) | `JobLegacyAct` retains the historical act@2 image verdict value. Stored asks and acts retain their readers and replay behavior. |
 | Fresh record `reopen` asks and acts | 4.10.0 (#989) | Historical records and acts keep their readers and compatibility types. |
 | Fresh `signoff` asks and acts (including `plan-approved`) | #1227 | Historical records and acts keep their readers and compatibility types. |
 | Fresh `checkpoint` asks and acts | #1229 | Declared checkpoint subjects, historical records and acts, and standalone `rig-review-session/1` checkpoint outcomes keep their readers and compatibility types; records show declared pairs without an ask. |

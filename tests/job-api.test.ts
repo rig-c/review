@@ -11,43 +11,57 @@ import {readFile, readdir, mkdir, writeFile, symlink, rm} from 'node:fs/promises
 import {rigStillInput} from './helpers/job-rig-still.ts';
 import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {createJobFront} from '../src/job-front.ts';
-import {jobHash} from '../src/job-api.ts';
+import {jobHash, requestDigest} from '../src/job-api.ts';
 import {parseCommentsAct, projectComments, type JobComment} from '../src/job-host.ts';
 import commentsLegacy from './fixtures/comments-contract-legacy.json';
 import historicalRig from './fixtures/job-decision-1233/rig.json';
+import historicalImage from './fixtures/job-image-set/act-at-2-replay.json';
 import {JobSession} from '../src/job-session.ts';
 import {JobError, JobStore} from '../src/job-store.ts';
 import {legacyActComments} from '../src/feedback-export.ts';
 
-test('#1096 stored act@2 image-review exports its exact bytes and projects historical image notes', async () => {
+test('#1104 stored act@2 image-review exports and replays the historical writer bytes', async () => {
   const f = await fixture();
-  const act = {
-    schema: JOB_ACT_SCHEMA, actId: 'historical-image-verdict', jobId: f.session.jobId,
-    askId: 'historical-image-ask', publicationId: 'historical-image-publication',
-    authority: {actor: 'human', channel: 'review-ui', reviewer: {id: 'declared-owner', role: 'owner'}},
-    at: '2026-11-01T00:00:00.000Z', kind: 'review-verdict',
-    source: {
-      subject: 'image-set', sourceHash: '1'.repeat(64), projectHash: null,
-      package: {id: 'historical-plates', revision: '1'},
-      direction: null, optionSet: null, appliedResult: null, plan: null, parts: null,
-      imageSet: {purpose: 'plate-adoption', images: [
-        {role: 'source', name: 'before', path: 'before.png', sha256: '2'.repeat(64)},
-        {role: 'candidate', name: 'after', path: 'after.png', sha256: '3'.repeat(64)},
-      ]},
-      imageSetDigest: '4'.repeat(64), duplicateHashes: [],
-    },
-    value: {stage: 'image-review', verdict: 'changes-requested', words: '  전체 의견\n',
-      imageNotes: [{name: 'before', words: ''}, {name: 'after', words: '  이미지 메모\n'}]},
-  };
-  const expected = Buffer.from(JSON.stringify(act));
-  const store = new JobStore<{acts: Record<string, unknown>}>(f.state);
+  const {actBytes, submission, submissionDigest, askReceipt, askRequest} = historicalImage;
+  const act = JSON.parse(actBytes) as Extract<JobLegacyAct, {kind: 'review-verdict'}>;
+  expect(act.schema).toBe(JOB_ACT_SCHEMA);
+  expect(act.value.stage).toBe('image-review');
+  expect(requestDigest(submission)).toBe(submissionDigest);
+  expect(requestDigest(askRequest)).toBe(askReceipt.digest);
+  // The disposable host has a new job ID. Only the lookup digest is rebound.
+  const ask = {...askRequest, jobId: f.session.jobId};
+  const store = new JobStore<{
+    asks: Record<string, unknown>; acts: Record<string, unknown>;
+    replays: Record<string, {digest: string; value: unknown}>;
+  }>(f.state);
   try {
     store.update(f.session.jobId, null, ({data}) => ({data: {
-      ...data, acts: {...data.acts, [act.actId]: act},
+      ...data,
+      acts: {...data.acts, [act.actId]: act},
+      asks: {...data.asks, [act.askId]: {...askReceipt.value, status: 'answered'}},
+      replays: {...data.replays,
+        ['agent:' + ask.idempotencyKey]: {digest: requestDigest(ask), value: askReceipt.value},
+        [`ui:${submission.pageId}:${submission.submissionId}`]: {digest: submissionDigest, value: act}},
     }}));
   } finally {
     store.close();
   }
+
+  const replayedAsk = await (await f.call({...f.base(), ...ask})).json();
+  expect(replayedAsk.ok).toBe(true);
+  expect(JSON.stringify(replayedAsk.value)).toBe(JSON.stringify(askReceipt.value));
+  const replayedAct = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submission));
+  if (!replayedAct.ok) throw new Error(replayedAct.error.code);
+  expect(JSON.stringify(replayedAct.value)).toBe(actBytes);
+
+  const publication = await f.publish();
+  const refusedAsk = await f.call({...f.base(), ...ask, publicationId: publication.publicationId,
+    idempotencyKey: 'fresh-image-ask', expectedGeneration: f.session.status().generation});
+  expect(refusedAsk.status).toBe(409);
+  expect(await refusedAsk.json()).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  const refusedAct = await f.ports.commitUIAct(f.session.jobId,
+    f.uiRequest({...submission, submissionId: 'fresh-image-act'}));
+  expect(refusedAct).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
 
   const front = createJobFront({origin: f.origin, ports: f.ports, resource: async () => ''});
   try {
@@ -60,10 +74,10 @@ test('#1096 stored act@2 image-review exports its exact bytes and projects histo
     expect(response?.status).toBe(200);
     expect(response!.headers.get('content-type')).toBe(jobRawActMediaType);
     const fetched = Buffer.from(await response!.arrayBuffer());
-    expect(fetched.equals(expected)).toBe(true);
+    expect(fetched.toString('utf8')).toBe(actBytes);
     expect(legacyActComments(JSON.parse(fetched.toString('utf8')) as JobLegacyAct))
-      .toEqual([{text: '  전체 의견\n'}, {text: ''}, {text: '  이미지 메모\n'}]);
-    console.log(`#1096 stored/exported SHA-256 ${jobHash(expected)} ${jobHash(fetched)}`);
+      .toEqual([{text: '  exact human words  '}, {text: '  image note  '}]);
+    console.log(`#1104 stored/exported SHA-256 ${jobHash(actBytes)} ${jobHash(fetched)}`);
   } finally {
     front.stop();
   }

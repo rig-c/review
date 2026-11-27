@@ -93,8 +93,8 @@ export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRet
         }
         return source;
       }
-      if (subject.stage === 'image-review' || !source.model || (subject.stage === 'rig-review' ? source.selector?.kind !== 'rig' :
-        source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ASK_INVALID');
+      if (!source.model || (subject.stage === 'rig-review' ? source.selector?.kind !== 'rig' :
+        subject.stage !== 'direction-review' || source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ASK_INVALID');
       return source;
     case 'interview-picks':
     case 'checkpoint':

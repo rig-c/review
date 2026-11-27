@@ -599,7 +599,7 @@ export interface JobHumanAuthority {
 
 export type JobVerdict = 'pending' | 'approved' | 'changes-requested';
 export type JobPartOutcome = 'pending' | 'clean' | 'flagged';
-export type JobReviewStage = 'rig-review' | 'direction-review' | 'image-review';
+export type JobReviewStage = JobModelReviewValue['stage'];
 
 export type PartsVerdictValue = {
   readonly verdict: 'approved' | 'changes-requested';
@@ -644,7 +644,7 @@ export interface JobActValues {
     readonly words: string;
   };
   readonly 'parts-verdict': PartsVerdictValue;
-  readonly 'review-verdict': JobModelReviewValue | JobImageReviewValue;
+  readonly 'review-verdict': JobModelReviewValue;
   readonly signoff: {
     /** An explicitly declared Create stage. Validation belongs to its writer. */
     readonly stage: string;
@@ -668,8 +668,7 @@ export type JobUIActValues = Omit<JobActValues, 'interview-picks' | 'checkpoint'
   readonly 'interview-picks': JobActValues['interview-picks'] & {readonly comments?: JobCommentsActValues['interview-picks']['comments']};
   readonly checkpoint: Omit<JobActValues['checkpoint'], 'planStepId'>;
   readonly 'parts-verdict': PartsVerdictValue & {readonly general?: readonly string[]};
-  readonly 'review-verdict': JobImageReviewValue
-    | (Omit<JobModelReviewValue, 'stage' | 'words'> & {readonly stage: 'direction-review'} & (
+  readonly 'review-verdict': (Omit<JobModelReviewValue, 'stage' | 'words'> & {readonly stage: 'direction-review'} & (
       | {readonly words: string; readonly comments?: never}
       | {readonly comments: readonly JobComment[]; readonly words?: never}
     ))

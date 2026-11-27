@@ -26,7 +26,6 @@ type JobWithHistoricalVerdict = {
 export function seedHistoricalVerdictAsk(session: JobSession, publicationId: string, subject: VerdictSubject,
   idempotencyKey = 'historical-verdict-' + randomUUID()): JobPendingAsk {
   const name = subject.kind === 'parts-verdict' ? subject.kind : subject.stage;
-  if (name === 'image-review') throw new Error('No historical image-review ask fixture');
   const template = pendingAsks[name];
   const {status} = template.ask, {type} = template.event;
   if (status !== 'pending' || type !== 'pending') throw new Error('Expected a pending verdict fixture');
