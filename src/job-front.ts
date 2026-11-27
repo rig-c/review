@@ -1,4 +1,4 @@
-import {buildWeb} from './build.ts';
+import {buildWeb, entryHtml} from './build.ts';
 import {PNG} from 'pngjs';
 import {checkpointEvidencePair} from './checkpoint-evidence-packet.ts';
 import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-checkpoint-evidence.ts';
@@ -258,7 +258,7 @@ export function createJobFront(options: {
 export function jobWindowResources() {
     let bundle: Promise<Blob> | null = null;
     return async (name: 'index.html' | 'main.js' | 'styles.css'): Promise<BodyInit> => {
-        if (name === 'index.html') return await Bun.file(new URL('../web/index.html', import.meta.url)).text();
+        if (name === 'index.html') return await entryHtml('job');
         if (name === 'styles.css')return await Bun.file(new URL('../web/styles.css', import.meta.url)).text();
         bundle ??= buildWeb();
         return bundle;

@@ -1,7 +1,7 @@
 import {randomBytes, randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {readFile, unlink} from 'node:fs/promises';
-import {appRoot, buildWeb} from './build.ts';
+import {appRoot, buildWeb, entryHtml} from './build.ts';
 import {createReviewRequestContext} from './server.ts';
 import {createCompareRequestContext} from './compare-server.ts';
 import {createLiveLifecycle, type UpgradableServer} from './live-lifecycle.ts';
@@ -201,7 +201,7 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
         return refused('WORKSPACE_REQUEST_INVALID', 400);
       }
       const body = url.pathname === '/main.js' ? await (ownerScript ??= ownerBundle())
-        : await readFile(appRoot + (url.pathname === '/' ? 'web/index.html' : 'web/styles.css'));
+        : url.pathname === '/' ? await entryHtml('workspace') : await readFile(appRoot + 'web/styles.css');
       return new Response(request.method === 'HEAD' ? null : body, {headers: {...securityHeaders,
         'Content-Type': url.pathname.endsWith('.js') ? 'text/javascript' : url.pathname.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8'}});
     }

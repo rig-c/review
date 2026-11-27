@@ -6,7 +6,7 @@ import {stagePartsRoutes,stageVerdictLimit} from './stage-parts.ts';
 import {createControlServer,type ControlIdentity} from './control-server.ts';
 import { readFile } from 'node:fs/promises';
 import { JobError } from './job-validation.ts';
-import { appRoot, buildWeb } from './build.ts';
+import { appRoot, buildWeb, entryHtml } from './build.ts';
 import { packagePath, previousBuildFiles, reviewProducerStarts, safeFile, type ReviewPackage } from './manifest.ts';
 import { exportReviewStrip, stripJson } from './strip-export.ts';
 import {assertReviewUnchanged,referenceBinding,selectedReference,safeSelectedReference,servePreviousBuildAsset,serveReference} from './reference.ts';
@@ -124,7 +124,7 @@ export async function createReviewRequestContext(p: ReviewPackage | null, option
       if(!live.rearmUnopened())return json({error:'Server is closing'},503);}return gate;}
     if(req.method==='GET'||req.method==='HEAD'){
       if(url.pathname==='/main.js')return new Response(req.method==='HEAD'?null:bundle,{headers:{...headers,'Content-Type':'text/javascript'}});
-      if(url.pathname==='/'||url.pathname==='/index.html')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/index.html'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
+      if(url.pathname==='/'||url.pathname==='/index.html')return new Response(req.method==='HEAD'?null:await entryHtml('rig'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
       if(url.pathname==='/styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/styles.css'),{headers:{...headers,'Content-Type':'text/css'}});
     }
     if(!p){

@@ -6,13 +6,14 @@ export function playBuildConditions(root:string=appRoot):string[] {
   try{return /[\\/]src[\\/]index\.ts$/.test(Bun.resolveSync('@rig-c/play',root))?[PLAY_SOURCE_CONDITION]:[];}
   catch{return [];}
 }
-/** #706: the one entry (`web/index.html`) marked for a screen that opens in Setup with the parts mode only. The marker
- * and asset names are trusted constants; no request or package data is interpolated. */
-export async function setupEntryHtml(screen:'parts',assets:{script:string;styles:string}={script:'main.js',styles:'styles.css'},root:string=appRoot):Promise<string> {
+export type EntryScreen='rig'|'parts'|'job'|'workspace';
+/** #655, #706: the one entry (`web/index.html`) for every index.html route. Unmarked screens keep exact `web/index.html`
+ * bytes; Parts keeps `data-review-screen="parts"`. The marker and asset names are trusted constants. */
+export async function entryHtml(screen:EntryScreen,assets:{script:string;styles:string}={script:'main.js',styles:'styles.css'},root:string=appRoot):Promise<string> {
   const html=await Bun.file(join(root,'web/index.html')).text();
-  const marked=html.replace('<div id="app"></div>',`<div id="app" data-review-screen="${screen}"></div>`).replace('href="styles.css"',`href="${assets.styles}"`).replace('src="main.js"',`src="${assets.script}"`);
-  if(marked===html||!marked.includes(`data-review-screen="${screen}"`))throw new Error('SETUP_ENTRY_MARKER_MISSING');
-  return marked;
+  if(!html.includes('<div id="app"></div>')||!html.includes('href="styles.css"')||!html.includes('src="main.js"'))throw new Error('SETUP_ENTRY_MARKER_MISSING');
+  const marked=screen==='parts'?html.replace('<div id="app"></div>',`<div id="app" data-review-screen="${screen}"></div>`):html;
+  return marked.replace('href="styles.css"',`href="${assets.styles}"`).replace('src="main.js"',`src="${assets.script}"`);
 }
 export async function buildWeb(mode:'single'|'compare'|'workspace'='single',root:string=appRoot):Promise<Blob> {
   const conditions=playBuildConditions(root);
