@@ -1,4 +1,5 @@
 /** #1226: the comment-only act (act@10). Synthetic public fixtures only. */
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {expect, test} from 'bun:test';
 import {writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -111,7 +112,7 @@ test('#1226 the job next CLI delivers an act@10 event (--until act and plain nex
 test('#1226 a pending ask stays pending when comments are sent beside it', async () => {
   const {f, publication, submit} = await live();
   try {
-    const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+    const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
     expect(await submit({comments: [{text: 'general'}]})).toMatchObject({ok: true});
     expect(f.session.status().pending.map(row => [row.askId, row.status])).toEqual([[ask.askId, 'pending']]);
   } finally { await f.close(); }

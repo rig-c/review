@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
-  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, jobActDeliveryLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
+  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, jobActDeliveryLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
   type ActV3, type AgentRequestV3, type EventV3, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayPublicationV3, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest, type JobFetchActRequestV3,
   type JobHostPorts, type JobProgressLineV3, type JobProgressRequestV3, type JobProgressV3, type JobProgressValueV3,
@@ -9,7 +9,7 @@ import {
   type JobPublicationMode, type JobReviewerBinding,
   type JobSubject, type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
 } from './job-contract.ts';
-import { bindJobAsk, bindJobRecordAsk, finalizeCommentOnlyAct, finalizeJobAct, isCommentUISubmission, parseCommentUISubmission, parseUISubmission, prepareJobRecordAct, prepareJobStill } from './job-act.ts';
+import { bindJobAsk, bindJobRecordAsk, finalizeCommentOnlyAct, isCommentUISubmission, parseCommentUISubmission, parseUISubmission, prepareJobRecordAct } from './job-act.ts';
 import { atSubject, isRecordSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, parseChestLandmarksAct, parseCommentOnlyAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
   assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, parseAnsweredDirectionFeedbackReferences, prepareJobSource, retainedRigDraftVerdict, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
@@ -549,8 +549,9 @@ export class JobSession {
     return retained;
   }
 
-  /** Bind one subject to the retained source, store its pending ask and write its `pending` event. */
+  /** Admit a new ask after receipt replay and source checks. Historical verdict receipts bypass this path. */
   private addAsk(data: JobData, publicationId: string, subject: JobSubject | RecordSubject, retained: JobRetainedSourceV3): JobPendingAsk | PendingAskV3 {
+    if (subject.kind === 'review-verdict' || subject.kind === 'parts-verdict') throw new JobError('JOB_ASK_INVALID');
     const ask: JobPendingAsk | PendingAskV3 = isRetainedRecordSource(retained)
       ? { askId: randomUUID(), publicationId, subject, source: bindJobRecordAsk(subject, retained), status: 'pending' }
       : { askId: randomUUID(), publicationId, subject, source: bindJobAsk(subject, retained), status: 'pending' };
@@ -834,7 +835,7 @@ export class JobSession {
     return receipt!;
   }
 
-  /** Pointed Parts issues are re-read against the sealed parts package before the act is stored. */
+  /** Pointed Parts comments are re-read against the sealed parts package before the act is stored. */
   private async validatePartsPins(publicationId: string, issues: readonly PartsIssue[]): Promise<void> {
     if (!issues.length) return;
     await this.readPublicationResponse(publicationId, async retained => {
@@ -870,7 +871,9 @@ export class JobSession {
     const current = this.current();
     const previous = this.replay(current.data, key, digest);
     if (previous) return previous.value as ActV3;
-    if (input.kind === 'signoff' || input.kind === 'checkpoint' || input.kind === 'interview-picks') {
+    // Retired submissions still parse and replay their original receipt before a new write is refused.
+    if (input.kind === 'parts-verdict' || input.kind === 'review-verdict' ||
+        input.kind === 'signoff' || input.kind === 'checkpoint' || input.kind === 'interview-picks') {
       throw new JobError('JOB_ACT_KIND_DISABLED');
     }
     if (current.active && input.expectedGeneration <= current.data.generation) {
@@ -894,6 +897,7 @@ export class JobSession {
             await this.validatePartsPins(input.publicationId, commentPartsIssues(candidate.value.comments));
           }
         } else if (ask && stored && isRetainedRecordSource(stored.retained)) {
+          // Preserve the legacy reopen refusal on a retained record.
           prepareJobRecordAct({
             jobId: this.jobId,
             submission: input,
@@ -901,22 +905,6 @@ export class JobSession {
             retained: stored.retained,
             reviewer: current.data.reviewer,
           });
-          if (!this.options.readRecordPublished) {
-            throw new JobError('JOB_ACT_SOURCE_STALE', 'Record publication requires a trusted record reader');
-          }
-          await verifyJobRecordSourceFresh({
-            retained: stored.retained,
-            readRecordPublished: this.options.readRecordPublished,
-            phase: 'finalize',
-            subject: ask.subject as RecordSubject,
-          });
-        } else if (ask && stored && input.kind === 'parts-verdict') {
-          assertJobSourceCurrent(stored.retained);
-          const candidate = finalizeJobAct({jobId: this.jobId, submission: input, ask,
-            retained: stored.retained, reviewer: current.data.reviewer});
-          const issues = candidate.kind !== 'parts-verdict' ? [] : candidate.schema === JOB_COMMENTS_ACT_SCHEMA ?
-            commentPartsIssues(candidate.value.comments) : candidate.schema === JOB_PARTS_VERDICT_ACT_SCHEMA ? candidate.value.issues : [];
-          await this.validatePartsPins(input.publicationId, issues);
         }
       }
     }
@@ -949,7 +937,7 @@ export class JobSession {
       if (!ask) throw new JobError('JOB_ASK_INVALID');
       const retained = fresh.data.publications[input.publicationId].retained;
       assertJobSourceCurrent(retained);
-      if (needsSnapshotRecheck(retained) || input.kind === 'parts-verdict') {
+      if (needsSnapshotRecheck(retained)) {
         assertRetainedSnapshotIntact(
           retained.snapshotRoot,
           retained.seals,
@@ -957,20 +945,20 @@ export class JobSession {
           'JOB_ACT_SOURCE_STALE',
         );
       }
-      const captured = !isRetainedRecordSource(retained) && ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ?
-        prepareJobStill(input, ask as JobPendingAsk, retained) : undefined;
-      act = finalizeJobAct({ jobId: this.jobId, submission: input, ask, retained, reviewer: fresh.data.reviewer,
-        still: captured?.still });
-      fresh.data.generation++;
-      fresh.data.acts[act.actId] = act;
-      fresh.data.asks[ask.askId] = { ...ask, status: 'answered' };
-      fresh.data.replays[key] = { digest, value: act };
-      this.event(fresh.data, { type: 'act', act });
-      return { data: fresh.data, ...(captured ? {still: {
-        actId: act.actId, pageId: input.pageId, submissionId: input.submissionId,
-        sha256: captured.still.sha256, binding: JSON.stringify(captured.binding),
-        png: captured.bytes, actBytes: Buffer.from(JSON.stringify(act)),
-      }} : {}) };
+      const {value} = input;
+      if (value && typeof value === 'object' && (Object.hasOwn(value, 'meshEdits') || Object.hasOwn(value, 'chestLandmarks'))) {
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      if (isRetainedRecordSource(retained)) {
+        prepareJobRecordAct({jobId: this.jobId, submission: input, ask, retained, reviewer: fresh.data.reviewer});
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      if (ask.subject.kind === 'interview-picks' || ask.subject.kind === 'signoff' || ask.subject.kind === 'checkpoint') {
+        throw new JobError('JOB_ACT_KIND_DISABLED');
+      }
+      if (ask.status !== 'pending') throw new JobError('JOB_ASK_SUPERSEDED');
+      if (input.kind !== ask.subject.kind || input.publicationId !== ask.publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
+      throw new JobError('JOB_ASK_INVALID');
     }, fresh => {
       const raced = this.replay(fresh.data, key, digest);
       if (!raced) return false;

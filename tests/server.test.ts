@@ -8,21 +8,39 @@ import { tmpdir } from 'node:os';
 import { loadReview } from '../src/manifest.ts';
 import { freshSession, readSession, saveSession, sessionFile, type Feedback } from '../src/session.ts';
 import { startServer } from '../src/server.ts';
-test('loopback API rejects cross-origin mutation, bounds bodies, serves ranges and binds delayed save to current bytes',async()=>{
- const root=await mkdtemp(join(tmpdir(),'review-http-'));const input=join(root,'review.json');await writeFile(input,JSON.stringify({schema:'rig-review/1',id:'http',title:'HTTP',revision:'1',references:[{id:'video',label:'Reference bytes',type:'video',path:'clip.mp4'}],authoring:[{label:'HTML source',path:'page.html'},{label:'JS source',path:'payload.js'}]}));await writeFile(join(root,'clip.mp4'),'0123456789');await writeFile(join(root,'page.html'),"<script src='/assets/payload.js'></script>");await writeFile(join(root,'payload.js'),"fetch('/api/session')");const p=await loadReview(input);const stateDir=join(root,'state');const server=await startServer(p,{port:0,stateDir});const base=`http://127.0.0.1:${server.port}`;
+import { LOCAL_COMMENTS_ROUTE } from '../src/local-comments.ts';
+test('loopback API serves historical sessions, refuses PUT and binds a delayed comment send to current bytes',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'review-http-'));const packageRoot=join(root,'package');await mkdir(packageRoot);const input=join(packageRoot,'review.json');await writeFile(input,JSON.stringify({schema:'rig-review/1',id:'http',title:'HTTP',revision:'1',references:[{id:'video',label:'Reference bytes',type:'video',path:'clip.mp4'}],authoring:[{label:'HTML source',path:'page.html'},{label:'JS source',path:'payload.js'}]}));await writeFile(join(packageRoot,'clip.mp4'),'0123456789');await writeFile(join(packageRoot,'page.html'),"<script src='/assets/payload.js'></script>");await writeFile(join(packageRoot,'payload.js'),"fetch('/api/session')");const p=await loadReview(input);const stateDir=join(root,'state');const server=await startServer(p,{port:0,stateDir});const base=`http://127.0.0.1:${server.port}`;
  try {
   const get=await fetch(base+'/api/review');expect(get.status).toBe(200);const reviewData=await get.json();expect(reviewData.capabilities.playback).toBe(false);expect(reviewData.reviewedSource).toEqual(p.reviewedSource);
   expect((await fetch(base+'/styles.css')).status).toBe(200);expect((await fetch(base+'/main.js')).status).toBe(200);const html=await fetch(base+'/assets/page.html');expect(html.headers.get('content-security-policy')).toContain("script-src 'none'; sandbox");expect(html.headers.get('content-security-policy')).not.toContain('allow-same-origin');
   const range=await fetch(base+'/assets/clip.mp4',{headers:{Range:'bytes=2-5'}});expect(range.status).toBe(206);expect(range.headers.get('content-range')).toBe('bytes 2-5/10');expect(await range.text()).toBe('2345');expect(range.headers.get('content-security-policy')).toContain('sandbox');
   expect((await fetch(base+'/assets/clip.mp4',{headers:{Range:'bytes=99-100'}})).status).toBe(416);
   expect((await fetch(base+'/assets/not-declared')).status).toBe(404);
-  const session=freshSession(p);session.status='approved';
-  expect((await fetch(base+'/api/session',{method:'PUT',headers:{Origin:'http://evil.test','Content-Type':'application/json'},body:JSON.stringify(session)})).status).toBe(403);
-  expect((await fetch(base+'/api/session',{method:'PUT',headers:{Origin:base,'Content-Type':'text/plain'},body:JSON.stringify(session)})).status).toBe(400);
-  expect((await fetch(base+'/api/session',{method:'PUT',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({padding:'x'.repeat(1024*1024)})})).status).toBe(400);
-  const tampered=await fetch(base+'/api/session',{method:'PUT',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({...session,reviewedSource:{...p.reviewedSource,viewerVersion:'forged'}})});expect(tampered.status).toBe(400);const saved=await fetch(base+'/api/session',{method:'PUT',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify(session)});expect(saved.status).toBe(200);expect((await (await fetch(base+'/api/session')).json()).status).toBe('approved');session.status='pending';expect((await fetch(base+'/api/session',{method:'PUT',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify(session)})).status).toBe(200);session.status='approved';
-  const body=new ReadableStream<Uint8Array>({async start(controller){controller.enqueue(new TextEncoder().encode('{'));await Bun.sleep(30);await writeFile(join(root,'clip.mp4'),'modified');controller.enqueue(new TextEncoder().encode(JSON.stringify(session).slice(1)));controller.close();}});
-  const delayed=await fetch(base+'/api/session',{method:'PUT',headers:{Origin:base,'Content-Type':'application/json'},body});expect(delayed.status).toBe(409);expect((await readSession(p,stateDir)).status).toBe('pending');
+  const saved=await saveSession(p,{...freshSession(p),status:'approved'},stateDir);
+  const before=await Bun.file(sessionFile(p,stateDir)).text();
+  const removed=await fetch(base+'/api/session',{method:'PUT',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({...saved,status:'pending'})});
+  expect(removed.status).toBe(405);
+  expect(await removed.json()).toEqual({error:'Method not allowed'});
+  expect(await (await fetch(base+'/api/session')).json()).toEqual(saved);
+
+  const send={sendId:crypto.randomUUID(),sourceHash:p.sourceHash,value:{comments:[{text:'Inspect this frame'}]}};
+  const post=(body:BodyInit,origin=base,contentType='application/json')=>
+    fetch(base+LOCAL_COMMENTS_ROUTE,{method:'POST',headers:{Origin:origin,'Content-Type':contentType},body});
+  expect((await post(JSON.stringify(send),'http://evil.test')).status).toBe(403);
+  expect((await post(JSON.stringify(send),base,'text/plain')).status).toBe(400);
+  expect(await (await post(JSON.stringify({...send,padding:'x'.repeat(1024*1024)}))).json()).toEqual({error:'LOCAL_COMMENTS_BODY_LIMIT'});
+  const body=new ReadableStream<Uint8Array>({async start(controller){
+    const encoder=new TextEncoder();
+    controller.enqueue(encoder.encode('{'));
+    await Bun.sleep(30);
+    await writeFile(join(packageRoot,'clip.mp4'),'modified');
+    controller.enqueue(encoder.encode(JSON.stringify(send).slice(1)));
+    controller.close();
+  }});
+  const stale=await post(body);expect({status:stale.status,body:await stale.text()}).toMatchObject({status:409});
+  expect(await Bun.file(sessionFile(p,stateDir).replace(/\.json$/,'.comments.json')).exists()).toBe(false);
+  expect(await Bun.file(sessionFile(p,stateDir)).text()).toBe(before);
  }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
 });
 
@@ -65,45 +83,33 @@ test('read-only feedback CLI retrieves saved identity and otherwise reports pend
  }finally{await rm(work,{recursive:true,force:true});}
 });
 
-test('selected correction keeps exact session bytes and pending made feedback cannot save', async () => {
+test('selected described correction exports exact historical session bytes', async () => {
   const root=await mkdtemp(join(tmpdir(),'review-correction-http-'));
   const stateDir=join(root,'state');
-  let server: Awaited<ReturnType<typeof startServer>> | undefined;
   try {
     await writeFile(join(root,'review.json'),JSON.stringify({schema:'rig-review/1',id:'correction',title:'Correction',revision:'one'}));
     const p=await loadReview(root);
-    server=await startServer(p,{port:0,stateDir,capability:'b'.repeat(64)});
-    const origin='http://127.0.0.1:'+server.port;
     const session=freshSession(p);
     const selector={stage:'rig-review',kind:'rig',version:1};
     const words='Keep these exact words.  \r\n';
     session.feedback=[{id:'request',summary:words,frameStart:0,frameEnd:0,target:{kind:'rig',name:'correction'},category:'quality',context:{correction:{path:'described',selector}}}];
-    const save=()=>fetch(origin+'/api/session',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json','X-Review-Capability':'b'.repeat(64)},body:JSON.stringify(session)});
-    const response=await save();
-    expect(response.status).toBe(200);
+    await saveSession(p,session,stateDir);
     const bytes=await Bun.file(sessionFile(p,stateDir)).text();
     const child=Bun.spawn([process.execPath,'-e',"import {main} from './src/cli.ts'; await main(process.argv.slice(1),{stateDir:process.env.TEST_STATE});",'--','feedback',root,'--correction','request','--format','json'],{env:{...process.env,TEST_STATE:stateDir},stdout:'pipe',stderr:'pipe'});
     const [stdout,stderr,exit]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);
     expect({stdout,stderr,exit}).toEqual({stdout:bytes,stderr:'',exit:0});
     expect(JSON.parse(stdout).feedback[0].summary).toBe(words);
-    session.feedback[0]!.context={correction:{path:'made',selector}};
-    const refused=await save();
-    expect(refused.status).toBe(400);
-    expect(await refused.text()).toContain('CORRECTION_APPLY_PENDING');
-    expect(await Bun.file(sessionFile(p,stateDir)).text()).toBe(bytes);
   } finally {
-    server?.stop(true);
     await rm(root,{recursive:true,force:true});
   }
 });
 
-test('made correction uses a retained build and only revalidates new or edited saved items', async () => {
-  // Hand-built seals exercise storage and transport, with no producer invocation.
+test('historical made correction export requires a retained build and matching evidence', async () => {
+  // Hand-built seals exercise the export checks without a producer invocation.
   const root=await mkdtemp(join(tmpdir(),'review-correction-retention-'));
   const stateDir=join(root,'state');
   const sha=(text:string)=>createHash('sha256').update(text).digest('hex');
   const model=(name:string)=>JSON.stringify({spec:'rigc-compiled/3',name,pages:[{name:'page.png'}]});
-  let server: Awaited<ReturnType<typeof startServer>> | undefined;
   try {
     await writeFile(join(root,'review.json'),JSON.stringify({schema:'rig-review/1',id:'retained',title:'Retained',revision:'one',model:'skeleton.model.json',producer:{config:'config.json'}}));
     await writeFile(join(root,'skeleton.model.json'),model('source'));
@@ -138,64 +144,53 @@ test('made correction uses a retained build and only revalidates new or edited s
     }
     const a=await seal('apply-a');
     const session=freshSession(p);
-    const connect=()=>startServer(p,{port:0,stateDir,capability:'b'.repeat(64)});
-    server=await connect();
-    const save=()=>{
-      const origin='http://127.0.0.1:'+server!.port;
-      return fetch(origin+'/api/session',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json','X-Review-Capability':'b'.repeat(64)},body:JSON.stringify(session)});
-    };
     const selected=async(id:string)=>{
       const code="import {main} from './src/cli.ts'; await main(process.argv.slice(1),{stateDir:process.env.TEST_STATE});";
       const child=Bun.spawn([process.execPath,'-e',code,'--','feedback',root,'--correction',id,'--format','json'],{env:{...process.env,TEST_STATE:stateDir},stdout:'pipe',stderr:'pipe'});
       const [stdout,stderr,exit]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);
       return {stdout,stderr,exit};
     };
-    const refuse=async(code:string)=>{
-      const before=await Bun.file(sessionFile(p,stateDir)).text(), response=await save();
-      expect(response.status).toBe(400);expect(await response.text()).toContain(code);
-      expect(await Bun.file(sessionFile(p,stateDir)).text()).toBe(before);
+    const refuse=async(id:string,code:string)=>{
+      const file=Bun.file(sessionFile(p,stateDir)), before=await file.text();
+      const response=await selected(id);
+      expect(response.exit).toBe(1);
+      expect(response.stdout).toBe('');
+      expect(response.stderr).toContain(code);
+      expect(await file.text()).toBe(before);
     };
 
-    session.feedback=[a.row];
-    expect((await save()).status).toBe(200);
     const kept=keptRoot(stateDir,sourceHash);
     await mkdir(kept,{recursive:true});
     await rename(a.dir,join(kept,a.buildId));
     const b=await seal('apply-b');
     session.feedback=[a.row,b.row];
+    await saveSession(p,session,stateDir);
 
     await writeFile(join(b.build,'skeleton.model.json'),model('tampered'));
-    await refuse('CORRECTION_RESULT_STALE');
+    await refuse(b.row.id,'CORRECTION_RESULT_STALE');
     await writeFile(join(b.build,'skeleton.model.json'),model('apply-b'));
     await writeFile(join(b.build,'page.png'),'tampered page');
-    await refuse('CORRECTION_RESULT_STALE');
+    await refuse(b.row.id,'CORRECTION_RESULT_STALE');
     await writeFile(join(b.build,'page.png'),'apply-b');
     const redirected=join(root,'redirected');
     await rename(b.build,redirected);
     await symlink(redirected,b.build);
-    await refuse('CORRECTION_RESULT_STALE');
+    await refuse(b.row.id,'CORRECTION_RESULT_STALE');
     await rm(b.build);
     await rename(redirected,b.build);
 
-    expect((await save()).status).toBe(200);
-    expect(await selected(a.row.id)).toEqual({stdout:await Bun.file(sessionFile(p,stateDir)).text(),stderr:'',exit:0});
+    const saved=await Bun.file(sessionFile(p,stateDir)).text();
+    expect(await selected(a.row.id)).toEqual({stdout:saved,stderr:'',exit:0});
+    expect(await selected(b.row.id)).toEqual({stdout:saved,stderr:'',exit:0});
     const forged=JSON.parse(JSON.stringify({...b.row,context:{correction:{path:'made',selector},applied:{...b.record,line:'forged'}}})) as Feedback;
     session.feedback=[a.row,b.row,{...forged,id:'forged-new'}];
-    await refuse('STAGE_DRAFT_STALE');
-    // Edited saved evidence must not inherit the old row's trust.
-    session.feedback=[a.row,forged];
-    await refuse('STAGE_DRAFT_STALE');
+    await saveSession(p,session,stateDir);
+    await refuse('forged-new','STAGE_DRAFT_STALE');
 
     await rm(join(kept,a.buildId),{recursive:true});
-    server.stop(true);server=await connect();
-    session.feedback=[a.row,b.row,item('ordinary-after-restart')];
-    expect((await save()).status).toBe(200);
-    const evicted=await selected(a.row.id);
-    expect(evicted.exit).toBe(1);expect(evicted.stderr).toContain('CORRECTION_RESULT_STALE');
-    session.feedback[0]={...a.row,summary:'Edited history requires evidence'};
-    await refuse('CORRECTION_RESULT_STALE');
+    await refuse(a.row.id,'CORRECTION_RESULT_STALE');
+    expect(await selected(b.row.id)).toEqual({stdout:await Bun.file(sessionFile(p,stateDir)).text(),stderr:'',exit:0});
   } finally {
-    server?.stop(true);
     await rm(root,{recursive:true,force:true});
   }
 });

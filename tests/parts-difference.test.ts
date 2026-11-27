@@ -6,11 +6,12 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {PNG} from 'pngjs';
 import {differencePixels,parsePartsComparison} from '../src/parts-comparison.ts';
-import {loadPartsView,partsDifference,saveVerdict,readVerdict,exportPartsVerdict,assertPartsUnchanged} from '../src/parts-view.ts';
+import {loadPartsView,partsDifference,saveVerdict,readVerdict,exportPartsVerdict,assertPartsUnchanged,verdictSource} from '../src/parts-view.ts';
 import {preparePartsComment} from '../src/parts-comment-crops.ts';
 import {candidate} from './helpers/parts-comments-package.ts';
 import {writeDifferencePackage} from './helpers/parts-difference-package.ts';
 import {resolvedCropPath} from '../src/comment-crops.ts';
+import {LOCAL_COMMENTS_ROUTE} from '../src/local-comments.ts';
 const fixture=async(fn:(root:string)=>Promise<void>)=>{const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'difference-'));try{await fn(root);}finally{await rm(root,{recursive:true,force:true});}};
 
 test('#390 literal raw RGB max-channel strict threshold, alpha 0 excluded and alpha 1 retained',()=>{
@@ -49,13 +50,14 @@ test('#390 difference comment save/reopen/JSON/issue preserves state and origina
  expect(JSON.parse(exportPartsVerdict(saved,'json')).issues[0].view.comparison).toEqual(c.view.comparison);expect(exportPartsVerdict(saved,'issue')).toContain(JSON.stringify(c.view.comparison));expect(await Promise.all(pkg.files.map(f=>readFile(f.abs)))).toEqual(before);
 }));
 
-test('#390 changed declared operand refuses API load, difference, crop, sign-off and export before reuse',()=>fixture(async root=>{
+test('#390 changed declared operand refuses API load, difference, crop, comment send and export before reuse',()=>fixture(async root=>{
  await writeDifferencePackage(root,true);const pkg=await loadPartsView(root),c=candidate(pkg);c.parts=[{name:'body',imageHash:c.parts[0]!.imageHash}];if(!c.imageRegion)throw new Error('Expected item region');c.rigRegion={...c.imageRegion,x:6,y:7};c.view.comparison={mode:'difference',opacity:.5,threshold:16};
  const prepared=await preparePartsComment(pkg,c),body={status:'changes-requested',issues:[prepared]};await saveVerdict(pkg,body);
  const {startPartsServer}=await import('../src/parts-server.ts'),server=await startPartsServer(pkg,{port:0,exitOnClose:false});const base=`http://127.0.0.1:${server.port}`;
  try{
   await writeFile(join(root,'painting_in_rig.png'),Buffer.from('tampered'));
-  for(const [path,method,payload] of [['/api/parts','GET',undefined],['/api/parts/difference/0?threshold=16&footprints=true','GET',undefined],['/api/parts/export?format=json','GET',undefined],['/api/parts/export?format=issue','GET',undefined],['/api/parts/comment','POST',c],['/api/parts/verdict','POST',body]] as const){
+  const send={sendId:crypto.randomUUID(),sourceHash:verdictSource(pkg).sha256,value:{comments:[{text:'Inspect the Difference'}]}};
+  for(const [path,method,payload] of [['/api/parts','GET',undefined],['/api/parts/difference/0?threshold=16&footprints=true','GET',undefined],['/api/parts/export?format=json','GET',undefined],['/api/parts/export?format=issue','GET',undefined],['/api/parts/comment','POST',c],[LOCAL_COMMENTS_ROUTE,'POST',send]] as const){
    const response=await fetch(base+path,{method,headers:{Origin:base,'Content-Type':'application/json'},...(payload?{body:JSON.stringify(payload)}:{})});expect(response.status).toBe(409);expect((await response.json() as {error:string}).error).toContain('PARTS_VIEW_SOURCE_CHANGED');
   }
  }finally{server.stop(true);}

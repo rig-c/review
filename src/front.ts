@@ -2,6 +2,7 @@ import {interviewRequest} from './interview-routes.ts';
 import {picksLimit} from './interview-picks.ts';
 import {stageVerdictLimit} from './stage-parts.ts';
 import {LIVE_PATH} from './live-lifecycle.ts';
+import {LOCAL_COMMENTS_ROUTE,PACKAGE_COMMENTS_BODY_LIMIT} from './local-comments.ts';
 export const defaultFrontPort=4318; // Foreground `review <dir>` keeps 4317.
 export function frontPort(value?:number):number{const raw=value??(process.env.RIG_REVIEW_FRONT_PORT===undefined?defaultFrontPort:Number(process.env.RIG_REVIEW_FRONT_PORT));if(!Number.isSafeInteger(raw)||raw<(value===0?0:1)||raw>65535)throw new Error('FRONT_PORT: RIG_REVIEW_FRONT_PORT expects an integer 1..65535');return raw;}
 interface Route {mutation:boolean;limit:number;timeoutMs:number;control:boolean;live?:boolean}
@@ -12,6 +13,7 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  if(['/','/index.html','/main.js','/styles.css','/api/access'].includes(path))return read?get:null;
  if((mode==='single'?/^\/api\/stage-parts(?:\/(?:image|page)\/\d+)?$/:/^\/api\/compare\/(?:a|b)\/stage-parts(?:\/(?:image|page)\/\d+)?$/).test(path))return read?get:null;
  if(mode==='single'){
+  if(path===LOCAL_COMMENTS_ROUTE)return method==='POST'?{...get,mutation:true,limit:PACKAGE_COMMENTS_BODY_LIMIT}:null;
   if(path==='/api/stage-parts/verdict')return method==='POST'?{...get,mutation:true,limit:stageVerdictLimit}:null;
   if(path==='/api/stage-parts/export/json'||path==='/api/stage-parts/export/issue')return read?get:null;
   if(interviewRequest(path))return path==='/api/interview/picks'?
@@ -20,7 +22,7 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  if(path==='/api/control/config')return method==='GET'?{...get,control:true}:null;
  if(['/api/control/register','/api/control/poll','/api/control/ack','/api/control/close'].includes(path))return method==='POST'?{mutation:true,limit:16384,timeoutMs:10000,control:true}:null;
  const session=mode==='single'?'/api/session':'/api/compare/session',strip=mode==='single'?'/api/strip':'/api/compare/strip';
- if(path===session)return read?get:method==='PUT'?{mutation:true,limit:1024*1024,timeoutMs:30000,control:false}:null;
+ if(path===session)return read?get:mode==='compare'&&method==='PUT'?{mutation:true,limit:1024*1024,timeoutMs:30000,control:false}:null;
  if(path===strip)return method==='POST'?{mutation:true,limit:1024*1024,timeoutMs:120000,control:false}:null;
  const reads=mode==='single'?['/api/review','/review-reference','/review-painting']:['/api/compare','/api/compare/reference-frames','/compare-reference'];
  if(reads.includes(path))return read?get:null;

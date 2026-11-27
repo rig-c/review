@@ -1,10 +1,13 @@
 /** Existing compiled rig/reference rendering for the shared inspection viewport. */
 import type {ModelAssets,RigPlayer,PoseBounds,PosedFrame} from '@rig-c/play';
 import {formatZoomReadout,type CameraTarget,type ViewportProvider,type ViewportState,type ViewportController} from './viewport-controller.ts';
-import {cameraSignature} from './camera-view.ts';
+import {cameraSignature,cameraViewViolation} from './camera-view.ts';
 import {dragImpulse} from '../src/environment.ts';
 import {CLICK_SLOP_PX} from './stage-pick.ts';
 import {createPartsViewportProvider,type PartsViewportHost} from './parts-viewport-provider.ts';
+import {numericCamera} from './inspection-persistence.ts';
+import type {sceneCameraProjection,SceneCameraFrame} from '@rig-c/play/composed-take';
+import type {MarkPoint} from '../src/stage-comment.ts';
 type RigPane={target:CameraTarget;viewport:HTMLElement;pane:HTMLElement;root:HTMLElement;fallback?:CameraTarget;
  player:()=>RigPlayer|null;assets:()=>ModelAssets|null;drawnGeneration:()=>number|undefined;scale:(value:number)=>void};
 export interface RigViewportHost {
@@ -33,7 +36,10 @@ function unionBounds(a:PoseBounds,b:PoseBounds):PoseBounds {
  const x=Math.min(a.x,b.x),y=Math.min(a.y,b.y);
  return {x,y,width:Math.max(a.x+a.width,b.x+b.width)-x,height:Math.max(a.y+a.height,b.y+b.height)-y};
 }
-export function createRigViewportProvider(host:RigViewportHost,state:ViewportState):ViewportProvider {
+type AuthoredFraming={output:()=>SceneCameraFrame['output']|null;projection:()=>ReturnType<typeof sceneCameraProjection>|null};
+type RigViewportProvider=ViewportProvider&{bindAuthoredFraming:(framing:AuthoredFraming)=>void};
+export function createRigViewportProvider(host:RigViewportHost,state:ViewportState):RigViewportProvider {
+ let authoredFraming:AuthoredFraming|undefined;
  const raster=host.raster?createPartsViewportProvider(host.raster,state):null;
  const rasterActive=()=>!!host.raster?.active();
  const {el,text,message,redrawOverlay}=host;const input=(id:string)=>el<HTMLInputElement>(id),button=(id:string)=>el<HTMLButtonElement>(id);
@@ -59,7 +65,11 @@ export function createRigViewportProvider(host:RigViewportHost,state:ViewportSta
   // including when a semantic publication is temporarily replaced and then restored.
   framingBoxes.set(player,{assets,box});return box;
  }
- const singleFramingBox=()=>host.player()?(host.framingBox?.()??rigFramingBox(host.player(),host.assets(),()=>host.parts()?.frame?.('single')?.generation)):null;
+ const singleFramingBox=()=>{
+  if(!host.player())return null;
+  const output=authoredFraming?.output();
+  return output?{x:0,y:-output.height,...output}:host.framingBox?.()??rigFramingBox(host.player(),host.assets(),()=>host.parts()?.frame?.('single')?.generation);
+ };
  const rigPane=():RigPane=>({target:'rig',viewport:el('rig-viewport'),pane:el('rig-pane'),root:el('rig-root'),player:host.player,assets:host.assets,
   drawnGeneration:()=>host.parts()?.frame?.('single')?.generation,scale:value=>{state.rigScale=value;}});
  function sharedFramingBox():PoseBounds|null {
@@ -74,6 +84,15 @@ export function createRigViewportProvider(host:RigViewportHost,state:ViewportSta
    if(box)shared=shared?unionBounds(shared,box):box;
   }
   return shared;
+ }
+ function selection(target:CameraTarget):ReturnType<ViewportProvider['selection']> {
+  const parts=host.parts(),part=parts?.value(),bounds=target==='rig'&&part?parts?.bounds()??null:null;
+  const projection=target==='rig'?authoredFraming?.projection():null;
+  if(!projection||!bounds)return {selected:!!part,bounds};
+  const {worldToOutput,outputClip}=projection;
+  const a=worldToOutput({x:bounds.x,y:bounds.y+bounds.height}),b=worldToOutput({x:bounds.x+bounds.width,y:bounds.y});
+  const x=Math.max(0,a.x),top=Math.max(0,a.y),right=Math.min(outputClip.width,b.x),bottom=Math.min(outputClip.height,b.y);
+  return right>x&&bottom>top?{selected:true,bounds:{x,y:-bottom,width:right-x,height:bottom-top}}:{selected:true,bounds:null};
  }
 function referenceFit(controller:ViewportController): void {
   const referenceSize=host.referenceSize();const {paneFrame}=controller;
@@ -98,13 +117,14 @@ function render(controller:ViewportController): void {
   const panes=host.panes??(paired?[rigPane(),paired]:player&&assets?[rigPane()]:[]);
   let drawn=false;
   for(const pane of panes){
-   const box=multiple?sharedFramingBox():singleFramingBox();if(!box||box.width<=0||box.height<=0)continue;
+   const authored=pane.target==='rig'&&authoredFraming?.output();
    const frame=paneFrame(pane.target);if(!frame)continue;
+   const box=multiple?null:singleFramingBox();if(!multiple&&(!box||box.width<=0||box.height<=0))continue;
    const camera=controller.paneCamera(pane.target),center=camera.center??frame.center;
-   const scale=multiple?frame.baseScale*camera.zoom:Math.max(.001,Math.min((pane.viewport.clientWidth-28)/box.width,(pane.viewport.clientHeight-58)/box.height)*camera.zoom);
+   const scale=box?Math.max(.001,Math.min((pane.viewport.clientWidth-28)/box.width,(pane.viewport.clientHeight-58)/box.height)*camera.zoom):frame.baseScale*camera.zoom;
    pane.scale(scale);if(!host.panes&&pane.target==='rig')state.displayedCenter={...center};
    const {root,viewport}=pane;root.style.left=`${viewport.clientWidth/2-center.x*scale}px`;root.style.top=`${viewport.clientHeight/2+center.y*scale}px`;root.style.transform=`scale(${scale})`;
-   pane.player()?.renderer.syncPixelRatio();drawn=true;
+   if(!authored)pane.player()?.renderer.syncPixelRatio();drawn=true;
   }
   if(drawn||multiple)redrawOverlay(false);
   if(multiple){if(!paired)referenceFit(controller);renderCameraControls();renderNumericView();}else if(drawn)renderNumericView();
@@ -123,16 +143,19 @@ function renderCaption():void {
  if(controls?.coordinatesId!==null)text(controls?.coordinatesId??'coordinates',host.pairedRig?.()||state.cameraSync?'Cameras synchronized · drag to pan · scroll to zoom':'Independent cameras · drag to pan · scroll to zoom');
 }
  return {el,message,get nativeScale(){return host.raster?rasterActive():undefined;},
+ bindAuthoredFraming:framing=>{authoredFraming=framing;},
  render:controller=>rasterActive()?raster!.render(controller):render(controller),
  renderControls:controller=>{if(rasterActive()){raster!.renderControls(controller);renderCaption();}else renderControls(controller);},
  ...(host.panes?{panes:[...host.panes,{target:'reference' as const,viewport:el('reference-viewport'),pane:el('reference-pane')}]}:{}),
- cameraAlias:target=>!rasterActive()&&target==='reference'&&host.pairedRig?.()?'rig':target,
+ cameraAlias:target=>!rasterActive()&&target==='reference'&&host.pairedRig?.()&&!authoredFraming?.output()?'rig':target,
  dimensionVisibility:host.dimensionVisibility,
  fitMargins:host.rigMargins,fitMessage:host.fitMessage,pinch:host.pinch,
  geometry:target=>{
   if(rasterActive())return raster!.geometry(target);
-  if(host.pairedRig?.()){
-   const box=sharedFramingBox(),margin=host.rigMargins??{x:28,y:58};
+  const paired=host.pairedRig?.();
+  if(paired){
+   const box=authoredFraming?.output()?(target==='rig'?singleFramingBox():rigFramingBox(paired.player(),paired.assets(),paired.drawnGeneration)):sharedFramingBox();
+   const margin=host.rigMargins??{x:28,y:58};
    return box?{space:'world',box,marginX:margin.x,marginY:margin.y}:null;
   }
   const rig=target!=='reference',referenceSize=host.referenceSize(),pane=host.panes?.find(p=>p.target===target);
@@ -141,7 +164,31 @@ function renderCaption():void {
   return {space:rig?'world':'image',box,marginX:margin.x,marginY:margin.y};
  },
  layoutKey:()=>rasterActive()?'raster:'+raster!.layoutKey():(host.layoutKey?host.layoutKey()+(host.panes?JSON.stringify(sharedFramingBox()):''):(()=>{const player=host.player(),referenceSize=host.referenceSize(),view=host.view(),referenceGeneration=host.referenceGeneration(),paired=host.pairedRig?.();const boxKey=paired?sharedFramingBox():singleFramingBox();return ['rig','reference'].map(target=>{const v=el(target+'-viewport');return `${v.clientWidth}:${v.clientHeight}`;}).join('|')+view+referenceGeneration+!!player+JSON.stringify(referenceSize)+JSON.stringify(boxKey)+(paired?'paired':'');})()),
- selection:target=>rasterActive()?raster!.selection(target):(host.selection?.(target)??(()=>{const parts=host.parts(),part=parts?.value();return {selected:!!part,bounds:target==='rig'&&part?parts?.bounds()??null:null};})())
+ selection:target=>rasterActive()?raster!.selection(target):(host.selection?.(target)??selection(target))
  };
 }
-export function rigPanCarry(host:Pick<RigViewportHost,'player'>,state:ViewportState){return {threshold:CLICK_SLOP_PX,move:(dx:number,dy:number)=>{const player=host.player(),rigScale=state.rigScale;const impulse=dragImpulse(dx,dy,rigScale);if(impulse&&player)player.moved(impulse);}};}
+export function rigPanCarry(host:Pick<RigViewportHost,'player'>,state:ViewportState,authoredZoom=()=>1){return {threshold:CLICK_SLOP_PX,move:(dx:number,dy:number)=>{const player=host.player(),rigScale=state.rigScale*authoredZoom();const impulse=dragImpulse(dx,dy,rigScale);if(impulse&&player)player.moved(impulse);}};}
+
+/** Compose the shared output inspection transform with Play's exact world projection. */
+export function authoredPaneProjection(pane:HTMLElement,canvas:HTMLCanvasElement,scale:number,inspectionZoom:number,
+ frame:SceneCameraFrame,projection:ReturnType<typeof sceneCameraProjection>) {
+ const paneRect=pane.getBoundingClientRect(),canvasRect=canvas.getBoundingClientRect();
+ const x=canvasRect.left-paneRect.left-pane.clientLeft,y=canvasRect.top-paneRect.top-pane.clientTop;
+ const {width,height}=projection.outputClip;
+ const worldToPane=(p:MarkPoint)=>{const at=projection.worldToOutput(p);return {x:x+at.x*scale,y:y+at.y*scale};};
+ const paneToWorld=(p:MarkPoint)=>projection.outputToWorld({x:(p.x-x)/scale,y:(p.y-y)/scale});
+ const center=paneToWorld({x:pane.clientWidth/2,y:pane.clientHeight/2});
+ const effectiveScale=scale*frame.zoom;
+ const viewport={width:pane.clientWidth,height:pane.clientHeight};
+ let violation=cameraViewViolation({zoom:inspectionZoom,center},{space:'world',center,baseScale:effectiveScale/inspectionZoom,...viewport});
+ let camera=violation?null:numericCamera('world',center,inspectionZoom,effectiveScale,viewport.width,viewport.height);
+ if(camera){
+  const {x,y,width,height}=camera.visible;
+  const collapse=[x+width-x,y+height-y].find(span=>span<=0);
+  if(collapse!==undefined){
+   violation={field:'camera.limit.extent',value:collapse,min:0,exclusiveMin:true};camera=null;
+  }
+ }
+ const clip={x,y,width:width*scale,height:height*scale};
+ return {worldToPane,paneToWorld,clip,camera,violation};
+}

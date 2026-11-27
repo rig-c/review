@@ -7,9 +7,11 @@ import { loadCompare } from '../src/compare.ts';
 import { startCompareServer } from '../src/compare-server.ts';
 import { createLiveLifecycle, DEFAULT_CLOSE_GRACE_MS, DEFAULT_UNOPENED_TIMEOUT_MS, LIVE_PATH } from '../src/live-lifecycle.ts';
 import { loadReview } from '../src/manifest.ts';
-import { openFingerprint, openReview, running } from '../src/open.ts';
+import { loadOpenReview, openFingerprint, openReview, running } from '../src/open.ts';
 import { rebuildDir } from '../src/rebuild.ts';
 import { startServer } from '../src/server.ts';
+import { LOCAL_COMMENTS_ROUTE } from '../src/local-comments.ts';
+import { freshSession, saveSession, sessionFile } from '../src/session.ts';
 import { connectLiveWindow } from '../web/live-connection.ts';
 
 const roots: string[] = [];
@@ -377,7 +379,7 @@ test('when a live WebSocket drops while the only window is still open, connectLi
   expect(exitInfo?.reason).toBe('last-window-closed');
 });
 
-test('direct workers serve 8 concurrent WebSocket windows across 2 instances and completes session save on the 8th + loads a 9th page', async () => {
+test('direct workers serve 8 concurrent WebSocket windows, accept a local comment on the 8th and load a 9th', async () => {
   const root = await makeTempRoot();
   const pkgA = join(root, 'pkg-a');
   const pkgB = join(root, 'pkg-b');
@@ -414,23 +416,23 @@ test('direct workers serve 8 concurrent WebSocket windows across 2 instances and
   );
   expect(windows).toHaveLength(8);
 
-  // On the 8th window (instance B), read and save its feedback session
   const sessionB = await (await fetch(baseB + 'api/session')).json();
-  const saveRes = await fetch(baseB + 'api/session', {
-    method: 'PUT',
+  const sendId = crypto.randomUUID();
+  const sent = await fetch(new URL(LOCAL_COMMENTS_ROUTE, urlB.origin), {
+    method: 'POST',
     headers: {
       Origin: urlB.origin,
       'Content-Type': 'application/json',
       'X-Review-Capability': capB,
     },
     body: JSON.stringify({
-      ...sessionB,
-      status: 'approved',
-      notes: 'Saved from window 8 while 8 live WebSockets are open',
+      sendId, sourceHash: sessionB.sourceHash,
+      value: {comments: [{text: 'Sent from window 8 while 8 live WebSockets are open'}]},
     }),
   });
-  expect(saveRes.status).toBe(200);
-  expect((await saveRes.json()).status).toBe('approved');
+  expect(sent.status).toBe(200);
+  expect(await sent.json()).toEqual({sendId, at: expect.any(String)});
+  expect(await (await fetch(baseB + 'api/session')).json()).toEqual(sessionB);
 
   // Open a 9th page and live socket while all 8 are still connected
   const ninthLanding = await fetch(instA.url);
@@ -720,7 +722,7 @@ fs.writeFileSync(path.join(out,'skeleton.png'),'png');console.log('rigc: wrote '
   expect((await server2.live.exited)?.reason).toBe('last-window-closed');
 });
 
-test('saved feedback and session files survive exit byte-identically when the same inputs are reopened', async () => {
+test('historical feedback and session files survive exit byte-identically when the same inputs are reopened', async () => {
   const root = await makeTempRoot();
   const pkg = join(root, 'pkg');
   await mkdir(pkg, { recursive: true });
@@ -728,16 +730,10 @@ test('saved feedback and session files survive exit byte-identically when the sa
   await cp(join(import.meta.dir, 'fixtures/strip-probe/motion.json'), join(pkg, 'motion.json'));
   const stateDir = join(root, 'state');
 
-  const first = await openReview({ input: pkg, animation: 'inspect', direct: true, viewOnly: true }, { stateDir, graceMs: 100, idleMs: 5_000 });
-  const firstOrigin = new URL(first.url).origin;
-  const cap = new URL(first.url).hash.slice(5);
-
-  const tab = await openLiveSocket(firstOrigin + LIVE_PATH);
-  const session = await (await fetch(firstOrigin + '/api/session')).json();
-  const updated = {
-    ...session,
+  const review = await loadOpenReview({input: pkg, viewOnly: true}, {stateDir});
+  const savedPayload = await saveSession(review, {
+    ...freshSession(review),
     status: 'changes-requested',
-    notes: 'Persist across window close',
     feedback: [{
       id: 'fb-survive-1',
       frameStart: 0,
@@ -747,14 +743,12 @@ test('saved feedback and session files survive exit byte-identically when the sa
       summary: 'Keep exact bytes after auto-exit',
       context: { animation: 'inspect' },
     }],
-  };
-  const putRes = await fetch(firstOrigin + '/api/session', {
-    method: 'PUT',
-    headers: { Origin: firstOrigin, 'Content-Type': 'application/json', 'X-Review-Capability': cap },
-    body: JSON.stringify(updated),
-  });
-  expect(putRes.status).toBe(200);
-  const savedPayload = await putRes.json();
+  }, stateDir);
+  const before = await readFile(sessionFile(review, stateDir));
+  const first = await openReview({ input: pkg, animation: 'inspect', direct: true, viewOnly: true }, { stateDir, graceMs: 100, idleMs: 5_000 });
+  const firstOrigin = new URL(first.url).origin;
+  const tab = await openLiveSocket(firstOrigin + LIVE_PATH);
+  expect(await (await fetch(firstOrigin + '/api/session')).json()).toEqual(savedPayload);
 
   // Close the only tab and wait for the worker to exit and clean up its open record
   tab.abort();
@@ -768,6 +762,7 @@ test('saved feedback and session files survive exit byte-identically when the sa
   // Hash every session file on disk after exit
   const sessionFiles = (await readdir(stateDir)).filter(n => n.endsWith('.json')).sort();
   expect(sessionFiles.length).toBeGreaterThan(0);
+  expect(await readFile(sessionFile(review, stateDir))).toEqual(before);
   const bytesAfterExit = await Promise.all(sessionFiles.map(async f => ({ name: f, sha256: sha256(await readFile(join(stateDir, f))) })));
 
   // Reopen the exact same inputs and verify byte-identical session files and restored API response

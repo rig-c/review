@@ -1,0 +1,128 @@
+{
+  "writer": "c34b5d6c83e3cc54dd40ce2ed6b7bcfc4fa44a46",
+  "key": "ui:page-one:review-1233-direction",
+  "request": {
+    "publicationId": "75c41265-adbd-4da1-b906-6e8f9c6bcbd8",
+    "pageId": "page-one",
+    "displayedNonce": "a4614cceb52078d40082c223a8f8aa5438eb98caa1693d7c35b4e54f62752da1",
+    "askId": "5ea05f02-6189-431e-a3bd-2753ff095fcf",
+    "expectedGeneration": 2,
+    "submissionId": "review-1233-direction",
+    "kind": "review-verdict",
+    "value": {
+      "stage": "direction-review",
+      "verdict": "changes-requested",
+      "comments": [
+        {
+          "text": "  원문 그대로\r\nDirection comment.  \n"
+        }
+      ]
+    }
+  },
+  "receipt": {
+    "digest": "7b78410880aef0f06c5aa7c2f62a5c2ed436b8736d7a96b33836a193c618adfa",
+    "value": {
+      "schema": "rig-review/act@6",
+      "actId": "bff752d0-01b3-49e2-a4ca-106d4b557e22",
+      "jobId": "8e887c00-975d-4a99-b280-22fb4f4cc77f",
+      "askId": "5ea05f02-6189-431e-a3bd-2753ff095fcf",
+      "publicationId": "75c41265-adbd-4da1-b906-6e8f9c6bcbd8",
+      "authority": {
+        "actor": "human",
+        "channel": "review-ui",
+        "reviewer": {
+          "id": "declared-owner",
+          "role": "owner"
+        }
+      },
+      "at": "2026-11-27T11:49:32.944Z",
+      "kind": "review-verdict",
+      "source": {
+        "sourceHash": "b95fca2a37f36db7f8e19faeef934c6362d7e4c4e1a9263e9fbee98bfc25f69d",
+        "projectHash": null,
+        "package": {
+          "id": "example-direction",
+          "revision": "post-v2"
+        },
+        "selector": {
+          "kind": "post",
+          "version": 2,
+          "rigVersion": 1
+        },
+        "model": {
+          "path": "out/derived/review/v1/out/check/build/skeleton.model.json",
+          "sha256": "63190ec6746bafbc73847fa6c6905b5811cc0adb41897dfed923fe802e4dc261"
+        },
+        "direction": {
+          "path": "out/evidence/direction/v2.json",
+          "sha256": "9bec50f753d4790ee0d9dde824a612126ed37e7b0e63d393505ac836118c50a4"
+        },
+        "optionSet": null,
+        "appliedResult": null,
+        "plan": {
+          "steps": [
+            {
+              "id": "step-one",
+              "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+            }
+          ]
+        },
+        "parts": null
+      },
+      "value": {
+        "stage": "direction-review",
+        "verdict": "changes-requested",
+        "comments": [
+          {
+            "text": "  원문 그대로\r\nDirection comment.  \n"
+          }
+        ]
+      }
+    }
+  },
+  "sha256": "5b401b0d6231f1c313eeea6442b1ac940144284c9ebc96826b4589be495daec5",
+  "bytes": "{\"schema\":\"rig-review/act@6\",\"actId\":\"bff752d0-01b3-49e2-a4ca-106d4b557e22\",\"jobId\":\"8e887c00-975d-4a99-b280-22fb4f4cc77f\",\"askId\":\"5ea05f02-6189-431e-a3bd-2753ff095fcf\",\"publicationId\":\"75c41265-adbd-4da1-b906-6e8f9c6bcbd8\",\"authority\":{\"actor\":\"human\",\"channel\":\"review-ui\",\"reviewer\":{\"id\":\"declared-owner\",\"role\":\"owner\"}},\"at\":\"2026-11-27T11:49:32.944Z\",\"kind\":\"review-verdict\",\"source\":{\"sourceHash\":\"b95fca2a37f36db7f8e19faeef934c6362d7e4c4e1a9263e9fbee98bfc25f69d\",\"projectHash\":null,\"package\":{\"id\":\"example-direction\",\"revision\":\"post-v2\"},\"selector\":{\"kind\":\"post\",\"version\":2,\"rigVersion\":1},\"model\":{\"path\":\"out/derived/review/v1/out/check/build/skeleton.model.json\",\"sha256\":\"63190ec6746bafbc73847fa6c6905b5811cc0adb41897dfed923fe802e4dc261\"},\"direction\":{\"path\":\"out/evidence/direction/v2.json\",\"sha256\":\"9bec50f753d4790ee0d9dde824a612126ed37e7b0e63d393505ac836118c50a4\"},\"optionSet\":null,\"appliedResult\":null,\"plan\":{\"steps\":[{\"id\":\"step-one\",\"hash\":\"1111111111111111111111111111111111111111111111111111111111111111\"}]},\"parts\":null},\"value\":{\"stage\":\"direction-review\",\"verdict\":\"changes-requested\",\"comments\":[{\"text\":\"  원문 그대로\\r\\nDirection comment.  \\n\"}]}}",
+  "publication": {
+    "publicationId": "75c41265-adbd-4da1-b906-6e8f9c6bcbd8",
+    "instanceKey": "f8c57028e8fa5d08883e6d9351a29b34cfa5a07c88b314c73659c93d819b5bb3",
+    "generation": 1,
+    "source": {
+      "sourceHash": "b95fca2a37f36db7f8e19faeef934c6362d7e4c4e1a9263e9fbee98bfc25f69d",
+      "projectHash": null,
+      "package": {
+        "id": "example-direction",
+        "revision": "post-v2"
+      },
+      "selector": {
+        "kind": "post",
+        "version": 2,
+        "rigVersion": 1
+      },
+      "model": {
+        "path": "out/derived/review/v1/out/check/build/skeleton.model.json",
+        "sha256": "63190ec6746bafbc73847fa6c6905b5811cc0adb41897dfed923fe802e4dc261"
+      },
+      "direction": {
+        "path": "out/evidence/direction/v2.json",
+        "sha256": "9bec50f753d4790ee0d9dde824a612126ed37e7b0e63d393505ac836118c50a4"
+      },
+      "optionSet": null,
+      "appliedResult": null,
+      "plan": {
+        "steps": [
+          {
+            "id": "step-one",
+            "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ]
+      },
+      "parts": null
+    },
+    "label": "Create direction probe",
+    "previousPublicationId": null,
+    "visual": {
+      "status": "available"
+    },
+    "interview": null
+  }
+}

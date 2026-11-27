@@ -20,6 +20,8 @@ import { choice, object, string, type Json, type ReviewPackage, type ReviewedSou
 import { commentsObject, jobSha, parseComments } from './job-api.ts';
 import {checkpointEvidencePair} from './checkpoint-evidence-packet.ts';
 import { REVIEW_COMMENTS_SESSION_SCHEMA, type JobCheckpointEvidence, type ReviewCommentsSession } from './job-contract.ts';
+import {sceneCameraProjection,type SceneCameraFrame} from '@rig-c/play/composed-take';
+import type {ControlNumericCamera} from './control.ts';
 
 /** Shared declared provenance decoder. Native source freshness belongs to the package owner. */
 export function parseCommentsReviewedSource(value: unknown): ReviewedSource {
@@ -97,6 +99,22 @@ function packageClock(p:ReviewPackage,animation:string|null){
   const catalog=p.feedbackCatalog;
   return transportClock({clock:catalog.clock,animation:catalog.clockAnimation??undefined,frameClocks:catalog.frameClocks},animation??'',!!p.reviewedSource.rig,null,null)?.clock??null;
 }
+
+function matchesAuthoredCamera(saved:ControlNumericCamera|null,camera:ControlNumericCamera,frame:SceneCameraFrame):boolean {
+  if(!saved||saved.space!=='world'||camera.space!=='world'||saved.zoom!==camera.zoom||
+    !isDeepStrictEqual(saved.viewport,camera.viewport))return false;
+  const {outputToWorld}=sceneCameraProjection(frame),{x,y,width,height}=saved.visible;
+  const expected=[outputToWorld({x,y:-y}),outputToWorld({x:x+width,y:-y-height}),
+    outputToWorld({x:saved.center.x,y:-saved.center.y})];
+  const actual=[{x:camera.visible.x,y:camera.visible.y},
+    {x:camera.visible.x+camera.visible.width,y:camera.visible.y+camera.visible.height},camera.center];
+  const scale=saved.viewport.width/width*frame.zoom;
+  // The bookmark uses layout state. The crop measures browser boxes, which round at subpixel boundaries.
+  const layoutRounding=1/32;
+  return expected.every((point,index)=>Math.abs(point.x-actual[index]!.x)*scale<=layoutRounding&&
+    Math.abs(point.y-actual[index]!.y)*scale<=layoutRounding);
+}
+
 /** Only a server-owned publication may supply the checkpoint evidence for this validation. */
 export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string,turnDials:readonly TurnDial[]=p.feedbackCatalog.turnDials??[],trustedCheckpointEvidence?:JobCheckpointEvidence):Feedback {
   const context=feedback.context===undefined?{}:object(feedback.context,'feedback.context');
@@ -118,10 +136,19 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
   // The exported environment schedule (#112): absent or null stays valid; a present record carries its bytes and their sha256, recomputed here.
   if(context.environmentSchedule!==undefined)parseScheduleContext(context.environmentSchedule,text=>createHash('sha256').update(text).digest('hex'));
   if(context.turn!==undefined){if(!turnDials.length)throw new Error('TURN_UNAVAILABLE: this inspected model has no supported turn dials');new TurnState(turnDials).validate(context.turn);}
+  let authoredDuration:number|undefined;
   if(c){
     const standalone=animation===undefined&&trustedCheckpointEvidence===undefined;
     validateCommentCrop(c);const bookmark=parseBookmark(c.bookmark);
-    if(!isDeepStrictEqual(bookmark.view.cameras[c.viewport],c.camera))throw new Error('COMMENT_CONTEXT_MISMATCH: saved pane camera');
+    const bound=c.viewport==='rig'&&c.animation?p.sceneCamera:undefined;
+    const terminal=bound&&c.animation?bound.sample(c.animation,{endpoint:'terminal'}):null;
+    authoredDuration=terminal?.authoredSeconds;
+    if(terminal&&c.time>terminal.authoredSeconds)throw new Error('COMMENT_TIME_ONLY_INVALID: seconds outside inspected animation');
+    const frame=terminal&&bound&&c.animation?(c.time===terminal.authoredSeconds?terminal:
+      bound.sample(c.animation,{basis:'authored',seconds:c.time})):null;
+    const savedCamera=bookmark.view.cameras[c.viewport];
+    if(frame?!matchesAuthoredCamera(savedCamera,c.camera,frame):!isDeepStrictEqual(savedCamera,c.camera))
+      throw new Error('COMMENT_CONTEXT_MISMATCH: saved pane camera');
     if(bookmark.time!==c.time||bookmark.animation!==c.animation||!isDeepStrictEqual(bookmark.selection.turn??null,context.turn??null))throw new Error('COMMENT_CONTEXT_MISMATCH: bookmark pose');
     if(animation===undefined){parseBookmark(c.bookmark,{mode:'single',sourceHash:p.sourceHash,rigs:[p.reviewedSource.rig?.sha256??null]});if(c.viewport!=='rig'&&c.viewport!=='reference')throw new Error('COMMENT_CONTEXT_MISMATCH: single viewport');
       if(c.viewport==='reference'){
@@ -143,7 +170,7 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
       ? feedback.frameStart!==null&&feedback.frameEnd!==null&&feedback.frameStart<=c.frame.index&&c.frame.index<=feedback.frameEnd
       : (c.frame?.index??null)===feedback.frameStart&&feedback.frameStart===feedback.frameEnd;
     if(c.animation!==(animation??context.animation??null)||c.time!==context.time||!matchesInterval)throw new Error('COMMENT_CONTEXT_MISMATCH: frame, time or animation differs');
-    if(timed&&!sealedPicture){const clock=packageClock(p,c.animation);if(frameAtTime(clock,c.time)!==null)throw new Error('COMMENT_TIME_ONLY_INVALID: explicit producer frame exists at this time');}
+    if(timed&&!sealedPicture){const clock=packageClock(p,c.animation);if(frameAtTime(clock,frame?.compiledSeconds??c.time)!==null)throw new Error('COMMENT_TIME_ONLY_INVALID: explicit producer frame exists at this time');}
     const a=projectMark(c.world,c.camera),b=projectMark({x:c.world.x+c.world.width,y:c.world.y+c.world.height},c.camera);
     if(Math.abs(Math.min(a.x,b.x)-c.screen.x)>1e-5||Math.abs(Math.min(a.y,b.y)-c.screen.y)>1e-5||Math.abs(Math.abs(a.x-b.x)-c.screen.width)>1e-5||Math.abs(Math.abs(a.y-b.y)-c.screen.height)>1e-5)throw new Error('COMMENT_CONTEXT_MISMATCH: screen/world region projection');
     if(c.camera.space!==(c.viewport==='reference'?'image':'world'))throw new Error('COMMENT_CONTEXT_MISMATCH: camera space');
@@ -154,7 +181,7 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
     }
   }
   const selected=animation??(typeof context.animation==='string'?context.animation:null);
-  if(c?.frame===null)validateTimedFeedbackSelection(p.feedbackCatalog,{target:feedback.target,animation:selected,time:c.time});
+  if(c?.frame===null)validateTimedFeedbackSelection(p.feedbackCatalog,{target:feedback.target,animation:selected,time:c.time},authoredDuration);
   else validateFeedbackSelection((context.comment as any)?.frame?.basis==='reference'?{...p.feedbackCatalog,clock:null,clockAnimation:null,frameClocks:undefined}:p.feedbackCatalog,{...feedbackFrameInterval(feedback),target:feedback.target,animation:selected});
   return {...feedback,context:{...context,...(animation===undefined?{}:{animation}),interval} as Json};
 }
@@ -182,6 +209,6 @@ export function parseSession(input:unknown,p:ReviewPackage,strict=true):ReviewSe
   if(new Set(feedback.map(f=>f.id)).size!==feedback.length)throw new Error('session.feedback: duplicate ids');
   return {...fresh,status,checkpoints,feedback,feedbackWarnings,updatedAt:new Date().toISOString()};
 }
-export function sessionFile(p:ReviewPackage,stateDir=join(homedir(),'.local','state','rig-c-review')):string { const key=createHash('sha256').update(JSON.stringify([p.manifest.id,p.manifest.revision,p.sourceHash,p.reviewedSource])).digest('hex'); return join(stateDir,key+'.json'); }
+export function sessionFile(p:Pick<ReviewPackage,'sourceHash'|'reviewedSource'>&{manifest:Pick<ReviewPackage['manifest'],'id'|'revision'>},stateDir=join(homedir(),'.local','state','rig-c-review')):string { const key=createHash('sha256').update(JSON.stringify([p.manifest.id,p.manifest.revision,p.sourceHash,p.reviewedSource])).digest('hex'); return join(stateDir,key+'.json'); }
 export async function readSession(p:ReviewPackage,stateDir?:string):Promise<ReviewSession> {try {const v=JSON.parse(await readFile(sessionFile(p,stateDir),'utf8'));const parsed=parseSession(v,p,false);return {...parsed,updatedAt:v.updatedAt};}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return freshSession(p);throw e;} }
 export async function saveSession(p:ReviewPackage,input:unknown,stateDir?:string,validate?:(value:ReviewSession,bytes:Buffer,previous:ReviewSession)=>Promise<void>):Promise<ReviewSession> {const value=parseSession(input,p);const bytes=Buffer.from(JSON.stringify(value,null,2)+'\n');const previous=await readSession(p,stateDir);await validate?.(value,bytes,previous);assertSubmittedComments(previous.feedback,value.feedback);await saveCommentCrops(value.feedback,stateDir);const file=sessionFile(p,stateDir);await mkdir(join(file,'..'),{recursive:true,mode:0o700});const tmp=file+'.'+crypto.randomUUID()+'.tmp';await writeFile(tmp,bytes,{mode:0o600});await rename(tmp,file);return value;}

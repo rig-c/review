@@ -90,7 +90,7 @@ function workspace(player: RigPlayer, direction: DirectionInspection, duration: 
   const noop = () => {};
   const scope = {...scene, advancePlayback, cueDue, idleAvailable, player, time: 0, duration, playbackCarry: 0, lastFrame: 1000, idleHeld: false,
     video: null, previousBuildView: null, sceneComposite: undefined, stageSource: null, inspectedModel: null, data: {direction}, assets: {animations: [{name: 'idle'}]},
-    animation: 'idle', axisInspection: null, stopAudio: noop, clipMoved: noop, stepEnvironment: noop, drawRig: (action: () => void) => action(),
+    animation: 'idle', axisInspection: null, selectedSceneCamera: () => null, stopAudio: noop, clipMoved: noop, stepEnvironment: noop, drawRig: (action: () => void) => action(),
     input: (id: string) => ({checked: id === 'idle-repeat'}), renderSequenceFrame: noop, renderTransport: noop, pause: noop,
     message: (value: string) => { throw Error(value); }, errorText: String, activeCues: () => []};
   const run = new Function('scope', `with(scope){${transpiler.transformSync(source)};return {tickPlaying,activeScene,canRepeatIdle};}`)(scope);

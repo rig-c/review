@@ -1,35 +1,34 @@
 import {expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
 import {join} from 'node:path';
-import {mkdir, readFile, writeFile} from 'node:fs/promises';
+import {readFile, writeFile} from 'node:fs/promises';
 import {jobFixture, syntheticJobParts, growJobRigFixture} from './helpers/job-api-fixture.ts';
 import {rigStillInput} from './helpers/job-rig-still.ts';
 import {syntheticPinnedFeedback} from './helpers/job-pinned-comments.ts';
-import {jobHash, parseCommentsAct, parseContextCommentsAct, createJobHostPorts} from '../src/job-api.ts';
+import {jobHash, parseCommentOnlyAct, createJobHostPorts, jobBodyLimit} from '../src/job-api.ts';
 import {jobRawActMediaType} from '../src/job-contract.ts';
 import {jobCropReferences, JobStore} from '../src/job-store.ts';
-import {feedbackItemComments} from '../src/stage-comment.ts';
+import {feedbackContextComments, feedbackItemComments} from '../src/stage-comment.ts';
+import {partsIssueComments} from '../src/feedback-export.ts';
 import {jobCommand} from '../src/job-cli.ts';
 import {jobWindowEvents} from '../web/job-session.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 import {loadPartsView} from '../src/parts-view.ts';
 import {preparePartsComment} from '../src/parts-comment-crops.ts';
 import {JobSession} from '../src/job-session.ts';
-import {bindJobAsk, finalizeJobAct} from '../src/job-act.ts';
-import type {JobPendingAsk, JobUISubmission} from '../src/job-contract.ts';
 import {createJobFront} from '../src/job-front.ts';
 import {PNG} from 'pngjs';
 import {encodeBookmark} from '../web/inspection-persistence.ts';
-import {jobRigScreenDecisions} from '../web/job-rig-screen.ts';
 
 useTemporaryReviewState();
 for (const unavailable of [false, true]) test(`#790 close then consume reaches the act and closure with crop ${unavailable ? 'unavailable' : 'retained'}`, async () => {
   const f = await jobFixture({scratchParent: process.env.TMPDIR});
   const front = createJobFront({origin: f.origin, ports: f.ports, resource: async () => ''});
   try {
-    const {input, publication} = await rigStillInput(f);
+    const publication = await f.publish(), page = await f.display(publication);
     const feedback = syntheticPinnedFeedback({...publication.source, model: publication.source.model!}, 1);
-    const payload = {...input, value: {stage: 'rig-review', verdict: 'changes-requested', words: '', feedback}};
+    const payload = {...page, expectedGeneration: f.session.status().generation, submissionId: 'comment-pins',
+      kind: 'comments' as const, value: {comments: feedbackContextComments(feedback)}};
     const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(payload));
     if (!saved.ok) throw new Error(saved.error.code);
     const grant = f.session.writerGrant().fetchCapability, hash = jobHash(JSON.stringify(saved.value));
@@ -45,7 +44,7 @@ for (const unavailable of [false, true]) test(`#790 close then consume reaches t
     }) as typeof fetch;
     const events = [];
     for await (const event of jobWindowEvents(access, null, new AbortController().signal, fetcher)) events.push(event);
-    expect(events.map(event => event.type)).toEqual(['published', 'pending', 'act', 'closed']);
+    expect(events.map(event => event.type)).toEqual(['published', 'act', 'closed']);
     const act = events.find(event => event.type === 'act');
     if (!act || act.type !== 'act') throw new Error('missing act');
     if (unavailable) {
@@ -67,18 +66,25 @@ for (const unavailable of [false, true]) test(`#790 close then consume reaches t
   } finally {front.stop(); await f.close();}
 });
 
-for (const count of [1, 3, 6, 12]) test(`#790 finalized ${count}-pin rig verdict preserves exact full acts through every consumer`, async () => {
+for (const count of [1, 3, 6, 12]) test(`#790 finalized ${count}-pin rig comments preserve exact full acts through every consumer`, async () => {
   const f = await jobFixture({scratchParent: process.env.TMPDIR});
   try {
-    const {input, publication} = await rigStillInput(f);
+    const publication = await f.publish(), page = await f.display(publication);
     if (!publication.source.model) throw new Error('synthetic model missing');
     const feedback = syntheticPinnedFeedback({...publication.source, model: publication.source.model}, count);
-    const payload = {...input, value: {stage: 'rig-review', verdict: 'changes-requested', words: '', feedback}};
+    const payload = {...page, expectedGeneration: f.session.status().generation, submissionId: 'comment-pins',
+      kind: 'comments' as const, value: {comments: feedbackContextComments(feedback)}};
+    const oversized = Buffer.byteLength(JSON.stringify(payload)) > jobBodyLimit;
+    expect(oversized).toBe(count > 1);
+    // The authenticated port keeps the ordinary comment body limit. Import the larger synthetic rows
+    // through the in-process seam to exercise persisted delivery without relaxing admission.
     const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(payload));
-    if (!saved.ok) throw new Error(saved.error.code + ': ' + saved.error.message);
-    const act = parseContextCommentsAct(saved.value), raw = JSON.stringify(saved.value), hash = jobHash(raw);
+    if (oversized) expect(saved).toMatchObject({ok: false, error: {code: 'JOB_BODY_LIMIT'}});
+    else if (!saved.ok) throw new Error(saved.error.code + ': ' + saved.error.message);
+    const stored = saved.ok ? saved.value : await f.session.commitUIAct(payload);
+    const act = parseCommentOnlyAct(stored), raw = JSON.stringify(stored), hash = jobHash(raw);
     expect(act.value.comments.map(({context, ...comment}) => {
-      expect(context?.subject?.sourceHash).toBe(publication.source.sourceHash);
+      expect(context).not.toHaveProperty('subject');
       return comment;
     })).toEqual(feedbackItemComments(feedback));
     const fetched = await (await f.call({...f.base(), verb: 'fetch-act', actId: act.actId},
@@ -132,11 +138,9 @@ for (const count of [1, 3, 6, 12]) test(`#790 finalized ${count}-pin rig verdict
       expect(unknown!.status).toBe(409);
     }
     front.stop();
-    expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest(payload)))).toEqual(saved);
-    // CLI raw-act output exercises its actual 512 KiB predecessor boundary.
+    expect(await f.session.commitUIAct(payload)).toEqual(stored);
     const chunks: Uint8Array[] = [];
-    await mkdir(join(f.scratch, 'still'));
-    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId, '--still-out', join(f.scratch, 'still')], {
+    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId], {
       consumerCapability: f.session.writerGrant().fetchCapability,
       fetch: (async (url: string | URL | Request, init?: RequestInit) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
       writeBytes(bytes) {chunks.push(bytes.slice()); return bytes.length;},
@@ -150,11 +154,11 @@ for (const count of [1, 3, 6, 12]) test(`#790 finalized ${count}-pin rig verdict
       actBytes: Buffer.byteLength(raw), eventBytes: Buffer.byteLength(JSON.stringify(event)),
       nextResponseBytes: Buffer.byteLength(nextText), nextCLIBytes: Buffer.byteLength(nextOutput[0]!),
       rawCLIBytes: Buffer.concat(chunks).length, browserEventBytes: Buffer.byteLength(stream), inlineCropChars: crop.png.length,
-      hash, status: 200, ports: ['fetch-act', 'export', 'next', 'raw', 'cli', 'browser-hydrated']}));
+      hash, portResult: saved.ok ? 'ok' : saved.error.code, readers: ['fetch-act', 'export', 'next', 'raw', 'cli', 'browser-hydrated']}));
   } finally {await f.close();}
 });
 
-for (const count of [1, 6, 12]) test(`#790 ${count} pointed parts comments pass the authenticated non-capture request and event boundaries`, async () => {
+for (const count of [1, 6, 12]) test(`#790 ${count} pointed Parts comments respect the request limit and round-trip through readers`, async () => {
   const f = await jobFixture({scratchParent: process.env.TMPDIR});
   try {
     const parts = await syntheticJobParts(f, {project: true, painting: true});
@@ -162,7 +166,7 @@ for (const count of [1, 6, 12]) test(`#790 ${count} pointed parts comments pass 
       {name: 'body', x: 0, y: 0, w: 20, h: 20}, {name: 'head', x: 10, y: 0, w: 20, h: 20}]}));
     parts.manifest.sha256 = jobHash(await readFile(join(f.root, 'out/parts.json')));
     f.setContext({...f.getContext(), parts});
-    const publication = await f.publish(), ask = await f.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
+    const publication = await f.publish();
     const page = await f.display(publication), retained = f.session.retainedSource(publication.publicationId);
     const pkg = await loadPartsView(join(retained.snapshotRoot, 'out'));
     const crop = (syntheticPinnedFeedback({sourceHash: publication.source.sourceHash,
@@ -177,14 +181,18 @@ for (const count of [1, 6, 12]) test(`#790 ${count} pointed parts comments pass 
         background: 'checker', alpha: false, footprints: true, mesh: false}, crop, nativeCrop: null},
       false, {sourceHash: publication.source.sourceHash});
     const issues = Array.from({length: count}, (_, i) => ({...structuredClone(prepared), id: 'assembled-' + i}));
-    const payload = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-      submissionId: 'parts-pins', kind: 'parts-verdict', value: {verdict: 'changes-requested', words: '', issues}};
+    const payload = {...page, expectedGeneration: f.session.status().generation, submissionId: 'parts-pins',
+      kind: 'comments' as const, value: {comments: partsIssueComments(issues)}};
+    const oversized = Buffer.byteLength(JSON.stringify(payload)) > jobBodyLimit;
+    expect(oversized).toBe(count > 1);
     const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(payload));
-    if (!saved.ok) throw new Error(saved.error.code + ': ' + saved.error.message);
-    const raw = JSON.stringify(saved.value), hash = jobHash(raw);
-    expect(parseCommentsAct(saved.value).value.comments).toEqual(issues.map(({summary, ...anchor}) => ({text: summary, anchor})));
-    expect(jobHash(f.session.readActExport(saved.value.actId, false))).toBe(hash);
-    const fetched = await (await f.call({...f.base(), verb: 'fetch-act', actId: saved.value.actId},
+    if (oversized) expect(saved).toMatchObject({ok: false, error: {code: 'JOB_BODY_LIMIT'}});
+    else if (!saved.ok) throw new Error(saved.error.code + ': ' + saved.error.message);
+    const act = parseCommentOnlyAct(saved.ok ? saved.value : await f.session.commitUIAct(payload));
+    const raw = JSON.stringify(act), hash = jobHash(raw);
+    expect(act.value.comments).toEqual(payload.value.comments);
+    expect(jobHash(f.session.readActExport(act.actId, false))).toBe(hash);
+    const fetched = await (await f.call({...f.base(), verb: 'fetch-act', actId: act.actId},
       f.session.writerGrant().fetchCapability)).json();
     expect(jobHash(JSON.stringify(fetched.value))).toBe(hash);
     const nextResponse = await f.call({...f.base(), verb: 'next', after: null, waitMs: 0});
@@ -199,36 +207,32 @@ for (const count of [1, 6, 12]) test(`#790 ${count} pointed parts comments pass 
     expect(jobHash(JSON.stringify(JSON.parse(nextOutput[0]!).value.events.find((entry: {type: string}) => entry.type === 'act').act))).toBe(hash);
 
     const chunks: Uint8Array[] = [];
-    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId], {
+    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId], {
       consumerCapability: f.session.writerGrant().fetchCapability,
       fetch: (async (url: string | URL | Request, init?: RequestInit) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
       writeBytes(bytes) {chunks.push(bytes.slice()); return bytes.length;},
     });
     expect(jobHash(Buffer.concat(chunks))).toBe(hash);
-    console.log(JSON.stringify({kind: 'parts-verdict', count, requestBytes: Buffer.byteLength(JSON.stringify(payload)),
+    console.log(JSON.stringify({kind: act.kind, count, requestBytes: Buffer.byteLength(JSON.stringify(payload)),
       actBytes: Buffer.byteLength(raw), eventBytes: Buffer.byteLength(JSON.stringify(event)),
       nextResponseBytes: Buffer.byteLength(nextText), nextCLIBytes: Buffer.byteLength(nextOutput[0]!),
-      rawCLIBytes: Buffer.concat(chunks).length, browserEventBytes: Buffer.byteLength(jobCropReferences(event)), hash, status: 200}));
+      rawCLIBytes: Buffer.concat(chunks).length, browserEventBytes: Buffer.byteLength(jobCropReferences(event)),
+      hash, portResult: saved.ok ? 'ok' : saved.error.code}));
   } finally {await f.close();}
 });
 
-test('#790 direction verdict retains its closed no-image-comment submission at 12-pin size', async () => {
+test('#790 a large legacy direction request with image feedback reaches the disabled-kind verdict gate', async () => {
   const f = await jobFixture({scratchParent: process.env.TMPDIR});
   try {
     const {input, publication} = await rigStillInput(f);
     const feedback = syntheticPinnedFeedback({...publication.source, model: publication.source.model!}, 12);
-    const base = f.session.retainedSource(publication.publicationId);
-    const retained = {...base, source: {...base.source, selector: {kind: 'post' as const, version: 2, rigVersion: 1},
-      direction: {path: 'out/direction.json', sha256: 'd'.repeat(64)}}} as typeof base;
-    const subject = {kind: 'review-verdict', stage: 'direction-review'} as const;
-    const ask: JobPendingAsk = {askId: input.askId, publicationId: publication.publicationId, subject,
-      source: bindJobAsk(subject, retained), status: 'pending'};
     const {capture: _capture, ...withoutCapture} = input;
-    const submission = {...withoutCapture, value: {stage: 'direction-review', verdict: 'changes-requested',
-      words: '', feedback}} as unknown as JobUISubmission;
+    const submission = {...withoutCapture, value: {stage: 'direction-review', verdict: 'changes-requested', words: '', feedback}};
     expect(Buffer.byteLength(JSON.stringify(submission))).toBeGreaterThan(1024 * 1024);
-    expect(() => finalizeJobAct({jobId: f.session.jobId, submission, ask, retained,
-      reviewer: {id: 'declared-owner', role: 'owner'}})).toThrow('JOB_REQUEST_INVALID');
+    const before = f.session.status();
+    expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submission)))
+      .toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+    expect(f.session.status()).toEqual(before);
   } finally {await f.close();}
 });
 
@@ -270,23 +274,6 @@ function singleRegionPng(length: number): Buffer {
   return Buffer.concat([bytes.subarray(0, -12), chunk, bytes.subarray(-12)]);
 }
 
-let singleRegionStill: Buffer | undefined;
-function singleRegionStillPng(): Buffer {
-  if (singleRegionStill) return singleRegionStill;
-  const image = new PNG({width: 767 * 2, height: 770 * 2});
-  let seed = 791;
-  for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
-    const offset = (y * image.width + x) * 4;
-    for (let channel = 0; channel < 3; channel++) {
-      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-      image.data[offset + channel] = x > image.width * .08 && x < image.width * .92 &&
-        y > image.height * .08 && y < image.height * .92 ? seed >>> 24 : 32;
-    }
-    image.data[offset + 3] = 255;
-  }
-  return singleRegionStill = PNG.sync.write(image);
-}
-
 // The already-written large-region regression retained when the broader measurement was withdrawn.
 for (const scenario of [
   {pane: 'rig', text: 1, slots: 24, cropBytes: 149982},
@@ -305,7 +292,7 @@ for (const scenario of [
   front = createJobFront({origin, ports: createJobHostPorts(f.session, origin), resource: async () => ''});
   try {
     await growJobRigFixture(f, 32, 32);
-    const {input, publication, ask} = await rigStillInput(f, 0, 'idle');
+    const publication = await f.publish(), page = await f.display(publication);
     const [feedback] = syntheticPinnedFeedback({...publication.source, model: publication.source.model!}, 1);
     const row = feedback!, context = row.context as any, mark = context.comment;
     row.summary = '한'.repeat(scenario.text);
@@ -338,41 +325,31 @@ for (const scenario of [
     mark.bookmark = JSON.parse(new TextDecoder().decode(Uint8Array.from(binary, c => c.charCodeAt(0))));
     const cropBytes = singleRegionPng(scenario.cropBytes), cropSha = jobHash(cropBytes);
     mark.crop = {path: `comment-crops/${cropSha}.png`, sha256: cropSha, png: 'data:image/png;base64,' + cropBytes.toString('base64'), width: 192, height: 193};
-    const still = singleRegionStillPng();
-    const [decision] = jobRigScreenDecisions({status: 'changes-requested', checkpoints: {'step-one': {outcome: 'pass', note: 'separate checkpoint state'}}, feedback: [row]}, [ask], publication.publicationId);
-    if (!decision || decision.kind !== 'review-verdict') throw new Error('missing rig verdict');
-    const value = decision.value;
-    const payload = {...input, value, capture: {...input.capture, png: 'data:image/png;base64,' + still.toString('base64'), width: 1534, height: 1540}};
-    let candidateEventBytes: number | null = null;
-    try {
-      const act = finalizeJobAct({jobId: f.session.jobId, submission: payload, ask,
-        retained: f.session.retainedSource(publication.publicationId), reviewer: {id: 'declared-owner', role: 'owner'},
-        still: {path: jobHash(still) + '.png', sha256: jobHash(still), camera: 'fixed', frame: 0, animation: 'idle'}});
-      candidateEventBytes = Buffer.byteLength(JSON.stringify({type: 'act', act, cursor: '0'.repeat(36), jobId: f.session.jobId, generation: f.session.status().generation + 1}));
-    } catch { /* Invalid crop/text controls have no candidate act. The real HTTP response below names the refusal. */ }
+    const payload = {...page, expectedGeneration: f.session.status().generation, submissionId: 'single-region',
+      kind: 'comments', value: {comments: feedbackContextComments([row])}};
+    expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThan(jobBodyLimit);
     const response = await fetch(origin + `/jobs/${f.session.jobId}/ui/acts` + link, {method: 'POST',
       headers: {'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': f.credentials.ui}, body: JSON.stringify(payload)});
     const result = await response.json();
     expect(response.status).toBe(200);
     {
       expect(result.ok).toBe(true);
-      const act = parseContextCommentsAct(result.value);
+      const act = parseCommentOnlyAct(result.value);
       const [{context, ...comment}] = act.value.comments;
       expect([comment]).toEqual(feedbackItemComments([row]));
       expect(context).toMatchObject({mode: 'animate', tab: 'playback', region: mark.world,
         camera: mark.camera, frame: mark.frame});
       expect(JSON.parse(f.session.readActExport(result.value.actId, false).toString())).toEqual(result.value);
-      expect(JSON.stringify(result.value)).not.toContain(payload.capture.png);
+      expect(act).not.toHaveProperty('still');
     }
     expect(receivedHash).toBe('');
     expect(Object.hasOwn(mark, 'nativeCrop')).toBe(false);
     console.log('SINGLE_COMMENT_790 ' + JSON.stringify({runtime: 'candidate', pane: scenario.pane,
       commentCount: 1, slots: mark.slots.length, slotNameUnits: mark.slots[0]?.slot.length ?? 0, textUnits: row.summary.length,
       textBytes: Buffer.byteLength(row.summary), ratio: 2, paneCSS: [767, 770],
-      stillPixels: [1534, 1540], stillContentScale: .84, stillPngBytes: still.length, cropPngBytes: cropBytes.length,
+      cropPngBytes: cropBytes.length,
       cropChars: mark.crop.png.length, cropPixels: [192, 193], nativeCrop: 'absent', nativeCropBytes: 0,
-      requestBytes: Buffer.byteLength(JSON.stringify(payload)), withoutCaptureBytes: Buffer.byteLength(JSON.stringify({...payload, capture: undefined})),
-      candidateEventBytes, browserEventBytes: result.ok ? Buffer.byteLength(jobCropReferences({type: 'act', act: result.value, cursor: f.session.status().cursor, jobId: f.session.jobId, generation: f.session.status().generation})) : null,
+      requestBytes: Buffer.byteLength(JSON.stringify(payload)), browserEventBytes: result.ok ? Buffer.byteLength(jobCropReferences({type: 'act', act: result.value, cursor: f.session.status().cursor, jobId: f.session.jobId, generation: f.session.status().generation})) : null,
       bookmarkBytes: Buffer.byteLength(JSON.stringify(mark.bookmark)), linkChars: link.length,
       slotsBytes: Buffer.byteLength(JSON.stringify(mark.slots)), selectionBytes: Buffer.byteLength(JSON.stringify(mark.bookmark.selection)),
       viewBytes: Buffer.byteLength(JSON.stringify(mark.bookmark.view)), contextBytesWithoutComment: Buffer.byteLength(JSON.stringify({...context, comment: undefined})),

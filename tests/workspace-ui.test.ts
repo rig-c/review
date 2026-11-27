@@ -185,7 +185,7 @@ test('Setup holds no control that seeks or plays: the angle tool and panel and e
 const mainSource=()=>readFile(new URL('../web/main.ts',import.meta.url),'utf8');
 /** Static Comments controls that move with the rest of the review dialog. */
 const feedbackIds=['inspector-feedback','review-status','provenance-version','provenance-rig','provenance-motion','provenance-full','source-files','checkpoint-detail','detail-title','detail-note','checkpoint-note','proposal-panel','correction-controls','correction-stage','correction-selector','correction-model','correction-post-fields','comments-list-host','proposal-boundary','feedback-warnings','feedback-applied-check','proposal-list','strip-panel','strip-scope','strip-reference','strip-format','strip-export','strip-status'];
-test('the real review decision and Submit nodes move once to their actHome without a proxy submit',async()=>{
+test('hidden review decision and Submit nodes move once to the act row alongside Send comments',async()=>{
  const html=await indexHtml(),dialog=between(html,'<dialog id="review-dialog"','</dialog>');
  for(const id of feedbackIds){expect(dialog).toContain(` id="${id}"`);expect(html.split(` id="${id}"`).length).toBe(2);}
  for(const id of ['feedback-start','feedback-end','feedback-range-hint','feedback-target-kind','feedback-target-name','feedback-target-names','feedback-target-hint','feedback-category','correction-path','correction-words','add-proposal'])expect(dialog).not.toContain(` id="${id}"`);
@@ -194,7 +194,37 @@ test('the real review decision and Submit nodes move once to their actHome witho
  expect(composition).toContain("label,status,actions");expect(composition).toContain('bottom.actHome.append(act)');expect(composition).toContain('actHome:actHome??heading');expect(composition).toContain('dialog.remove()');
  const main=await mainSource();expect(main).toContain("rigInspector.row.reveal=()=>");expect(main).not.toContain('dialog.showModal()');expect(main).not.toContain("button('write-review')");
  expect(main).toContain("onStatus:value=>{draftStatus=value;renderDraftState();}");expect(main).toContain('rigInspector.actBar.setSaveState(');for(const id of ['review-draft-state','draft-state'])expect(main).not.toMatch(new RegExp(`text\\('${id}'|el\\('${id}'\\)\\.(title|textContent)`));expect(main).toContain("text('review-message', value);");
- for(const gone of ["button('export')","button('export-markdown')"])expect(main).not.toContain(gone);
+ for(const gone of ["button('export')","button('export-markdown')","select('review-status').onchange"])expect(main).not.toContain(gone);
+ const answer=main.slice(main.indexOf('function renderAnswerControls('),main.indexOf('/** Navigation alone crosses'));
+ expect(answer).toContain('save.hidden=true');
+ expect(answer).toContain('sendComments.hidden=');
+ expect(main).toContain("select('review-status').value = session.status");
+ expect(main).toContain("select('review-status').value=session.status");
+});
+test('#1233 only hosted Parts retains the hidden stage-parts verdict fallback',async()=>{
+ const source=await mainSource();
+ const parts=source.indexOf('async function startParts(');
+ const start=source.indexOf("\n button('save').disabled=saveBlocked();",parts);
+ const end=source.indexOf('\n viewDisposers.push(viewport.bindControls',start);
+ expect(start).toBeGreaterThan(parts);expect(end).toBeGreaterThan(start);
+ const code=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end));
+ const bind=new Function('scope',`with(scope){${code}}`);
+ const issue={id:'pin',summary:'Check the seam'};
+ for(const host of [null,{}]){
+  const requests:{path:string;init:RequestInit}[]=[],save={disabled:false,onclick:null as (()=>Promise<void>)|null};
+  const scope={host,button:()=>save,saveBlocked:()=>false,saving:false,partsSubject:null,text(){},el:()=>({classList:{toggle(){}}}),
+   state:{setSaveState(){}},renderDraftState(){},issues:[issue],fresh:()=>true,generalRows:undefined,
+   request:async(path:string,init:RequestInit)=>{requests.push({path,init});},disposed:false,submittedIssues:new Set(),
+   dirty:true,partsBaseline:null,persistence:null};
+  bind(scope);await save.onclick?.();
+  if(host){
+   expect(requests).toEqual([{path:'/api/stage-parts/verdict',init:{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({status:'changes-requested',issues:[issue]})}}]);
+   expect([...scope.submittedIssues]).toEqual([issue.id]);
+  }else{
+   expect(save.onclick).toBeNull();expect(requests).toEqual([]);
+  }
+ }
 });
 test('the left column is a fixed header row and one scrolling body: strip, parts and Settings scroll together',async()=>{
  const html=await indexHtml(),css=await stylesCss(),left=between(html,'<aside class="left-panel">','<main>');
@@ -634,16 +664,19 @@ test('#678 rig caller regions preserve the legacy shell DOM, labels, drawers and
  }finally{setLinkLanguage(link);setLanguagePreference(preference);}
 });
 
-test('#809 pending ask heading uses full subject sentences in EN/KO and names the absence of an ask',async()=>{
- const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
+test('#1232 historical verdict subjects leave the existing comment headline in EN/KO',async()=>{
+ const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('function renderAnswerControls(',start);
  const raw={text:'',hidden:false,removeAttribute(){}};
- let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','renderDraftState','t','setSourceAttribute','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null,askSentence="",jobProgress=null,progressTimer;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},()=>{statusRefreshes++;},t,()=>{});
+ let statusRefreshes=0,commenting=false;
+ const inspector={comments:{panel:{querySelector:()=>null}}};
+ const render=new Function('askHeadline','setSourceText','renderDraftState','t','setSourceAttribute','commentHost','rigInspector','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null,askSentence="",jobProgress=null,progressTimer;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},()=>{statusRefreshes++;},t,()=>{},()=>commenting,inspector);
  render([]);expect(raw.hidden).toBe(false);expect(t(raw.text,undefined,'en')).toBe('Nothing is waiting for your answer.');expect(t(raw.text,undefined,'ko')).toBe('답변을 기다리는 요청이 없어요.');
- // #1229 / #1230: checkpoint and interview-picks asks are retired and produce no ask sentence; active verdict subjects join with full EN/KO sentences.
+ commenting=true;
+ const headline="We're looking at the work together. Leave your thoughts as comments.";
  render([{kind:'review-verdict',stage:'rig-review'},{kind:'parts-verdict'},{kind:'interview-picks'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
- expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Check the parts.');
- expect(t(raw.text,undefined,'ko')).toBe('리그와 모션을 확인해 주세요. · 파츠를 확인해 주세요.');
- render([]);expect(raw.hidden).toBe(false);expect(raw.text).toBe('Nothing is waiting for your answer.');expect(statusRefreshes).toBe(3);
+ expect(t(raw.text,undefined,'en')).toBe(enCatalog[headline]);
+ expect(t(raw.text,undefined,'ko')).toBe(koCatalog[headline]);
+ render([]);expect(raw.hidden).toBe(false);expect(raw.text).toBe(headline);expect(statusRefreshes).toBe(3);
 });
 
 test('#743 workspace owns detached portal lookup, settles redocking, and disposes only its drawers',async()=>{
@@ -661,7 +694,7 @@ test('#743 workspace owns detached portal lookup, settles redocking, and dispose
 });
 
 test('#904 waiting prompt never guesses a rig subject for model-free record and interview publications',async()=>{
- const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
+ const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('function renderAnswerControls(',start);
  for(const subject of [{kind:'interview-picks'},{kind:'checkpoint'},{kind:'signoff'}]){
   const raw={hidden:true,text:'',removeAttribute(){}};const scope={askHeadline:raw,firstPublicationPrompt:true,pendingAnswers:[],partsSubject:null,host:null,t,askSentence:'',jobProgress:null,progressTimer:undefined,
    setSourceText:(_:unknown,value:string)=>{raw.text=value;},setSourceAttribute(){},renderDraftState(){}};
@@ -672,8 +705,8 @@ test('#904 waiting prompt never guesses a rig subject for model-free record and 
  }
 });
 
-for(const language of ['en','ko'] as const)test('#987 ticks the current age and stops when a pending ask takes the headline ('+language+')',async()=>{
- const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
+for(const language of ['en','ko'] as const)test('#987 ticks the current age through a historical verdict ask and stops when progress clears ('+language+')',async()=>{
+ const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('function renderAnswerControls(',start);
  const catalog=language==='ko'?koCatalog:enCatalog;
  const at='2026-11-20T00:00:00.000Z',text='Check the parts.';
  let now=Date.parse(at),activeTick:(()=>void)|undefined;
@@ -711,7 +744,10 @@ for(const language of ['en','ko'] as const)test('#987 ticks the current age and 
  expect(parts).toBe(quietParts);
  expect(read()).toBe(t('job.progress.quiet',[2,phase],language));
  render.renderPendingSubjects([{kind:'review-verdict',stage:'rig-review'}]);
- expect(read()).toBe(catalog['Check the rig and motion.']);
+ expect(read()).toBe(t('job.progress.quiet',[2,phase],language));
+ expect(typeof activeTick).toBe('function');
+ render.setJobProgress(null);
+ expect(read()).toBe(catalog['Nothing is waiting for your answer.']);
  expect(attributes.has('translate')).toBe(false);
  expect(activeTick).toBeUndefined();
 });

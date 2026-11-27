@@ -1684,21 +1684,28 @@ export function parseCommentOnlyAct(raw: unknown): JobCommentOnlyAct {
     parseHumanAuthority(item.authority, 'JOB_ACT_INVALID');
     if (typeof item.at !== 'string' || !Number.isFinite(Date.parse(item.at))) throw new JobError('JOB_ACT_INVALID');
     const source = commentsSource(item.source, true);
-    const value = commentsObject(item.value, ['comments'], ['carriers']);
+    return {...structuredClone(item), source, value: parseCommentOnlyValue(item.value, source)} as unknown as JobCommentOnlyAct;
+  }, 'JOB_ACT_INVALID');
+}
+
+/** Decode the act@10 value against either a live publication or a local source hash and reviewed model. */
+export function parseCommentOnlyValue(raw: unknown, source: SourceV3 | string, localModel?: JobCommentCarrier['file'] | null): JobCommentOnlyAct['value'] {
+  return asCode(() => {
+    const value = commentsObject(raw, ['comments'], ['carriers']);
     const comments = decodeComments(value.comments, source, true);
     // Checkpoint pins, question-image pins (no content hash until #1230), compare sides and ask subjects stay with asks.
     if (comments.some(({anchor, context}) => context?.subject || (anchor && ('checkpointId' in anchor || 'side' in anchor ||
         ('name' in anchor && !('schema' in anchor)))))) throw new JobError('JOB_ACT_INVALID');
-    const carriers = Object.hasOwn(value, 'carriers') ? commentCarriers(value.carriers, source) : undefined;
+    const model = typeof source === 'string' ? localModel : 'record' in source ? null : source.model;
+    const carriers = Object.hasOwn(value, 'carriers') ? commentCarriers(value.carriers, model) : undefined;
     if (!comments.length && !carriers) throw new JobError('JOB_ACT_INVALID');
-    return {...structuredClone(item), source, value: {comments, ...(carriers ? {carriers} : {})}} as unknown as JobCommentOnlyAct;
+    return {comments, ...(carriers ? {carriers} : {})};
   }, 'JOB_ACT_INVALID');
 }
 
 /** act@10 carriers: the act@8/@9 payload unchanged, each kind once, bound to the displayed model file. */
-function commentCarriers(raw: unknown, source: SourceV3): readonly JobCommentCarrier[] {
+function commentCarriers(raw: unknown, model: JobCommentCarrier['file'] | null | undefined): readonly JobCommentCarrier[] {
   if (!Array.isArray(raw) || !raw.length || raw.length > 2) throw new JobError('JOB_ACT_INVALID');
-  const model = 'record' in source ? null : source.model;
   const kinds = new Set<unknown>();
   return raw.map(entry => {
     const kind = (entry as {kind?: unknown} | null)?.kind;

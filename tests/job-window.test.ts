@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import {partsIssueComments} from '../src/feedback-export.ts';
-import {prepareJobInspection, resolveJobPanels, jobPartsReviewState, jobPartsPainting, type JobInspectionMetadataV3, createJobWindow, createJobReferenceSelection, prepareJobForms, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, jobSubmissionRefusal, type JobWindowState } from '../web/job-session.ts';
-import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobProgressLineV3, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type UISubmissionV3, type ActV3, type JobPartsVerdictAct, type RecordAct } from '../src/job-contract.ts';
+import {prepareJobInspection, resolveJobPanels, jobPartsPainting, type JobInspectionMetadataV3, createJobWindow, createJobReferenceSelection, prepareJobForms, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, jobSubmissionRefusal, type JobWindowState } from '../web/job-session.ts';
+import { JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobProgressLineV3, type JobResult, type JobModelSourceBinding, type PendingAskV3, type UISubmissionV3, type ActV3, type JobPartsVerdictAct, type RecordAct } from '../src/job-contract.ts';
 import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRecordSource, recordInstanceKey } from '../src/job-api.ts';
-import {createJobRigSubmission} from '../web/job-rig-capture.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
 import {t} from '../web/i18n.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 
 test('C4 panel parser shares one browser-safe implementation with manifest compatibility exports', async () => {
     const contract = await import('../src/job-contract.ts');
@@ -272,49 +272,29 @@ function harness() {
     };
 }
 
-test('#557 window replays its exact attempted Rig request after an act event and refuses cloned or stale requests', async () => {
-    const h = harness(), act = fixtureAct('review-verdict', 'original words');
-    const display = await h.publish(1, act.source);
-    const ask = {askId: act.askId, publicationId: display.publication.publicationId,
-        subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const}, source: act.source, status: 'pending' as const};
+test('#1233 comment retry stays receipt-bound and leaves a historical verdict ask pending', async () => {
+    const h = harness(), verdict = fixtureAct('review-verdict');
+    const display = await h.publish(1, verdict.source);
+    const ask = {askId: verdict.askId, publicationId: display.publication.publicationId,
+        subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const}, source: verdict.source, status: 'pending' as const};
     h.fixture.pending(ask, 2);
     h.window.event(h.fixture.events.at(-1)!);
+    const {askId: _askId, ...identity} = verdict;
+    const act = {...identity, schema: JOB_COMMENT_ONLY_ACT_SCHEMA, kind: 'comments', value: {comments: [{text: 'original words'}]}} as const;
     h.fixture.returnAct(act);
-    const page = h.window.state().receipt!;
-    const capture: JobRigCapture = {png: 'data:image/png;base64,Zmlyc3Q=', width: 2, height: 2,
-        camera: 'fixed', framing: 'default', view: 'whole-rig', frame: 'setup', playing: false,
-        binding: {publicationId: page.publicationId, instanceKey: display.publication.instanceKey,
-            sourceHash: display.publication.source.sourceHash, pageId: page.pageId, askId: ask.askId,
-            drawGeneration: 1, playerGeneration: 1}};
-    const input = await createJobRigSubmission().prepare({...page, askId: ask.askId, expectedGeneration: 2,
-        submissionId: 'rig-attempt', kind: 'review-verdict',
-        value: {stage: 'rig-review', verdict: 'approved', words: 'original words'}}, () => ({encode: async () => capture}));
-    expect((await h.window.submit(input)).ok).toBe(true);
-    h.window.event({type: 'act', jobId: h.fixture.jobId, cursor: 'rig-answered', generation: 3, act});
-    expect((await h.window.submit(input)).ok).toBe(true);
+    const input = {...h.window.state().receipt!, expectedGeneration: 2, submissionId: 'comment-attempt',
+        kind: 'comments', value: act.value} as const;
+    expect(await h.window.submit(input)).toEqual({ok: true, value: act});
+    h.window.event({type: 'act', jobId: h.fixture.jobId, cursor: 'comment-finalized', generation: 3, act});
+    expect(await h.window.submit(input)).toEqual({ok: true, value: act});
     expect(h.fixture.submissions).toHaveLength(2);
-    expect(h.fixture.submissions[0].body).toEqual(h.fixture.submissions[1].body);
-    expect((await h.window.submit(structuredClone(input))).ok).toBe(false);
-    await h.publish(2);
-    expect((await h.window.submit(input)).ok).toBe(false);
-    expect(h.fixture.submissions).toHaveLength(2);
-});
+    expect(h.fixture.submissions[0]!.body).toEqual(h.fixture.submissions[1]!.body);
+    expect(h.window.state().pending).toEqual([ask]);
 
-test('#557 window rejects a source change during encoding before transport receives the frozen old capture', async () => {
-    const h = harness(), act = fixtureAct('review-verdict');
-    const display = await h.publish(1, act.source), page = h.window.state().receipt!;
-    const ready = deferred<JobRigCapture>();
-    const pending = createJobRigSubmission().prepare({...page, askId: act.askId, expectedGeneration: 1,
-        submissionId: 'delayed-rig', kind: 'review-verdict', value: {stage: 'rig-review', verdict: 'approved', words: 'old source'}},
-        () => ({encode: () => ready.promise}));
     await h.publish(2);
-    ready.resolve({png: 'data:image/png;base64,Zmlyc3Q=', width: 2, height: 2,
-        camera: 'fixed', framing: 'default', view: 'whole-rig', frame: 'setup', playing: false,
-        binding: {publicationId: page.publicationId, instanceKey: display.publication.instanceKey,
-            sourceHash: display.publication.source.sourceHash, pageId: page.pageId, askId: act.askId,
-            drawGeneration: 1, playerGeneration: 1}});
-    expect((await h.window.submit(await pending)).ok).toBe(false);
-    expect(h.fixture.submissions).toHaveLength(0);
+    const stale = await h.window.submit(input);
+    expect(stale).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
+    expect(h.fixture.submissions).toHaveLength(2);
 });
 describe('job window on the frozen host ports', () => {
     test('the fake implements replay and abort through subscribeJob', async () => {
@@ -738,7 +718,7 @@ test('a cleanup failure after acknowledgment cannot roll the screen back under t
     expect(h.window.state().error).toBe('JOB_WINDOW_CLEANUP_FAILED');
     expect(h.rollbacks).toEqual([]);
 });
-test('the new displayed source accepts a new verdict while the old draft keeps its full binding', async () => {
+test('the new displayed source accepts comments while the old draft keeps its full binding', async () => {
     const h = harness();
     const fixtureSource = fixtureAct('review-verdict').source;
     const first: JobModelSourceBinding = fixtureSource;
@@ -752,13 +732,13 @@ test('the new displayed source accepts a new verdict while the old draft keeps i
     expect(old.sourceHash).toBe(first.sourceHash);
     expect(old.source).toEqual(first);
     expect(old.value).toEqual({ words: '  original words\n' });
-    const act = { ...fixtureAct('review-verdict'), publicationId: 'publication-2', source: second } as import('../src/job-contract.ts').JobAct;
+    const {askId: _askId, ...identity} = fixtureAct('review-verdict');
+    const act = {...identity, schema: JOB_COMMENT_ONLY_ACT_SCHEMA, kind: 'comments', publicationId: 'publication-2',
+        source: second, value: {comments: [{text: 'New source comment'}]}} as const;
     h.fixture.returnAct(act);
     const receipt = h.window.state().receipt!;
-    const result = await h.window.submit({ kind: 'review-verdict', publicationId: receipt.publicationId,
-        pageId: receipt.pageId, displayedNonce: receipt.displayedNonce,
-        expectedGeneration: h.window.state().generation, submissionId: 'new-verdict', askId: act.askId!,
-        value: { stage: 'rig-review', verdict: 'approved', words: '' } });
+    const result = await h.window.submit({kind: 'comments', ...receipt,
+        expectedGeneration: h.window.state().generation, submissionId: 'new-source-comments', value: act.value});
     expect(result).toEqual({ ok: true, value: act });
     expect(h.fixture.submissions[0]!.body).toMatchObject({ publicationId: 'publication-2', displayedNonce: receipt.displayedNonce });
     expect(h.window.state().retainedDrafts[0]).toEqual(old);
@@ -1237,9 +1217,11 @@ test('the real UI act stays valid across an unrelated ask while future generatio
         pageId: 'generation-page', sourceHash: publication.source.sourceHash})).json();
     const captured = {...displayed.value, expectedGeneration: f.host.session.status().generation,
         submissionId: 'generation-save', kind: 'comments', value: {comments: [{text: 'generation save'}]}};
-    const unrelated = await (await f.call({...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
+    const ask = {...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
         idempotencyKey: 'unrelated-ask', publicationId: publication.publicationId,
-        subject: {kind: 'review-verdict', stage: 'rig-review'}})).json();
+        subject: {kind: 'review-verdict', stage: 'rig-review'} as const};
+    seedHistoricalVerdictAsk(f.host.session, ask.publicationId, ask.subject, ask.idempotencyKey);
+    const unrelated = await (await f.call(ask)).json();
     expect(unrelated.ok).toBe(true);
     const saved = await (await f.ui('acts', captured)).json();
     expect(saved.ok).toBe(true);
@@ -1272,13 +1254,15 @@ test('the declared browser inputs publish parts, rig and direction through the r
         const parts = await f.publish('parts');
         expect(parts.source.selector?.kind).toBe('draft');
         expect(parts.source.parts?.images).toHaveLength(1);
-        const partsAsk = await f.ask(parts, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+        const partsAsk = seedHistoricalVerdictAsk(f.host.session, parts.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
         expect(partsAsk.status).toBe('pending');
+        expect(f.host.session.status().pending).toContainEqual(partsAsk);
         const rig = await f.publish('rig');
         expect(rig.source.selector).toEqual({kind: 'rig', version: 2});
         // #1235: the rig sample ask is the rig verdict; the interview binding has its own retained-question test.
-        const verdict = await f.ask(rig, {kind: 'review-verdict', stage: 'rig-review'});
+        const verdict = seedHistoricalVerdictAsk(f.host.session, rig.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
         expect(verdict.status).toBe('pending');
+        expect(f.host.session.status().pending).toContainEqual(verdict);
         const direction = await f.publish('direction');
         expect(direction.source.direction?.sha256).toMatch(/^[a-f0-9]{64}$/);
         const descriptor = await (await fetch(f.locator + '/publications/' + direction.publicationId)).json();
@@ -1451,7 +1435,6 @@ describe('standalone event subscription lifetime', () => {
                     async load() {
                         const host = rigHost()!;
                         host.attach({
-                            stage: () => null, redraw() {},
                             message(value, error = false, diagnostic) {
                                 if (!error) {footer.textContent = value; footer.title = value;}
                                 header.textContent = value; header.title = diagnostic ?? value; header.classList.toggle('error', error);
@@ -1581,7 +1564,6 @@ describe('standalone event subscription lifetime', () => {
                     async load() {
                         const host = rigHost()!;
                         host.attach({
-                            stage: () => null, redraw() {},
                             message(value, error = false, diagnostic) {
                                 if (!error) {footer.textContent = value; footer.title = value;}
                                 header.textContent = value; header.title = diagnostic ?? value; header.classList.toggle('error', error);
@@ -1720,7 +1702,6 @@ describe('standalone event subscription lifetime', () => {
                         async load() {
                             const host = rigHost()!;
                             host.attach({
-                                stage: () => null, redraw() {},
                                 message(value, error = false, diagnostic) {
                                     if (!error) {footer.textContent = value; footer.title = value;}
                                     header.textContent = value; header.title = diagnostic ?? value; header.classList.toggle('error', error);
@@ -1881,7 +1862,6 @@ import {createViewportController, createViewportState} from '../web/viewport-con
 import {createRigViewportProvider} from '../web/rig-viewport-provider.ts';
 import {mountViewportPair} from '../web/viewport-pair.ts';
 import * as i18nModule from '../web/i18n.ts';
-import {recordJobRigDraw, jobRigDrawState} from '../web/job-rig-capture.ts';
 import {createJobRigScreen, isJobRigScreen} from '../web/job-rig-screen.ts';
 import {rigHost, setRigHost} from '../web/rig-host.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -2189,19 +2169,16 @@ describe('C4 shared parts host', () => {
         return {...base, schema: 'rig-review/act@5', value: {verdict, words: '  source words\n',
             issues: verdict === 'approved' ? [] : [{id: 'spatial-issue'}]}} as unknown as JobPartsVerdictAct;
     }
-    async function partsHarness(withSignoff = true) {
+    async function partsHarness() {
         const h = harness();
         const act = partsAct();
-        const display = await h.publish(1, act.source);
+        await h.publish(1, act.source);
         const verdict = {askId: act.askId, publicationId: act.publicationId,
             subject: {kind: 'parts-verdict', draftId: 'draft-one'}, source: act.source, status: 'pending'} as PendingAskV3;
         const signoff = {...verdict, askId: 'parts-signoff', subject: {kind: 'signoff', stage: 'parts-review'}} as PendingAskV3;
         h.window.event({type: 'pending', jobId: 'window-fixture', generation: 2, cursor: '2', ask: verdict});
-        if (withSignoff) h.window.event({type: 'pending', jobId: 'window-fixture', generation: 3, cursor: '3', ask: signoff});
-        const input = {kind: 'parts-verdict', askId: act.askId, publicationId: act.publicationId,
-            pageId: 'page-one', displayedNonce: h.window.state().receipt!.displayedNonce,
-            expectedGeneration: h.window.state().generation, submissionId: 'parts-submit', value: act.value} as UISubmissionV3;
-        return {...h, act, verdict, signoff, display, input};
+        h.window.event({type: 'pending', jobId: 'window-fixture', generation: 3, cursor: '3', ask: signoff});
+        return {...h, act, verdict, signoff};
     }
     const actEvent = (act: ActV3, generation = 4) => ({type: 'act' as const, jobId: 'window-fixture',
         generation, cursor: String(generation), act});
@@ -2214,8 +2191,10 @@ describe('C4 shared parts host', () => {
             stage: ['parts.canvas'], toolbar: ['parts.layers'], side: ['parts.issues', 'act.submit']});
         const explicit = {...fallback.composition, toolbar: []};
         expect(resolveJobPanels(partsMetadata(explicit), source).composition).toEqual(explicit);
+        const legacyOrder = {...explicit, side: ['act.submit', 'parts.issues'] as const};
+        expect(resolveJobPanels(partsMetadata(legacyOrder), source)).toEqual({composition: legacyOrder, invalid: false});
         for (const raw of [null, [], {}, {...explicit, schema: 'wrong'}, {...explicit, stage: []},
-            {...explicit, stage: ['parts.canvas', 'rig.playback']}, {...explicit, side: ['act.submit', 'parts.issues']},
+            {...explicit, stage: ['parts.canvas', 'rig.playback']},
             {...explicit, left: [false]}]) {
             expect(resolveJobPanels(partsMetadata(raw), source)).toEqual({...fallback, invalid: true});
         }
@@ -2245,20 +2224,26 @@ describe('C4 shared parts host', () => {
         h.window.event(actEvent(h.act));
         h.window.event({type: 'pending', jobId: 'window-fixture', generation: 3, cursor: '3', ask: h.verdict});
         expect(h.window.state().pending.find(ask => ask.askId === h.act.askId)?.act).toEqual(h.act);
-        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('retry-signoff');
+        expect(h.window.state().pending.find(ask => ask.askId === h.signoff.askId)).toEqual(h.signoff);
         const reload = await partsHarness();
         reload.window.event(actEvent(h.act));
-        expect(jobPartsReviewState(reload.window.state().pending, h.act.publicationId)).toBe('retry-signoff');
+        expect(reload.window.state().pending.find(ask => ask.askId === h.act.askId))
+            .toEqual({...h.verdict, act: h.act, status: 'answered'});
+        expect(reload.window.state().pending.find(ask => ask.askId === h.signoff.askId)).toEqual(h.signoff);
         const signoff = {...fixtureAct('signoff'), askId: h.signoff.askId, source: h.act.source,
             value: {stage: 'parts-review', decision: 'approved', words: ''}} as ActV3;
         reload.window.event(actEvent(signoff, 5));
-        expect(jobPartsReviewState(reload.window.state().pending, h.act.publicationId)).toBe('approved');
-        expect(jobPartsReviewState(reload.window.state().pending, 'publication-2')).toBe('reviewing');
+        expect(reload.window.state().pending.find(ask => ask.askId === h.signoff.askId))
+            .toEqual({...h.signoff, status: 'answered', act: signoff});
+        expect(reload.window.state().pending.filter(ask => ask.publicationId === 'publication-2')).toEqual([]);
         const legacy: ActV3 = {...h.act, schema: 'rig-review/act@2', value: {
             verdict: 'approved', words: h.act.value.words,
             parts: [{partId: 'body', part: {outcome: 'clean', note: ''}, mesh: {outcome: 'clean', note: ''}}],
         }};
-        expect(jobPartsReviewState([{...h.verdict, status: 'answered', act: legacy}], h.act.publicationId)).toBe('reviewing');
+        const legacyReload = await partsHarness();
+        legacyReload.window.event(actEvent(legacy));
+        expect(legacyReload.window.state().pending.find(ask => ask.askId === legacy.askId))
+            .toEqual({...h.verdict, status: 'answered', act: legacy});
     });
 
     test('C4 source mounts one workspace and removes duplicate parts controls', async () => {
@@ -2552,12 +2537,14 @@ test('#623: job stage-parts accepts a sealed source-only painting outside parts 
     expect(diffRes.status).toBe(409);
     expect((await diffRes.json()).error.code).toBe('JOB_SOURCE_MISMATCH');
 
-    // Commit a nonempty Overlay issue through the normal job ask -> displayed -> ui/acts -> fetch-act cycle.
-    const asked = await (await f.call({
+    // Replay the historical ask, then send a separate comment with a nonempty Overlay issue.
+    const ask = {
         ...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
         idempotencyKey: 'parts-verdict-ask-623', publicationId: publication.publicationId,
-        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts'},
-    })).json();
+        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts'} as const,
+    };
+    seedHistoricalVerdictAsk(f.host.session, ask.publicationId, ask.subject, ask.idempotencyKey);
+    const asked = await (await f.call(ask)).json();
     expect(asked.ok).toBe(true);
     const ack = await (await f.ui('displayed', {
         publicationId: publication.publicationId, pageId: 'parts-page-623', sourceHash: publication.source.sourceHash,
@@ -2565,11 +2552,11 @@ test('#623: job stage-parts accepts a sealed source-only painting outside parts 
     expect(ack.ok).toBe(true);
 
     const submissionBody = {
-        ...ack.value, askId: asked.value.askId,
+        ...ack.value,
         expectedGeneration: f.host.session.status().generation,
-        submissionId: 'parts-verdict-submit-623',
-        kind: 'parts-verdict',
-        value: {verdict: 'changes-requested', issues: [overlayBody.comment], words: 'overlay alignment shift'},
+        submissionId: 'parts-comment-send-623',
+        kind: 'comments',
+        value: {comments: [...partsIssueComments([overlayBody.comment]), {text: 'overlay alignment shift'}]},
     };
     const origReadPub = f.host.session.readPublicationResponse.bind(f.host.session);
     // Unsealed extra file in snapshotRoot or tampered painting seal during commitUIAct refuses at assertRetainedSnapshotIntact as JOB_ACT_SOURCE_STALE.
@@ -2598,12 +2585,14 @@ test('#623: job stage-parts accepts a sealed source-only painting outside parts 
     expect(committed).toMatchObject({
         ok: true,
         value: {
-            kind: 'parts-verdict',
-            askId: asked.value.askId,
+            schema: JOB_COMMENT_ONLY_ACT_SCHEMA,
+            kind: 'comments',
             publicationId: publication.publicationId,
-            value: {verdict: 'changes-requested', comments: [...partsIssueComments([overlayBody.comment]), {text: 'overlay alignment shift'}]},
+            value: {comments: [...partsIssueComments([overlayBody.comment]), {text: 'overlay alignment shift'}]},
         },
     });
+    expect(committed.value).not.toHaveProperty('askId');
+    expect(f.host.session.status().pending.find(ask => ask.askId === asked.value.askId)?.status).toBe('pending');
     const fetchedAct = await (await fetch(f.locator + '/api', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + f.host.session.writerGrant().fetchCapability},
@@ -2844,33 +2833,37 @@ test('#626: retained job publication with producer.config, producer.parts, produ
     expect(diffRes.status).toBe(409);
     expect((await diffRes.json()).error.code).toBe('JOB_SOURCE_MISMATCH');
 
-    // Complete normal ask -> displayed -> ui/acts -> fetch-act cycle.
-    const asked = await (await f.call({
+    // Replay the historical ask, then send a separate Overlay comment.
+    const ask = {
         ...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
         idempotencyKey: 'parts-verdict-ask-626', publicationId: publication.publicationId,
-        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts-626'},
-    })).json();
+        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts-626'} as const,
+    };
+    seedHistoricalVerdictAsk(f.host.session, ask.publicationId, ask.subject, ask.idempotencyKey);
+    const asked = await (await f.call(ask)).json();
     expect(asked.ok).toBe(true);
     const ack = await (await f.ui('displayed', {
         publicationId: publication.publicationId, pageId: 'parts-page-626', sourceHash: publication.source.sourceHash,
     })).json();
     expect(ack.ok).toBe(true);
     const committed = await (await f.ui('acts', {
-        ...ack.value, askId: asked.value.askId,
+        ...ack.value,
         expectedGeneration: f.host.session.status().generation,
-        submissionId: 'parts-verdict-submit-626',
-        kind: 'parts-verdict',
-        value: {verdict: 'changes-requested', issues: [overlayBody.comment], words: 'face generator part reviewed'},
+        submissionId: 'parts-comment-send-626',
+        kind: 'comments',
+        value: {comments: [...partsIssueComments([overlayBody.comment]), {text: 'face generator part reviewed'}]},
     })).json();
     expect(committed).toMatchObject({
         ok: true,
         value: {
-            kind: 'parts-verdict',
-            askId: asked.value.askId,
+            schema: JOB_COMMENT_ONLY_ACT_SCHEMA,
+            kind: 'comments',
             publicationId: publication.publicationId,
-            value: {verdict: 'changes-requested', comments: [...partsIssueComments([overlayBody.comment]), {text: 'face generator part reviewed'}]},
+            value: {comments: [...partsIssueComments([overlayBody.comment]), {text: 'face generator part reviewed'}]},
         },
     });
+    expect(committed.value).not.toHaveProperty('askId');
+    expect(f.host.session.status().pending.find(ask => ask.askId === asked.value.askId)?.status).toBe('pending');
 
     expect(await jobInputHashes(f.input.root)).toEqual(beforeHashes);
 });

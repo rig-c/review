@@ -8,7 +8,9 @@ import {createHash} from 'node:crypto';
 import {writeStage1LivePackage} from './helpers/stage1-live-package.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {loadReview} from '../src/manifest.ts';
-import {sessionFile} from '../src/session.ts';
+import {sessionFile,type Feedback} from '../src/session.ts';
+import {LOCAL_COMMENTS_SCHEMA} from '../src/local-comments.ts';
+import type {JobCommentOnlyAct} from '../src/job-contract.ts';
 import {patchText} from '../src/config-patch.ts';
 import {rebuildDir} from '../src/rebuild.ts';
 import {startServer} from '../src/server.ts';
@@ -205,25 +207,33 @@ try{
    const actions=document.querySelectorAll('.comment-correction-actions')[1]?.querySelectorAll('button');
    if(actions?.length!==2)throw Error('CORRECTION_MADE_ACTION_MISSING');
    actions[1].click();
-   document.getElementById('save').click();
+   document.getElementById('send-comments').click();
   })()`);
-  const file=sessionFile(p,state);
+  const file=sessionFile(p,state).replace(/\.json$/,'.comments.json');
   let savedBytes:Buffer|undefined;
+  type StoredComments={schema:string;sends:{source:{sourceHash:string};value:JobCommentOnlyAct['value']}[]};
+  let stored:StoredComments|undefined;
   for(let i=0;i<200;i++){
-    try{const candidate=await readFile(file);if(JSON.parse(candidate.toString()).feedback.length===2){savedBytes=candidate;break;}}
-    catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+    try{
+      const bytes=await readFile(file),candidate=JSON.parse(bytes.toString()) as StoredComments;
+      if(candidate.sends[0]?.value.comments.length===2){savedBytes=bytes;stored=candidate;break;}
+    }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
     await Bun.sleep(50);
   }
-  if(!savedBytes)throw Error('CORRECTION_SAMPLE_SUBMIT '+await page.evaluate(`document.getElementById('review-message').textContent`));
-  const session=JSON.parse(savedBytes.toString());
-  if(session.feedback[0].summary!==exact||session.feedback[1].summary!==madeWords||JSON.stringify(session.feedback[1].context.applied)!==JSON.stringify(applied))throw Error('CORRECTION_SAMPLE_SESSION_MISMATCH');
-  await writeFile(join(artifacts,lang+'-session.json'),savedBytes);
-  for(const [index,item] of session.feedback.entries())for(const format of ['json','issue']){
+  if(!savedBytes||!stored)throw Error('CORRECTION_SAMPLE_SUBMIT '+await page.evaluate(`document.getElementById('review-message').textContent`));
+  if(stored.schema!==LOCAL_COMMENTS_SCHEMA||stored.sends.length!==1||stored.sends[0]!.source.sourceHash!==p.sourceHash)throw Error('CORRECTION_SAMPLE_COMMENT_SOURCE');
+  const rows=stored.sends[0]!.value.comments;
+  const feedback=rows.map(({text,anchor})=>({...anchor,summary:text}) as Feedback);
+  if(feedback[0]?.summary!==exact||feedback[1]?.summary!==madeWords||JSON.stringify((feedback[1].context as {applied?:unknown}|undefined)?.applied)!==JSON.stringify(applied))throw Error('CORRECTION_SAMPLE_COMMENT_MISMATCH');
+  await writeFile(join(artifacts,lang+'-local-comments.json'),savedBytes);
+  for(const [index,item] of feedback.entries())for(const format of ['json','issue']){
     const code="import {main} from './src/cli.ts'; await main(process.argv.slice(1),{stateDir:process.env.SAMPLE_STATE});";
     const child=Bun.spawn([process.execPath,'-e',code,'--','feedback',pkg,'--correction',item.id,'--format',format],{env:{...process.env,SAMPLE_STATE:state},stdout:'pipe',stderr:'pipe'});
     const [out,err,exit]=await Promise.all([new Response(child.stdout).arrayBuffer(),new Response(child.stderr).text(),child.exited]);
-    await writeFile(join(artifacts,`${lang}-${index}-${format}.log`),Buffer.from(out));
-    if(exit!==0||err||(format==='json'&&!Buffer.from(out).equals(savedBytes)))throw Error('CORRECTION_SAMPLE_EXPORT '+exit+' '+err);
+    const output=Buffer.from(out);
+    await writeFile(join(artifacts,`${lang}-${index}-${format}.log`),output);
+    if(exit!==0||err)throw Error('CORRECTION_LOCAL_COMMENTS_EXPORT '+exit+' '+err);
+    if(format==='json'&&!output.equals(savedBytes))throw Error('CORRECTION_LOCAL_COMMENTS_EXPORT_BYTES '+item.id);
   }
   await writeFile(join(artifacts,lang+'-feedback.png'),await page.screenshot());
   if(lang==='en'){

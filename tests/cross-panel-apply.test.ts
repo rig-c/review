@@ -29,6 +29,8 @@ import { startCompareServer } from '../src/compare-server.ts';
 import { CONFIG_PATCH_SCHEMA, type ConfigPatch, type PatchOp } from '../src/config-patch.ts';
 import { loadReview } from '../src/manifest.ts';
 import { startServer } from '../src/server.ts';
+import type { Feedback } from '../src/session.ts';
+import { lastLocalPackageFeedback, postLocalPackageFeedback } from './helpers/local-package-feedback.ts';
 import {
   animationAppliedRecord,
   animationOutcomeLine,
@@ -1282,39 +1284,23 @@ describe('#250 standalone mode', () => {
       return { ok: true };
     };
 
-    const saveAndReadSessionApplied = async (fbId: string, applied: unknown) => {
-      const sessionDoc = (await (await fetch(singleBase + '/api/session')).json()) as {
-        status: string;
-        sourceHash: string;
-        reviewedSource: unknown;
-        checkpoints: Record<string, unknown>;
-        feedback: unknown[];
+    const sendAndReadApplied = async (id: string, applied: unknown) => {
+      const feedback: Feedback = {
+        id, frameStart: 0, frameEnd: 1,
+        target: { kind: 'bone', name: 'chest' },
+        category: 'quality',
+        summary: 'Stage record ' + id,
+        context: {
+          animation: 'idle',
+          interval: { frameStart: 0, frameEnd: 1, inclusive: true },
+          applied,
+        } as Feedback['context'],
       };
-      sessionDoc.feedback = [
-        {
-          id: fbId,
-          frameStart: 0,
-          frameEnd: 1,
-          target: { kind: 'bone', name: 'chest' },
-          category: 'quality',
-          summary: `Stage record ${fbId}`,
-          context: {
-            animation: 'idle',
-            interval: { frameStart: 0, frameEnd: 1, inclusive: true },
-            applied,
-          },
-        },
-      ];
-      const saveRes = await fetch(singleBase + '/api/session', {
-        method: 'PUT',
-        headers: { Origin: singleBase, 'Content-Type': 'application/json' },
-        body: JSON.stringify(sessionDoc),
-      });
-      expect(saveRes.status).toBe(200);
-      const reloaded = (await (await fetch(singleBase + '/api/session')).json()) as {
-        feedback: { context: { applied: unknown } }[];
-      };
-      return reloaded.feedback[0]!.context.applied;
+      const response = await postLocalPackageFeedback(singleBase, loadedSingle.sourceHash, [feedback]);
+      expect(response.status, await response.text()).toBe(200);
+      const saved = (await lastLocalPackageFeedback(loadedSingle, state))[0];
+      expect(saved?.id).toBe(id);
+      return (saved?.context as { applied: unknown }).applied;
     };
 
     // ---- Pair A Order 1: Physics Apply -> Bones Apply ---------------------------------------------------------------
@@ -1326,7 +1312,7 @@ describe('#250 standalone mode', () => {
       hip: expect.objectContaining({ name: 'hip', x: 0, y: 330 }),
       breathKey1: -1.8,
     });
-    expect(assertRecordMatchesBuiltRig(await saveAndReadSessionApplied('fb-phys-1', physRec1), builtAfterPhys1)).toEqual({
+    expect(assertRecordMatchesBuiltRig(await sendAndReadApplied('fb-phys-1', physRec1), builtAfterPhys1)).toEqual({
       ok: true,
     });
     // Before clicking Bones Apply, Bones shows the drop notice for Physics.
@@ -1343,7 +1329,7 @@ describe('#250 standalone mode', () => {
       hip: expect.objectContaining({ name: 'hip', x: 16, y: 326 }),
       breathKey1: -1.8,
     });
-    const exportedBones1 = await saveAndReadSessionApplied('fb-bones-1', bonesRec1);
+    const exportedBones1 = await sendAndReadApplied('fb-bones-1', bonesRec1);
     expect(assertRecordMatchesBuiltRig(exportedBones1, builtAfterBones1)).toEqual({ ok: true });
 
     // Control for Condition 3: a record that falsely accumulates the dropped Physics edit onto the Bones build fails!
@@ -1370,7 +1356,7 @@ describe('#250 standalone mode', () => {
       hip: expect.objectContaining({ name: 'hip', x: 0, y: 330 }),
       breathKey1: -1.8,
     });
-    const exportedPhys2 = await saveAndReadSessionApplied('fb-phys-2', physRec2);
+    const exportedPhys2 = await sendAndReadApplied('fb-phys-2', physRec2);
     expect(assertRecordMatchesBuiltRig(exportedPhys2, builtAfterPhys2)).toEqual({ ok: true });
 
     // ---- Pair B Order 1: Physics Apply -> Animation Apply -----------------------------------------------------------
@@ -1385,7 +1371,7 @@ describe('#250 standalone mode', () => {
       hip: expect.objectContaining({ name: 'hip', x: 0, y: 330 }),
       breathKey1: -18,
     });
-    const exportedAnim1 = await saveAndReadSessionApplied('fb-anim-1', animRec1);
+    const exportedAnim1 = await sendAndReadApplied('fb-anim-1', animRec1);
     expect(assertRecordMatchesBuiltRig(exportedAnim1, builtAfterAnim1)).toEqual({ ok: true });
 
     // ---- Pair B Order 2: Animation Apply -> Physics Apply -----------------------------------------------------------
@@ -1400,7 +1386,7 @@ describe('#250 standalone mode', () => {
       hip: expect.objectContaining({ name: 'hip', x: 0, y: 330 }),
       breathKey1: -1.8,
     });
-    const exportedPhys3 = await saveAndReadSessionApplied('fb-phys-3', physRec3);
+    const exportedPhys3 = await sendAndReadApplied('fb-phys-3', physRec3);
     expect(assertRecordMatchesBuiltRig(exportedPhys3, builtAfterPhys3)).toEqual({ ok: true });
 
     // ---- Condition 4: Undo (#166) across those Applies restores each earlier build, applied state & drop notice -----

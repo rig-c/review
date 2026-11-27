@@ -1,3 +1,6 @@
+import {seedHistoricalDecisionAct} from './helpers/historical-decision-act.ts';
+import historicalDirection from './fixtures/job-decision-1233/direction.json';
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {afterEach, expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
 import {cp} from 'node:fs/promises';
@@ -44,16 +47,10 @@ async function finalize(f: Awaited<ReturnType<typeof fixture>>, publication: Job
     if (!saved.ok) throw new Error(saved.error.code);
     return saved.value;
   }
-  const decision = subject;
-  const ask = await f.ask(publication, decision);
-  const page = await f.display(publication);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({
-    ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: ask.askId, kind: decision.kind,
-    value: {stage, verdict: options.verdict ?? 'changes-requested', comments: options.comments ?? comments},
-  }));
-  if (!saved.ok) throw new Error(saved.error.code);
-  return saved.value;
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, subject);
+  return seedHistoricalDecisionAct(f.session,ask,historicalDirection.receipt.value,{
+    stage, verdict: options.verdict ?? 'changes-requested', comments: options.comments ?? comments,
+  });
 }
 
 function reopen(f: Awaited<ReturnType<typeof fixture>>): JobSession {
@@ -108,7 +105,7 @@ test.each(['wrong job', 'unknown act', 'inherited act ID', 'pending ask', 'same 
   post(f, 2);
   const earlier = await f.publish();
   const act = await finalize(f, earlier);
-  const pending = reason === 'pending ask' ? await f.ask(earlier, subject) : undefined;
+  const pending = reason === 'pending ask' ? seedHistoricalVerdictAsk(f.session, earlier.publicationId, subject) : undefined;
   const field = {answeredDirectionFeedback: [{
     jobId: reason === 'wrong job' ? 'other-job' : f.session.jobId,
     actId: pending?.askId ?? (reason === 'unknown act' ? 'unknown-act' : reason === 'inherited act ID' ? 'constructor' : act.actId),

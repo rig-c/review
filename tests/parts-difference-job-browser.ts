@@ -128,7 +128,6 @@ async function successfulDifference(key: string) {
 async function declaredCase(lang: 'en' | 'ko') {
   const f = await partsDifferenceJobFixture();
   try {
-    await f.ask(f.publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
     await page!.goto(f.locator + '/?lang=' + lang + '#cap=' + f.credentials.ui);
     await settled();
     await installFetchProbe();
@@ -195,7 +194,6 @@ async function declaredCase(lang: 'en' | 'ko') {
 async function missingCase(lang: 'en' | 'ko') {
   const f = await partsDifferenceJobFixture({declared: false});
   try {
-    await f.ask(f.publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
     await page!.goto(f.locator + '/?lang=' + lang + '#cap=' + f.credentials.ui);
     await settled();
     await installFetchProbe();

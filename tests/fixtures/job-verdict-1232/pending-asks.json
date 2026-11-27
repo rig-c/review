@@ -1,0 +1,479 @@
+{
+  "rig-review": {
+    "ask": {
+      "askId": "5527c8ed-196e-4a6d-928b-454945e39a27",
+      "publicationId": "02641c30-3a3c-4e76-a0fe-73a0b1ae030d",
+      "subject": {
+        "kind": "review-verdict",
+        "stage": "rig-review"
+      },
+      "source": {
+        "sourceHash": "1e9ac4acf8a7990f836961be5f8820d614b4d3c0ada13b66bd2d821d6e4fba42",
+        "projectHash": null,
+        "package": {
+          "id": "viewport-387-public",
+          "revision": "1"
+        },
+        "selector": {
+          "kind": "rig",
+          "version": 1
+        },
+        "model": {
+          "path": "out/skeleton.model.json",
+          "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+        },
+        "direction": null,
+        "optionSet": null,
+        "appliedResult": null,
+        "plan": {
+          "steps": [
+            {
+              "id": "step-one",
+              "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+            }
+          ]
+        },
+        "parts": null
+      },
+      "status": "pending"
+    },
+    "event": {
+      "type": "pending",
+      "ask": {
+        "askId": "5527c8ed-196e-4a6d-928b-454945e39a27",
+        "publicationId": "02641c30-3a3c-4e76-a0fe-73a0b1ae030d",
+        "subject": {
+          "kind": "review-verdict",
+          "stage": "rig-review"
+        },
+        "source": {
+          "sourceHash": "1e9ac4acf8a7990f836961be5f8820d614b4d3c0ada13b66bd2d821d6e4fba42",
+          "projectHash": null,
+          "package": {
+            "id": "viewport-387-public",
+            "revision": "1"
+          },
+          "selector": {
+            "kind": "rig",
+            "version": 1
+          },
+          "model": {
+            "path": "out/skeleton.model.json",
+            "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+          },
+          "direction": null,
+          "optionSet": null,
+          "appliedResult": null,
+          "plan": {
+            "steps": [
+              {
+                "id": "step-one",
+                "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+              }
+            ]
+          },
+          "parts": null
+        },
+        "status": "pending"
+      },
+      "cursor": "86af7f4b-7300-44eb-9a69-f6aa173edf15",
+      "jobId": "e0ffe736-0dbb-40ec-9c3e-c05d98e1d203",
+      "generation": 2
+    },
+    "receipt": {
+      "digest": "d53dbc49eb83c68f2ab549113acc584dadb7a04539ebb20c0163f22e1a48cf86",
+      "value": {
+        "askId": "5527c8ed-196e-4a6d-928b-454945e39a27",
+        "publicationId": "02641c30-3a3c-4e76-a0fe-73a0b1ae030d",
+        "subject": {
+          "kind": "review-verdict",
+          "stage": "rig-review"
+        },
+        "source": {
+          "sourceHash": "1e9ac4acf8a7990f836961be5f8820d614b4d3c0ada13b66bd2d821d6e4fba42",
+          "projectHash": null,
+          "package": {
+            "id": "viewport-387-public",
+            "revision": "1"
+          },
+          "selector": {
+            "kind": "rig",
+            "version": 1
+          },
+          "model": {
+            "path": "out/skeleton.model.json",
+            "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+          },
+          "direction": null,
+          "optionSet": null,
+          "appliedResult": null,
+          "plan": {
+            "steps": [
+              {
+                "id": "step-one",
+                "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+              }
+            ]
+          },
+          "parts": null
+        },
+        "status": "pending"
+      }
+    }
+  },
+  "direction-review": {
+    "ask": {
+      "askId": "3c44b2d3-877d-49fd-97eb-d2d64628c69a",
+      "publicationId": "7cf5a78e-3b6e-44c3-bc81-d18d75dd650c",
+      "subject": {
+        "kind": "review-verdict",
+        "stage": "direction-review"
+      },
+      "source": {
+        "sourceHash": "6a83afcd940932dee185c03464f6841582237ff532196c82631263245b2597f8",
+        "projectHash": null,
+        "package": {
+          "id": "example-direction",
+          "revision": "post-v2"
+        },
+        "selector": {
+          "kind": "post",
+          "version": 1,
+          "rigVersion": 1
+        },
+        "model": {
+          "path": "out/derived/review/v1/out/check/build/skeleton.model.json",
+          "sha256": "63190ec6746bafbc73847fa6c6905b5811cc0adb41897dfed923fe802e4dc261"
+        },
+        "direction": {
+          "path": "out/evidence/direction/v2.json",
+          "sha256": "9bec50f753d4790ee0d9dde824a612126ed37e7b0e63d393505ac836118c50a4"
+        },
+        "optionSet": null,
+        "appliedResult": null,
+        "plan": {
+          "steps": [
+            {
+              "id": "step-one",
+              "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+            }
+          ]
+        },
+        "parts": null
+      },
+      "status": "pending"
+    },
+    "event": {
+      "type": "pending",
+      "ask": {
+        "askId": "3c44b2d3-877d-49fd-97eb-d2d64628c69a",
+        "publicationId": "7cf5a78e-3b6e-44c3-bc81-d18d75dd650c",
+        "subject": {
+          "kind": "review-verdict",
+          "stage": "direction-review"
+        },
+        "source": {
+          "sourceHash": "6a83afcd940932dee185c03464f6841582237ff532196c82631263245b2597f8",
+          "projectHash": null,
+          "package": {
+            "id": "example-direction",
+            "revision": "post-v2"
+          },
+          "selector": {
+            "kind": "post",
+            "version": 1,
+            "rigVersion": 1
+          },
+          "model": {
+            "path": "out/derived/review/v1/out/check/build/skeleton.model.json",
+            "sha256": "63190ec6746bafbc73847fa6c6905b5811cc0adb41897dfed923fe802e4dc261"
+          },
+          "direction": {
+            "path": "out/evidence/direction/v2.json",
+            "sha256": "9bec50f753d4790ee0d9dde824a612126ed37e7b0e63d393505ac836118c50a4"
+          },
+          "optionSet": null,
+          "appliedResult": null,
+          "plan": {
+            "steps": [
+              {
+                "id": "step-one",
+                "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+              }
+            ]
+          },
+          "parts": null
+        },
+        "status": "pending"
+      },
+      "cursor": "68773d53-91c6-4b95-8bce-1de8f1563232",
+      "jobId": "674867b6-0a76-4852-95b7-906c35ca83a4",
+      "generation": 2
+    },
+    "receipt": {
+      "digest": "96d237f0d9cab4715e553a55885e3b9152e3cea89a7aad7d50eea5f076a53b27",
+      "value": {
+        "askId": "3c44b2d3-877d-49fd-97eb-d2d64628c69a",
+        "publicationId": "7cf5a78e-3b6e-44c3-bc81-d18d75dd650c",
+        "subject": {
+          "kind": "review-verdict",
+          "stage": "direction-review"
+        },
+        "source": {
+          "sourceHash": "6a83afcd940932dee185c03464f6841582237ff532196c82631263245b2597f8",
+          "projectHash": null,
+          "package": {
+            "id": "example-direction",
+            "revision": "post-v2"
+          },
+          "selector": {
+            "kind": "post",
+            "version": 1,
+            "rigVersion": 1
+          },
+          "model": {
+            "path": "out/derived/review/v1/out/check/build/skeleton.model.json",
+            "sha256": "63190ec6746bafbc73847fa6c6905b5811cc0adb41897dfed923fe802e4dc261"
+          },
+          "direction": {
+            "path": "out/evidence/direction/v2.json",
+            "sha256": "9bec50f753d4790ee0d9dde824a612126ed37e7b0e63d393505ac836118c50a4"
+          },
+          "optionSet": null,
+          "appliedResult": null,
+          "plan": {
+            "steps": [
+              {
+                "id": "step-one",
+                "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+              }
+            ]
+          },
+          "parts": null
+        },
+        "status": "pending"
+      }
+    }
+  },
+  "parts-verdict": {
+    "ask": {
+      "askId": "72569758-796e-4591-a4d8-ed22149cad3e",
+      "publicationId": "8b707af6-aad7-4b30-af0c-bef1a8684dc9",
+      "subject": {
+        "kind": "parts-verdict",
+        "draftId": "synthetic-draft"
+      },
+      "source": {
+        "sourceHash": "4b859e1a0ee63fc72f258bb115a13ddfcc165b0979b2b14794ef260294f7f187",
+        "projectHash": "e4a114a3d47f211279e08819aaf9dcb506fecc3c87462833b825011e2f2d6008",
+        "package": {
+          "id": "viewport-387-public",
+          "revision": "1"
+        },
+        "selector": {
+          "kind": "draft",
+          "id": "synthetic-draft"
+        },
+        "model": {
+          "path": "out/skeleton.model.json",
+          "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+        },
+        "direction": null,
+        "optionSet": null,
+        "appliedResult": null,
+        "plan": {
+          "steps": [
+            {
+              "id": "step-one",
+              "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+            }
+          ]
+        },
+        "parts": {
+          "enumeratorVersion": "2.25.1",
+          "manifest": {
+            "path": "out/parts.json",
+            "sha256": "0efe4b751280329b1940bb822331fddec1bc3c0448d4f3ff3580a893cc606d31"
+          },
+          "images": [
+            {
+              "path": "parts/alternate.png",
+              "role": "alternate",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            },
+            {
+              "path": "parts/base.png",
+              "role": "part",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            },
+            {
+              "path": "parts/body.png",
+              "role": "part",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            },
+            {
+              "path": "parts/depth.png",
+              "role": "depth",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            },
+            {
+              "path": "parts/head.png",
+              "role": "part",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            }
+          ]
+        }
+      },
+      "status": "pending"
+    },
+    "event": {
+      "type": "pending",
+      "ask": {
+        "askId": "72569758-796e-4591-a4d8-ed22149cad3e",
+        "publicationId": "8b707af6-aad7-4b30-af0c-bef1a8684dc9",
+        "subject": {
+          "kind": "parts-verdict",
+          "draftId": "synthetic-draft"
+        },
+        "source": {
+          "sourceHash": "4b859e1a0ee63fc72f258bb115a13ddfcc165b0979b2b14794ef260294f7f187",
+          "projectHash": "e4a114a3d47f211279e08819aaf9dcb506fecc3c87462833b825011e2f2d6008",
+          "package": {
+            "id": "viewport-387-public",
+            "revision": "1"
+          },
+          "selector": {
+            "kind": "draft",
+            "id": "synthetic-draft"
+          },
+          "model": {
+            "path": "out/skeleton.model.json",
+            "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+          },
+          "direction": null,
+          "optionSet": null,
+          "appliedResult": null,
+          "plan": {
+            "steps": [
+              {
+                "id": "step-one",
+                "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+              }
+            ]
+          },
+          "parts": {
+            "enumeratorVersion": "2.25.1",
+            "manifest": {
+              "path": "out/parts.json",
+              "sha256": "0efe4b751280329b1940bb822331fddec1bc3c0448d4f3ff3580a893cc606d31"
+            },
+            "images": [
+              {
+                "path": "parts/alternate.png",
+                "role": "alternate",
+                "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+              },
+              {
+                "path": "parts/base.png",
+                "role": "part",
+                "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+              },
+              {
+                "path": "parts/body.png",
+                "role": "part",
+                "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+              },
+              {
+                "path": "parts/depth.png",
+                "role": "depth",
+                "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+              },
+              {
+                "path": "parts/head.png",
+                "role": "part",
+                "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+              }
+            ]
+          }
+        },
+        "status": "pending"
+      },
+      "cursor": "34b79248-1cd6-4f7e-81ac-b3ad4e8ba125",
+      "jobId": "3d8efceb-7610-456f-b240-128632347c4c",
+      "generation": 2
+    },
+    "receipt": {
+      "digest": "b448e1eb399c9482f41b00524bf053514d9060afd7815ab22ac22f46176a03b5",
+      "value": {
+        "askId": "72569758-796e-4591-a4d8-ed22149cad3e",
+        "publicationId": "8b707af6-aad7-4b30-af0c-bef1a8684dc9",
+        "subject": {
+          "kind": "parts-verdict",
+          "draftId": "synthetic-draft"
+        },
+        "source": {
+          "sourceHash": "4b859e1a0ee63fc72f258bb115a13ddfcc165b0979b2b14794ef260294f7f187",
+          "projectHash": "e4a114a3d47f211279e08819aaf9dcb506fecc3c87462833b825011e2f2d6008",
+          "package": {
+            "id": "viewport-387-public",
+            "revision": "1"
+          },
+          "selector": {
+            "kind": "draft",
+            "id": "synthetic-draft"
+          },
+          "model": {
+            "path": "out/skeleton.model.json",
+            "sha256": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+          },
+          "direction": null,
+          "optionSet": null,
+          "appliedResult": null,
+          "plan": {
+            "steps": [
+              {
+                "id": "step-one",
+                "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+              }
+            ]
+          },
+          "parts": {
+            "enumeratorVersion": "2.25.1",
+            "manifest": {
+              "path": "out/parts.json",
+              "sha256": "0efe4b751280329b1940bb822331fddec1bc3c0448d4f3ff3580a893cc606d31"
+            },
+            "images": [
+              {
+                "path": "parts/alternate.png",
+                "role": "alternate",
+                "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+              },
+              {
+                "path": "parts/base.png",
+                "role": "part",
+                "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+              },
+              {
+                "path": "parts/body.png",
+                "role": "part",
+                "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+              },
+              {
+                "path": "parts/depth.png",
+                "role": "depth",
+                "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+              },
+              {
+                "path": "parts/head.png",
+                "role": "part",
+                "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+              }
+            ]
+          }
+        },
+        "status": "pending"
+      }
+    }
+  }
+}

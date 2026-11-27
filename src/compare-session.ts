@@ -52,7 +52,7 @@ export function parseCommentsCompareSession(value: unknown): CompareCommentsSess
   return {...structuredClone(raw), comments} as unknown as CompareCommentsSession;
 }
 export function freshCompareSession(p:ComparePackage):CompareSession {const d=p.response;return {schema:'rig-review-compare-session/1',id:d.id,revision:d.revision,sourceHash:d.sourceHash,binding:d.binding,status:'pending',feedback:[],feedbackWarnings:[],updatedAt:null};}
-export function parseCompareSession(input:unknown,p:ComparePackage,strict=true):CompareSession {
+export function parseCompareSession(input:unknown,p:ComparePackage,strict=true,storedStatus?:CompareSession['status']):CompareSession {
   const value=object(input,'compare session'),fresh=freshCompareSession(p);
   for(const key of ['schema','id','revision','sourceHash'] as const)if(value[key]!==fresh[key])throw new Error(`compare session.${key}: does not match loaded comparison`);
   if(!isDeepStrictEqual(value.binding,fresh.binding))throw new Error('compare session.binding: does not match both source hashes, rig/motion identities, reference hash and animation');
@@ -62,8 +62,21 @@ export function parseCompareSession(input:unknown,p:ComparePackage,strict=true):
   const turnDials=sharedTurnDials(p.a.feedbackCatalog.turnDials??[],p.b.feedbackCatalog.turnDials??[]);
   const feedback:CompareFeedback[]=value.feedback.map((item:unknown)=>{const side=choice(object(item,'feedback').side,['a','b'] as const,'feedback.side'),parsed=parseFeedback(item,strict);if(strict){const raw=(parsed.context as any)?.comment,c=hasStageComment(raw)?raw:null;if(c)parseBookmark(c.bookmark,{mode:'compare',sourceHash:p.response.sourceHash,rigs:[p.a.reviewedSource.rig?.sha256??null,p.b.reviewedSource.rig?.sha256??null]});if(c&&(c.viewport!=='reference'&&c.viewport!==side||c.referenceHash!==p.response.reference.sha256))throw new Error('COMMENT_CONTEXT_MISMATCH: viewport side or reference binding');}if(strict)return {...validatePackageFeedback(parsed,p[side],p.response.animation,turnDials),side};const read=readPackageFeedback(parsed,p[side],p.response.animation,turnDials);if(read.warning)feedbackWarnings.push(read.warning);return {...read.feedback,side};});
   if(new Set(feedback.map(f=>f.id)).size!==feedback.length)throw new Error('compare session.feedback: duplicate ids');
-  return {...fresh,status:choice(value.status,['pending','approved','changes-requested'] as const,'compare session.status'),feedback,feedbackWarnings,updatedAt:new Date().toISOString()};
+  const status = value.status === undefined && storedStatus !== undefined ? storedStatus :
+    choice(value.status,['pending','approved','changes-requested'] as const,'compare session.status');
+  return {...fresh,status,feedback,feedbackWarnings,updatedAt:new Date().toISOString()};
 }
 export function compareSessionFile(p:ComparePackage,stateDir=join(homedir(),'.local','state','rig-c-review')):string {const key=createHash('sha256').update(JSON.stringify(['compare',p.response.sourceHash,p.response.binding])).digest('hex');return join(stateDir,key+'.json');}
 export async function readCompareSession(p:ComparePackage,stateDir?:string):Promise<CompareSession>{await assertCompareUnchanged(p);try{const value=JSON.parse(await readFile(compareSessionFile(p,stateDir),'utf8'));return {...parseCompareSession(value,p,false),updatedAt:value.updatedAt};}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return freshCompareSession(p);throw e;}}
-export async function saveCompareSession(p:ComparePackage,input:unknown,stateDir?:string):Promise<CompareSession>{const value=parseCompareSession(input,p);await assertCompareUnchanged(p);assertSubmittedComments((await readCompareSession(p,stateDir)).feedback,value.feedback);await saveCommentCrops(value.feedback,stateDir);const file=compareSessionFile(p,stateDir);await mkdir(join(file,'..'),{recursive:true,mode:0o700});const tmp=file+'.'+crypto.randomUUID()+'.tmp';await writeFile(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});await rename(tmp,file);return value;}
+export async function saveCompareSession(p:ComparePackage,input:unknown,stateDir?:string):Promise<CompareSession>{
+  const stored=await readCompareSession(p,stateDir);
+  const value=parseCompareSession(input,p,true,stored.status);
+  assertSubmittedComments(stored.feedback,value.feedback);
+  await saveCommentCrops(value.feedback,stateDir);
+  const file=compareSessionFile(p,stateDir);
+  await mkdir(join(file,'..'),{recursive:true,mode:0o700});
+  const tmp=file+'.'+crypto.randomUUID()+'.tmp';
+  await writeFile(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});
+  await rename(tmp,file);
+  return value;
+}

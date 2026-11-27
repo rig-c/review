@@ -31,7 +31,7 @@ The CLI also accepts an existing output directory. It reads a root `review.json`
 }
 ```
 
-An optional `producer` block declares the producer handoff: `"producer": {"config": "rig/config.json", "parts": "rig/out", "source": "inputs/painting.png", "full": "inputs/full", "head": "inputs/head"}`. Only `config` is required, `source` may be declared alone, `full` requires `source`, and `head` requires `full`. See *Producer handoff* below. An optional `panels` block (`{"schema": "rig-review/panels@1", "left": ["parts.list"], "stage": ["parts.canvas"], "toolbar": ["parts.layers"], "side": ["parts.issues", "act.submit"]}`) declares the panel composition across the closed slots `left`, `stage`, `toolbar` and `side` (`stage.length === 1` and `side` ending with `"act.submit"`); malformed `panels` blocks refuse with `JOB_PANELS_INVALID` in `parsePanelComposition` and fall back to `panels: undefined` in `parseManifest`.
+An optional `producer` block declares the producer handoff: `"producer": {"config": "rig/config.json", "parts": "rig/out", "source": "inputs/painting.png", "full": "inputs/full", "head": "inputs/head"}`. Only `config` is required, `source` may be declared alone, `full` requires `source`, and `head` requires `full`. See *Producer handoff* below. An optional `panels` block (`{"schema": "rig-review/panels@1", "left": ["parts.list"], "stage": ["parts.canvas"], "toolbar": ["parts.layers"], "side": ["parts.issues", "act.submit"]}`) declares the panel composition across the closed slots `left`, `stage`, `toolbar` and `side`. The stage has exactly one component. The side may include `act.submit`, which renders the shared **Send comments** control on supported review screens. Malformed `panels` blocks refuse with `JOB_PANELS_INVALID` in `parsePanelComposition` and fall back to `panels: undefined` in `parseManifest`.
 
 The illustrative `look` animation in `axes` must also be declared in `animations`. Omit axes when no real angle animation exists. All animation identifiers name actual compiled-model animations; the frontend reports runtime load/lookup errors rather than inventing them. Metadata duration is optional; the player supplies actual duration.
 
@@ -74,8 +74,7 @@ Standalone packages can expose a [sealed previous build](#sealed-previous-build)
 - `GET /api/review` returns `{manifest, sourceHash, reviewedSource, report, feedbackCatalog, assetsBase:"/assets/", capabilities}`. `report` is the normalized read-only finding data described below, or null. `capabilities` is `{playback:boolean, modeling:false, motion:false, feedback:true, audio:true}`. The modeling/motion flags mean source editing capability; setup and motion inspection share one workspace. `audio:true` denotes the audition facility; clip presence determines what can play.
 - `GET /assets/<path>` serves an allowlisted local asset. Encode each path segment when building the URL. Responses use no-store and nosniff headers.
 - `GET /api/session` returns the current session or a fresh pending session.
-- `PUT /api/session` accepts the full session object below, with matching schema/id/revision/sourceHash. It requires the server's exact Origin, `application/json`, and <= 1 MiB. It returns the saved session with server-generated `updatedAt`.
-- The managed workspace routes a single-package session PUT to the target's in-process session handler and preserves its response status and body, including HTTP 400 JSON error responses.
+- Standalone package feedback is saved through [local comment sends](#local-comment-sends). The historical session format below is still readable after the removal of `PUT /api/session`.
 
 ```json
 {
@@ -90,7 +89,7 @@ Standalone packages can expose a [sealed previous build](#sealed-previous-build)
 }
 ```
 
-`status` is `pending`, `approved`, or `changes-requested`; checkpoint `outcome` is `pending`, `pass`, or `fail`. Manual feedback requires an inclusive integer interval `0 <= frameStart <= frameEnd` (the strictly validated time-only stage-comment exception is described under Stage region comments), a target `{kind: "bone"|"slot"|"rig", name}`, `category: "defect"|"quality"`, a unique nonempty `id`, and a nonempty one-line `summary` of at most 1000 characters. `context` optionally carries inert inspection JSON (checkpoint, reference/person, time, camera/axis). Frame numbers are explicit user input; there is no guessed FPS. Unknown checkpoint IDs, mismatched content or reviewed-source bindings, duplicate feedback IDs and the old `corrections` authoring-proposal field are refused. Motion is read-only: annotations never author keys, retime output or write `motion.json`. The save does not require all checkpoints to pass: it records the person's explicit decision without manufacturing one.
+`status` is `pending`, `approved`, or `changes-requested`; checkpoint `outcome` is `pending`, `pass`, or `fail`. Manual feedback requires an inclusive integer interval `0 <= frameStart <= frameEnd` (the strictly validated time-only stage-comment exception is described under Stage region comments), a target `{kind: "bone"|"slot"|"rig", name}`, `category: "defect"|"quality"`, a unique nonempty `id`, and a nonempty one-line `summary` of at most 1000 characters. `context` optionally carries inert inspection JSON (checkpoint, reference/person, time, camera/axis). Frame numbers are explicit user input; there is no guessed FPS. Unknown checkpoint IDs, mismatched content or reviewed-source bindings, duplicate feedback IDs and the old `corrections` authoring-proposal field are refused. Motion is read-only: annotations never author keys, retime output or write `motion.json`. The recorded status reflects the person's explicit decision independently of individual checkpoint outcomes.
 
 ### Feedback catalog and validation
 
@@ -106,7 +105,7 @@ A single-review note also records `context.environment`, the Animate environment
 
 Both session responses include server-derived `feedbackWarnings:[{id,error}]`. Reading an older session preserves invalid target rows and previously accepted integer indices outside JavaScript's safe range, together with source identity, inspection context and original state-file bytes; a missing chosen interval can be derived in memory. Contradictory existing interval evidence remains visible with its warning. The UI shows these warnings and prevents resubmission until the affected rows are corrected or removed. Strict saves independently validate every row and ignore a client's attempt to clear warnings; exports retain the warnings and original feedback evidence. Syntax and source-binding failures remain refusals rather than silently repaired data.
 
-The state filename is a digest of identity, revision, source hash and reviewed artifact/tool identity, so package names cannot select arbitrary filesystem paths. Writes are atomic and source files remain untouched. Review/session load and save stream-hash the declared inputs; changed bytes produce HTTP 409 and require restart. Asset reads do not rehash an entire video: single byte ranges return 206 and invalid ranges 416. Asset documents receive a sandbox CSP with no scripts or same-origin permission, so delivered authoring HTML cannot approve its own package. No network listener beyond loopback or cross-origin mutation is offered.
+The state filename is a digest of identity, revision, source hash and reviewed artifact/tool identity, so package names cannot select arbitrary filesystem paths. Writes are atomic and source files remain untouched. Review/session reads and local comment sends stream-hash the declared inputs; changed bytes produce HTTP 409 and require restart. Asset reads do not rehash an entire video: single byte ranges return 206 and invalid ranges 416. Asset documents receive a sandbox CSP with no scripts or same-origin permission, so delivered authoring HTML cannot approve its own package. No network listener beyond loopback or cross-origin mutation is offered.
 
 
 ### Turn inspection context
@@ -225,7 +224,7 @@ Every edit card states its edit as one config patch; review applies it to a scra
 
 **`context.requirements`.** Feedback written while requirements are declared carries the file by hash and content: `{schema:"rig-review-requirements-context/1", sha256, size, text, checked:{build, producer, summary, refusals[], rows:[{name, status, worst}]}|null}` — `text` is exactly the bytes the producer reads, `sha256` and `size` are recomputed over it on save, and `checked` is the last check of those same bytes. Absent and `null` stay valid.
 
-A `rig-review-applied/2` record whose `check.pass` is `false` is refused at submission (`PUT /api/session`) as `EDIT_SUBMIT_UNCHECKED: applied build failed check — <check's "check: FAIL …" line, else the first bar check.json marks FAIL>`; the build may still be loaded and looked at. `GET /api/rebuild` also returns the handoff config's `constraints` list as written (or `null`), which the physics tuning panel maps against the inspected model.
+A `rig-review-applied/2` record whose `check.pass` is `false` is refused when sending a comment as `EDIT_SUBMIT_UNCHECKED: applied build failed check — <check's "check: FAIL …" line, else the first bar check.json marks FAIL>`; the build may still be loaded and looked at. `GET /api/rebuild` also returns the handoff config's `constraints` list as written (or `null`), which the physics tuning panel maps against the inspected model.
 
 **Mesh panel (#106).** `GET /api/rebuild` also returns `meshes`: every `meshes.<part>` entry of the handoff config as written (`{}` without a handoff). The panel's Apply is an ordinary patch, exactly one op, run by remesh:
 
@@ -312,6 +311,27 @@ The issue text header reports total records, defect/quality counts, and per-buil
 Blocks group in fixed category order (`defect`, then `quality`), followed by exact `(target.kind,target.name)` with deterministic code-unit ordering, then side and feedback id. Bone and slot names do not collide. Each block carries its original id, inclusive chosen frames, target, category, one-line summary, side and selected build's source hash/reviewedSource. Compare also repeats the complete ordered A/B/reference/animation binding so a copied block retains both source identities. Single external-reference blocks retain `referenceBinding` with the base package hash and selected video name/id/SHA. Missing rig/motion artifacts remain null. The original inspection context stays separate from chosen frames; no clock or category is inferred.
 
 The header retains recorded status/timestamp and full source/tool provenance. Prior-tool retrieval is labeled as historical rather than current approval; original versions, currentTools and matching-submission count remain available. Server-derived per-feedback warnings and historical read warnings are included without discarding their items. Formatting does not make an invalid legacy item resubmittable. User text is escaped in Markdown syntax positions and inert evidence uses data-safe JSON fences, preserving arbitrary ids/targets/context without creating extra headings or rows. No issue is posted automatically.
+
+### Local comment sends
+
+Send comments on an open package or parts folder saves feedback on the local
+machine. Agents read sends through `rig-review feedback <package> --format json|issue`
+or `rig-review parts <dir> --format json|issue`. The exports report the saved
+location and mark sends against a different source with `earlierSource: true`.
+
+`rig-review/local-comments@1` carries an append-only `sends` array. Each send
+has a `sendId`, a server-recorded `at`, its own `source`, and a `value` with the
+[comment-only act value shape](#comment-only-act-act10). Parts sends can also
+record `by` from `--by`. Package sends bind the package ID, revision, source hash
+and reviewed source. Parts sends bind the parts mode and verdict source hash.
+A retry with the same `sendId` and value returns the saved send. Reusing a
+`sendId` for a different value refuses with `JOB_IDEMPOTENCY_CONFLICT`.
+A malformed saved record refuses with `LOCAL_COMMENTS_FILE_INVALID` and is
+preserved. Existing session statuses and parts verdicts remain readable
+through their existing exports. Standalone parts no longer accepts
+`POST /api/parts/verdict`, and its CLI no longer emits
+`RIG_REVIEW_PARTS_SAVED` stdout records. The joined stage-parts writer keeps
+its own route.
 
 ## Read-only rig-pose report markers
 
@@ -615,7 +635,7 @@ Browser players retain play's default DOM mode and default mesh backend. Rigid
 parts remain DOM images; a WebGL mesh label does not claim full-frame GL drawing.
 WebGL is requested by the published default, with Canvas2D as the supported mesh
 fallback. Accurate public actual-flush telemetry requires play 1.11.1 or later;
-this checkout consumes pinned 1.27.0. The consumer does not probe GL or inspect
+this checkout consumes pinned 1.28.0. The consumer does not probe GL or inspect
 private renderer state. The separate Node strip exporter remains Canvas2D.
 
 The backend badge is sampled only after successful draw/frame calls. Fresh mesh
@@ -832,7 +852,7 @@ Selection, links, controls and export never approve a review. Producer-backed op
 
 An optional `feedback[].context.comment` (`rig-review-comment/1`) records required placement `mode` (`setup|animate|compare`), `viewport` (`rig|a|b|reference`), `frame:{index,basis:producer|reference}` or null with the named time-only basis below, exact held `time`, `animation`, selected `sourceHash`, nullable `modelHash`, `referenceHash` and `referenceId`, canonical numeric `camera`, `screen` and `world` rectangles (`x,y,width,height`), nearest-first `slots:[{slot,z}]`, `crop:{path,sha256,png,width,height}`, and the source-bound inspection `bookmark`. A point has zero width/height. World space is Y up for a rig and image pixels Y down for a reference. Screen space is local CSS pixels of that viewport; both rectangles must agree through its recorded camera.
 
-In standalone `rig-review-session/1` saves, the safe integer interval must contain the pinned producer frame, including either endpoint, and obey the [clip bounds](#feedback-catalog-and-validation). An interval excluding the pin refuses with `COMMENT_CONTEXT_MISMATCH`. Target validation uses the same catalog membership check as Add correction and refuses an invalid rig, bone or slot name with `feedback.target.name`. The stored nearest-first `slots` record the drawn slots intersecting the marked posed/clipped triangles. Existing single-frame records with the first drawn slot or the rig remain valid.
+For standalone package comments, including historical `rig-review-session/1` records, the safe integer interval must contain the pinned producer frame, including either endpoint, and obey the [clip bounds](#feedback-catalog-and-validation). An interval excluding the pin refuses with `COMMENT_CONTEXT_MISMATCH`. Target validation uses the same catalog membership check as Add correction and refuses an invalid rig, bone or slot name with `feedback.target.name`. The stored nearest-first `slots` record the drawn slots intersecting the marked posed/clipped triangles. Existing single-frame records with the first drawn slot or the rig remain valid.
 
 Comparison saves require the pinned single frame and the first drawn slot, or the rig for an empty or reference mark. A decoded-reference basis is explicitly distinct from a producer frame. The raw `context.frame` stays null when producer timing is unknown. No video FPS is inferred. The normal session source binding, same-origin JSON mutation, capability and 1 MiB body limit apply unchanged. Saves validate the comment source/model binding, viewport side, bounded numeric evidence and PNG signature, dimensions, chunk CRCs, bounded RGB/RGBA scanline decode and exact hash. A changed source follows the existing HTTP 409/restart refusal.
 
@@ -851,7 +871,7 @@ Stage comment capture refuses unrecorded authoring effects, by `COMMENT_UNAPPLIE
 
 ### Parts pointed evidence
 
-Pre-rig parts saves `rig-review-parts-verdict/4` with pointed `issues` (`rig-review-parts-comment/2`, carrying `parts: [{name, imageHash}]` and item or assembled view geometry) while preserving historical `rig-review-parts-verdict/1`, `rig-review-parts-verdict/2`, `rig-review-parts-verdict/3` and `rig-review-parts-comment/1` records on read (existing verdict/1 records read with no issues, `/2` and `/3` records with only comment-backed flags convert to `/4`, and `/1`..`/3` records with bare flagged part or mesh notes surface as read-only legacy verdicts with `PARTS_VERDICT_LEGACY_FORMAT`). This identity comes from the existing
+The joined stage-parts writer saves `rig-review-parts-verdict/4` with pointed `issues` (`rig-review-parts-comment/2`, carrying `parts: [{name, imageHash}]` and item or assembled view geometry) while preserving historical `rig-review-parts-verdict/1`, `rig-review-parts-verdict/2`, `rig-review-parts-verdict/3` and `rig-review-parts-comment/1` records on read (existing verdict/1 records read with no issues, `/2` and `/3` records with only comment-backed flags convert to `/4`, and `/1`..`/3` records with bare flagged part or mesh notes surface as read-only legacy verdicts with `PARTS_VERDICT_LEGACY_FORMAT`). This identity comes from the existing
 parts verdict source digest and actual original PNG SHA-256, without a fabricated review
 manifest id, revision or compiled model. The rig's `rig-review-comment/1` schema stays closed.
 See [the parts contract and validation instruments](PARTS_VIEW.md#pointed-parts-comments).
@@ -1061,8 +1081,40 @@ requires that path and SHA-256 to match the inspected compiled model and
 includes the direction file in the package source hash. The panel shows authored
 take and planes read-only while that inspected model is on stage. Create
 remains responsible for validating project history and citations. Viewport pan
-and zoom affect only inspection. Camera Apply remains unavailable; authored
-camera playback requires the declared scene above.
+and zoom affect only inspection. Camera Apply remains unavailable. Legacy
+authored camera playback uses the declared scene above.
+
+#### Sealed Parts scene report
+
+The optional `sceneReport` entry in `rig-review/1` is a closed object with a
+literal package-relative `path` and the raw report bytes' lowercase SHA-256
+`sha256`. It requires `model` and uses the model's containment rules. Live jobs
+apply their stricter sealed-file checks. Review bounds the read using Play's
+`SCENE_CAMERA_REPORT_MAX_BYTES`, checks the digest and passes the sealed UTF-8
+bytes to Play. The report enters the package source hash and retained asset seals.
+The existing `api/review` response exposes the admitted pointer, and the asset
+route serves the declared file. Packages without the entry keep their source
+identity and use the existing playback path. A declared Parts report /1 is
+retained and uses the existing playback path as well.
+
+For report /2, Review calls Play's `bindSceneCamera` with the SHA-256 of the
+exact packed model bytes decoded by Play and that load's stage and animations.
+Play checks the compiled duration against the packed clip's last timeline time
+as stored in binary32. Authored duration can differ. Play maps the clocks by
+normalized phase. For composed
+`rig-create/direction@3` and current `rig-create/direction@4`, Review compares the
+direction's recorded duration and loop exactly with the bound `idle` track's
+authored duration and loop. A mismatch refuses with `DIRECTION_TAKE_MISMATCH`.
+A known clip with no camera track uses the existing view. Review uses the
+producer's recorded coverage through Play's binding.
+
+Missing or unreadable reports refuse with `SCENE_REQUIRED`. Invalid paths or
+report digest mismatches refuse with `SCENE_SOURCE_MISMATCH`. Invalid report
+JSON or schema uses `SCENE_CAMERA_REPORT_INVALID`. Reports over Play's cap use
+`SCENE_CAMERA_REPORT_TOO_LARGE`. Model and compiled clip
+binding failures use `SCENE_CAMERA_MODEL_MISMATCH` and
+`SCENE_CAMERA_CLIP_MISMATCH`. Play reports an invalid camera clock or view with
+`SCENE_CAMERA_CLOCK_INVALID` or `SCENE_CAMERA_VIEW_INVALID`.
 
 The optional `sets` manifest path names a package-local Play attachment-set
 sidecar for the inspected single-package build. Review includes it in the
@@ -1194,11 +1246,12 @@ recorded act bytes remain unchanged.
 
 ### Act kinds, plan identity and parts identity
 
-- **Five enabled kinds and two reserved disabled kinds.** `JOB_ENABLED_ACT_KINDS` retains `'interview-picks'`, `'checkpoint'`, `'parts-verdict'`, `'review-verdict'` and `'signoff'`. Fresh `signoff` asks refuse `JOB_ASK_INVALID` and fresh page `signoff` submissions refuse `JOB_ACT_KIND_DISABLED`, while declared `signoff` subjects and finalized historical `signoff` acts keep their readers ([Review #1227](https://github.com/rig-c/review/issues/1227)). Fresh `checkpoint` ([Review #1229](https://github.com/rig-c/review/issues/1229)) and `interview-picks` ([Review #1230](https://github.com/rig-c/review/issues/1230)) asks and page submissions refuse the same way, while declared subjects and finalized historical acts keep their readers. `JOB_RESERVED_ACT_KINDS` reserves `'described-correction'` and `'mesh-edit'`. Asks and standalone acts of either kind refuse `JOB_ACT_KIND_DISABLED`. `described-correction` awaits the joint [Create #182](https://github.com/rig-c/create/issues/182) context allowlist. The jointly signed mesh value rides on the rig-review verdict under [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8).
+- **Five advertised kinds and two reserved disabled kinds.** `JOB_ENABLED_ACT_KINDS` retains `'interview-picks'`, `'checkpoint'`, `'parts-verdict'`, `'review-verdict'` and `'signoff'`. Fresh `signoff` asks refuse `JOB_ASK_INVALID` and fresh page `signoff` submissions refuse `JOB_ACT_KIND_DISABLED`, while declared `signoff` subjects and finalized historical `signoff` acts keep their readers ([Review #1227](https://github.com/rig-c/review/issues/1227)). Fresh `checkpoint` ([Review #1229](https://github.com/rig-c/review/issues/1229)) and `interview-picks` ([Review #1230](https://github.com/rig-c/review/issues/1230)) asks and page submissions refuse the same way, while declared subjects and finalized historical acts keep their readers. `JOB_RESERVED_ACT_KINDS` reserves `'described-correction'` and `'mesh-edit'`. Asks and standalone acts of either kind refuse `JOB_ACT_KIND_DISABLED`. `described-correction` awaits the joint [Create #182](https://github.com/rig-c/create/issues/182) context allowlist. The jointly signed mesh value rides on the rig-review verdict under [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8).
 - **`interview-picks` (read only).** Fresh `interview-picks` asks refuse `JOB_ASK_INVALID` and page `interview-picks` submissions refuse `JOB_ACT_KIND_DISABLED` ([Review #1230](https://github.com/rig-c/review/issues/1230)). Publications declaring picks subjects, finalized historical picks acts and `rig-review/interview-picks@1` files keep parsing, and a page submission already committed still replays its stored act. Package and record answers written before the refusal use `rig-review/act@6`. They carry `questionId`, ordered `selections` (`itemId`, `optionId`, nullable `otherText`), `note` and ordered `comments`, with non-null `source.optionSet` (`id` and `sha256`). The note and Other text remain survey answers. Historical act@2 and act@4 picks keep their readers, including the optional act@4 `words` added by [Review #1048](https://github.com/rig-c/review/issues/1048).
 - **`checkpoint` (read only).** Fresh `checkpoint` asks refuse `JOB_ASK_INVALID`, and page `checkpoint` submissions refuse `JOB_ACT_KIND_DISABLED` ([Review #1229](https://github.com/rig-c/review/issues/1229)). Publications declaring `checkpoint` subjects, finalized historical `checkpoint` acts and records, and standalone `rig-review-session/1` checkpoint outcomes keep parsing, and a committed page submission still replays its stored act. In historical acts, `JobActValues['checkpoint']` carries `checkpointId`, `planStepId`, `outcome` restricted to `'pass'` or `'fail'` and required `words` as a `string`. `pending` stays in the UI draft only and never produces a finalized act. Only `'pass'` is eligible for Create's checkpoint sign-off writer, whereas `'fail'` is feedback or a named consumer refusal and never an approval write. `words` is preserved verbatim including empty or whitespace-only strings, matching Create's writer without adding a UI gate. In `JobSubject`, `checkpointId` defaults to the Create plan step ID and optional `planStepId` is required when the displayed Review checkpoint ID differs, matching [Create #184](https://github.com/rig-c/create/issues/184) without alias inference or browser trust. The browser supplies `checkpointId`, `outcome` and `words` only (`JobUIActValues['checkpoint']`), the daemon copies resolved `planStepId` from the validated ask and requires `source.plan`, and Create derives execution stage from its authoritative step phase and order without Review stamping a stage.
-- **`parts-verdict`.** `JobActValues['parts-verdict']` is `PartsVerdictValue` (`verdict` as `'approved'` or `'changes-requested'`, `issues` as `readonly PartsIssue[]` under `rig-review-parts-comment/2` — empty on `'approved'` and non-empty on `'changes-requested'`, bound to `source.sourceHash`, retained `partIds`, and `source.parts.images` hashes — and `words`), emitted in new finalized `rig-review/act@5` acts (`JobPartsVerdictAct`) and requiring non-null `source.projectHash`, a `draft` selector and `source.parts`. Historical `rig-review/act@2` `parts-verdict` acts remain in the `JobAct` union via `JobLegacyAct` with `value: JobLegacyPartsVerdictValue` (`verdict` as `'pending'`, `'approved'` or `'changes-requested'`, `parts` with `partId`, `part` outcome and note, `mesh` outcome and note with `JobPartOutcome` as `'pending'`, `'clean'` or `'flagged'`, and `words`).
-- **`review-verdict`.** The model branch carries `stage` (`'rig-review'` or `'direction-review'`) and `verdict`, requiring non-null `source.model` with runtime stage, selector and direction consistency checks. Direction submits ordered [comments](#direction-verdict-comments) or legacy `words`. A declared `rig-review` ask can also bind a `draft` selector with `source.projectHash` and null `source.direction`. It uses the existing rig screen and still capture, and its finalized act preserves the retained draft publication's source hash, model and selector. A compiled rig's Request changes can carry [chest landmarks (act@9)](#chest-landmarks-on-request-changes-act9).
+- **Verdict submissions (read only).** Fresh `parts-verdict` and `review-verdict` asks refuse with `JOB_ASK_INVALID`. The verdict kinds refuse a fresh submission with `JOB_ACT_KIND_DISABLED` and still replay a committed one. Send comments records an `act@10` on the displayed publication.
+- **`parts-verdict` (historical).** `JobActValues['parts-verdict']` is `PartsVerdictValue` (`verdict` as `'approved'` or `'changes-requested'`, `issues` as `readonly PartsIssue[]` under `rig-review-parts-comment/2` — empty on `'approved'` and non-empty on `'changes-requested'`, bound to `source.sourceHash`, retained `partIds`, and `source.parts.images` hashes — and `words`), used by historical `rig-review/act@5` acts (`JobPartsVerdictAct`) and requiring non-null `source.projectHash`, a `draft` selector and `source.parts`. Historical `rig-review/act@2` `parts-verdict` acts remain in the `JobAct` union via `JobLegacyAct` with `value: JobLegacyPartsVerdictValue` (`verdict` as `'pending'`, `'approved'` or `'changes-requested'`, `parts` with `partId`, `part` outcome and note, `mesh` outcome and note with `JobPartOutcome` as `'pending'`, `'clean'` or `'flagged'`, and `words`).
+- **`review-verdict` (historical).** The model branch carries `stage` (`'rig-review'` or `'direction-review'`) and `verdict`, requiring non-null `source.model` with runtime stage, selector and direction consistency checks. Direction verdicts carry ordered [comments](#direction-verdict-comments) or legacy `words`. A historical `rig-review` ask can bind a `draft` selector with `source.projectHash` and null `source.direction`. Its finalized act preserves the retained draft publication's source hash, model and selector. A compiled rig's Request changes can carry [chest landmarks (act@9)](#chest-landmarks-on-request-changes-act9).
 - **`signoff` (read only).** Fresh `signoff` asks (including `'plan-approved'`) refuse `JOB_ASK_INVALID`, and page `signoff` submissions refuse `JOB_ACT_KIND_DISABLED` ([Review #1227](https://github.com/rig-c/review/issues/1227)). Publications declaring `signoff` subjects and finalized historical `signoff` acts and records keep parsing. In historical acts, `JobActValues['signoff']` carries `stage` (validated by Create's writer), `decision` restricted to `'approved'` only (changes requested are a verdict, never a signoff) and required `words` preserved verbatim including empty or whitespace-only strings. A verdict, a signoff and a Create stage transition are three separate writes, and `JobAct` grants no transition authority. Every stage in `JOB_PLAN_BOUND_SIGNOFF_STAGES` (`'plan-approved'`, `'rigging-interview'`, `'post-interview'`) requires non-null `source.plan` with exact displayed step IDs and hashes on historical act@2 acts, while other stages keep `source.plan` nullable where appropriate.
 - **Create-published step IDs and hashes.** `JobPlanIdentity` holds `steps` (`id` and `hash`) published by [Create #184](https://github.com/rig-c/create/issues/184) for the displayed plan. Review retains these values without importing or recomputing Create's internal `stepHash`. Create validates them through its existing `steps` and `step_hashes` writer logic, with no separate plan revision hash or additional revision gate in this contract.
 - **C4 manifest-referenced parts PNG identity.** C4 binds the exact public `partsFileReferences(dir)` array from `@rig-c/parts/src/parts.ts`, whose contract is frozen at Parts 2.25.0. The trusted host resolves an installed version in `JOB_PARTS_ENUMERATOR_RANGE` (`>=2.25.0 <3.0.0`), supplies its actual version and official callback through `partsEnumerator`, and declares `partsEnumeratorId`. `JobPartsIdentity.enumeratorVersion` carries that actual version. Manifest paths are work-root-relative and image paths are relative to the manifest directory. Each image carries `path`, bounded-string `role` and raw-byte `sha256`. Review compares the claimed array positionally with the official array, preserving its role/order/duplicate semantics. Upstream roles include `part`, `alternate`, `depth`, `painting` and `figure_mask`. Review bounds shape and paths, refuses traversal/symlinks, decodes PNGs and hashes retained bytes. Missing references refuse with row, role and path, including a missing sibling figure mask when a render copy exists. Unreferenced extras stay outside this parts identity. Composite source hashes use `rig-review-job-source/2`. Create #184 production reader/projection and official-hook wiring landed in [Create #251](https://github.com/rig-c/create/pull/251) and [Create #259](https://github.com/rig-c/create/pull/259).
@@ -1402,7 +1455,7 @@ The manifest and complete retained image rows enter the composite source hash. L
 - **Sibling binding ownership.** `JOB_CONSUMER_AUTH_MODE` is `'writer-owned-sibling-fetch-capability'` (`JobConsumerGrant` with `jobId`, `operation` set to `'fetch-act'`, `actKinds` and `lifetime` set to `'until-explicit-close'`). [Create #184](https://github.com/rig-c/create/issues/184) owns creation and path of a private writer-owned sibling binding outside `project.json`. The versioned record carries only the semantic job locator, and the Create writer uses the binding to fetch finalized acts. The binding is never tracked in version control, never present in unstaged project output and never shipped in templates, public examples or fixtures.
 - **Agent isolation and capability lifecycle.** The consumer writer reads its own sibling binding directly. Agents never construct, parse or carry Review session, picks, verdict, applied-record or sibling-binding files. Actual separate-UID isolation remains required for Review's distinct state unreadability test (`JOB_AGENT_ISOLATION_HOLE`), and no same-user forger-resistance claim is made. The random per-job bearer capability grants finalized act fetch (`fetch-act`) only, via exact loopback routes and `Authorization`. Neither `next` nor `status` returns it, and human metadata alone never authenticates a fetch. The capability dies at explicit `close`, old project history cannot restore it, each new job incarnation receives a new grant, invalid grants refuse with `JOB_CAPABILITY_REQUIRED` or `JOB_AUTHORITY_REFUSED` and closed-job fetches refuse with `JOB_CLOSED`. No self-service grant API exists.
 - **Consumer deduplication and in-process mesh consumption.** Verdict, signoff and stage transition remain separate consumer writes. For these writes, consumers deduplicate `actId` before checking the current source, then validate each new source and atomically commit the result with its replay identity. Replaying an applied `actId` returns the existing record. A new stale act refuses before mutation. The typed mesh relay uses per-edit identity as defined in [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8).
-- **Error codes.** `JOB_ERROR_CODES` enumerates the closed refusal set (`JOB_REQUEST_INVALID`, `JOB_BODY_LIMIT`, `JOB_LOOPBACK_REQUIRED`, `JOB_SAME_ORIGIN_REQUIRED`, `JOB_CAPABILITY_REQUIRED`, `JOB_AUTHORITY_REFUSED`, `JOB_UNKNOWN`, `JOB_CLOSED`, `JOB_GENERATION_STALE`, `JOB_IDEMPOTENCY_CONFLICT`, `JOB_FREEZE_REQUIRED`, `JOB_RECORD_INCOMPLETE`, `JOB_RECORD_MOVED`, `JOB_SOURCE_INVALID`, `JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID`, `JOB_PREVIOUS_BUILD_INVALID`, `JOB_SOURCE_MISMATCH`, `JOB_SOURCE_UNRETAINABLE`, `JOB_ROOT_REPLACED`, `JOB_PUBLICATION_UNKNOWN`, `JOB_SNAPSHOT_RECLAIMED`, `JOB_ASK_INVALID`, `JOB_ASK_SUPERSEDED`, `JOB_ACT_UNKNOWN`, `JOB_ACT_INVALID`, `JOB_ACT_KIND_DISABLED`, `JOB_ACT_SOURCE_STALE`, `JOB_DISPLAY_MISMATCH`, `JOB_STILL_CAPTURE_FAILED`, `JOB_STILL_CAMERA_NOT_FIXED`, `JOB_STILL_VIEW_UNSUPPORTED`, `JOB_STILL_BINDING_MISMATCH`, `JOB_STILL_UNAVAILABLE`, `JOB_STILL_OUTPUT_FAILED`, `JOB_CURSOR_INVALID`, `JOB_STORAGE_FAILED`, `JOB_AGENT_ISOLATION_HOLE`, `JOB_OPTION_SET_DUPLICATE`, `JOB_CURRENT_RECORD_MISSING`, `JOB_CURRENT_RECORD_MISMATCH`, `JOB_CURRENT_OUTPUT_MISMATCH`), each returning bounded safe detail with no arbitrary worker text or private paths.
+- **Error codes.** `JOB_ERROR_CODES` enumerates the closed refusal set (`JOB_REQUEST_INVALID`, `JOB_BODY_LIMIT`, `JOB_LOOPBACK_REQUIRED`, `JOB_SAME_ORIGIN_REQUIRED`, `JOB_CAPABILITY_REQUIRED`, `JOB_AUTHORITY_REFUSED`, `JOB_UNKNOWN`, `JOB_CLOSED`, `JOB_GENERATION_STALE`, `JOB_IDEMPOTENCY_CONFLICT`, `JOB_FREEZE_REQUIRED`, `JOB_RECORD_INCOMPLETE`, `JOB_RECORD_MOVED`, `JOB_SOURCE_INVALID`, `JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID`, `JOB_PREVIOUS_BUILD_INVALID`, `JOB_SOURCE_MISMATCH`, `SCENE_REQUIRED`, `SCENE_SOURCE_MISMATCH`, `SCENE_CAMERA_REPORT_INVALID`, `SCENE_CAMERA_REPORT_TOO_LARGE`, `SCENE_CAMERA_MODEL_MISMATCH`, `SCENE_CAMERA_CLIP_MISMATCH`, `SCENE_CAMERA_CLOCK_INVALID`, `SCENE_CAMERA_VIEW_INVALID`, `DIRECTION_TAKE_MISMATCH`, `JOB_SOURCE_UNRETAINABLE`, `JOB_ROOT_REPLACED`, `JOB_PUBLICATION_UNKNOWN`, `JOB_SNAPSHOT_RECLAIMED`, `JOB_ASK_INVALID`, `JOB_ASK_SUPERSEDED`, `JOB_ACT_UNKNOWN`, `JOB_ACT_INVALID`, `JOB_ACT_KIND_DISABLED`, `JOB_ACT_SOURCE_STALE`, `JOB_DISPLAY_MISMATCH`, `JOB_STILL_CAPTURE_FAILED`, `JOB_STILL_CAMERA_NOT_FIXED`, `JOB_STILL_VIEW_UNSUPPORTED`, `JOB_STILL_BINDING_MISMATCH`, `JOB_STILL_UNAVAILABLE`, `JOB_STILL_OUTPUT_FAILED`, `JOB_CURSOR_INVALID`, `JOB_STORAGE_FAILED`, `JOB_AGENT_ISOLATION_HOLE`, `JOB_OPTION_SET_DUPLICATE`, `JOB_CURRENT_RECORD_MISSING`, `JOB_CURRENT_RECORD_MISMATCH`, `JOB_CURRENT_OUTPUT_MISMATCH`), each returning bounded safe detail with no arbitrary worker text or private paths.
 
 ### Model-free record mode and source seam
 
@@ -2126,8 +2179,8 @@ and [Parts #1382](https://github.com/rig-c/parts/issues/1382).
 
 `rig-review/act@10` carries a person's comments on the publication that was on
 screen, sent without an ask. It has `kind: "comments"` and is read with
-`parseCommentOnlyAct`. No existing act schema changes, and asking still works
-as before. [Review #1226](https://github.com/rig-c/review/issues/1226),
+`parseCommentOnlyAct`. Historical acts retain their original schemas.
+[Review #1226](https://github.com/rig-c/review/issues/1226),
 [Create #982](https://github.com/rig-c/create/issues/982).
 
 | Field | Rule |
@@ -2158,10 +2211,12 @@ Refusals:
   seed, refuses `JOB_ACT_INVALID`. These are the act@8 and act@9 writer checks
   without the verdict.
 
-The review page puts its pending Edit Mesh and chest landmark drafts in
-`carriers` when a person sends comments. Request changes sends them first as
-an act@10 with no comments, then sends the verdict without them, so a verdict
-from the page carries no edits ([Review #1231](https://github.com/rig-c/review/issues/1231)).
+The live review page puts its pending Edit Mesh and chest landmark drafts in
+`carriers` when a person sends comments
+([Review #1231](https://github.com/rig-c/review/issues/1231)). Fresh
+`review-verdict` and `parts-verdict` asks refuse with `JOB_ASK_INVALID`.
+Existing verdict asks, acts and replays stay readable
+([Review #1232](https://github.com/rig-c/review/issues/1232)).
 Parts reads the chest carrier. Create reads the mesh-edit carrier from
 [Create #982](https://github.com/rig-c/create/issues/982); until then Create
 records it without applying it.

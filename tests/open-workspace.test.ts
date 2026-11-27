@@ -7,7 +7,7 @@ import {controlReview, openFingerprint, prepareOpenTarget} from '../src/open.ts'
 import {parseWorkspaceRecord, probeWorkspace, targetCapability, workspaceDirectory, writePrivate} from '../src/open-workspace-state.ts';
 import {WORKSPACE_SCHEMA, WORKSPACE_TARGET_LIMIT, type WorkspaceDesignation, type WorkspaceList} from '../src/open-workspace-contract.ts';
 import {loadReview} from '../src/manifest.ts';
-import {sessionFile} from '../src/session.ts';
+import {saveSession,sessionFile} from '../src/session.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 
 async function fixture() {
@@ -59,15 +59,16 @@ test('workspace registers single/compare contexts atomically and separates launc
     const path = (key: string, route: string) => host.record.origin + '/instances/' + key + route;
     const cap = (key: string) => targetCapability(host.record.ownerCapability, host.record.incarnation, key);
     const session = await (await fetch(path(b.key, '/api/session'))).json();
-    expect((await fetch(path(b.key, '/api/session'), {method: 'PUT', headers: {
+    const body=JSON.stringify({sourceHash:session.sourceHash,sendId:crypto.randomUUID(),value:{comments:[{text:'target-bound feedback'}]}});
+    expect((await fetch(path(b.key, '/api/local-comments'), {method: 'POST', headers: {
       Origin: host.record.origin, 'Content-Type': 'application/json', 'X-Review-Capability': cap(a.key),
-    }, body: JSON.stringify(session)})).status).toBe(403);
-    expect((await fetch(path(b.key, '/api/session'), {method: 'PUT', headers: {
+    }, body})).status).toBe(403);
+    expect((await fetch(path(b.key, '/api/local-comments'), {method: 'POST', headers: {
       Origin: 'http://foreign.test', 'Content-Type': 'application/json', 'X-Review-Capability': cap(b.key),
-    }, body: JSON.stringify(session)})).status).toBe(403);
-    expect((await fetch(path(b.key, '/api/session'), {method: 'PUT', headers: {
+    }, body})).status).toBe(403);
+    expect((await fetch(path(b.key, '/api/local-comments'), {method: 'POST', headers: {
       Origin: host.record.origin, 'Content-Type': 'application/json', 'X-Review-Capability': cap(b.key),
-    }, body: JSON.stringify({...session, status: 'changes-requested'})})).status).toBe(200);
+    }, body})).status).toBe(200);
     expect((await (await fetch(path(a.key, '/api/session'))).json()).updatedAt).toBeNull();
     const asset = await fetch(path(a.key, '/assets/build/skeleton.model.json'), {headers: {Range: 'bytes=0-9'}});
     expect(asset.status).toBe(206); expect((await asset.arrayBuffer()).byteLength).toBe(10);
@@ -157,9 +158,7 @@ test('changed unrelated targets become unavailable without blocking new registra
     expect((await register(host, [a])).status).toBe(200);
     const sessionURL = host.record.origin + '/instances/' + a.key + '/api/session';
     const session = await (await fetch(sessionURL)).json();
-    expect((await fetch(sessionURL, {method: 'PUT', headers: {Origin: host.record.origin,
-      'Content-Type': 'application/json', 'X-Review-Capability': targetCapability(host.record.ownerCapability, host.record.incarnation, a.key)},
-      body: JSON.stringify({...session, status: 'changes-requested'})})).status).toBe(200);
+    await saveSession(original,{...session,status:'changes-requested'},f.stateDir);
     const feedback = sessionFile(original, f.stateDir), saved = await readFile(feedback);
     const motion = join(f.a, 'motion.json');
     await writeFile(motion, (await readFile(motion, 'utf8')) + '\n');

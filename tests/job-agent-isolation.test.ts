@@ -3,10 +3,12 @@ import { chmod, copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { createJobHostPorts, jobHash } from '../src/job-api.ts';
-import type { JobPendingAsk, JobPublication } from '../src/job-contract.ts';
+import type { JobPendingAsk } from '../src/job-contract.ts';
 import { JobError } from '../src/job-store.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
-import { rigStillCapture } from './helpers/job-rig-still.ts';
+import {seedHistoricalDecisionAct} from './helpers/historical-decision-act.ts';
+import historicalRig from './fixtures/job-decision-1233/rig.json';
+import { seedHistoricalVerdictAsk } from './helpers/historical-verdict-ask.ts';
 
 function isolationHole(detail: string): never {
   throw new JobError('JOB_AGENT_ISOLATION_HOLE', 'JOB_AGENT_ISOLATION_HOLE: ' + detail);
@@ -46,7 +48,18 @@ async function runFlow(ownUid: boolean) {
   let child: Bun.Subprocess<'pipe', 'pipe', 'pipe'> | undefined;
   let ports: ReturnType<typeof createJobHostPorts>;
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 0,
-    fetch: request => ports.handleJobApi(request) });
+    async fetch(request) {
+      const input = request.clone();
+      const response = await ports.handleJobApi(request);
+      if (response.status !== 409) return response;
+      const body = await input.json();
+      if (body.idempotencyKey === 'agent-fresh-ask' &&
+          (await response.clone().json()).error?.code === 'JOB_ASK_INVALID') {
+        const publication = f.session.status().publication!;
+        seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'}, 'agent-ask');
+      }
+      return response;
+    } });
   const origin = `http://127.0.0.1:${server.port}`;
   ports = createJobHostPorts(f.session, origin);
   const pendingAbort = new AbortController();
@@ -91,12 +104,19 @@ async function runFlow(ownUid: boolean) {
       }));
       expect(displayed.ok).toBe(true);
       if (!displayed.ok) throw new Error(displayed.error.code);
-      const { capture } = rigStillCapture(source as JobPublication, outcome.ask as JobPendingAsk, displayed.value);
-      // #1229: fresh checkpoint asks/submissions refuse; exercise the isolated UI commit on review-verdict.
-      const saved = await ports.commitUIAct(f.session.jobId, ui('acts', { ...displayed.value,
-        askId: outcome.ask.askId, submissionId: 'isolated-ui', expectedGeneration: f.session.status().generation,
-        kind: 'review-verdict', value: { stage: 'rig-review', verdict: 'approved', words: 'isolated exact words' }, capture }));
-      expect(saved.ok).toBe(true);
+      const ask = outcome.ask as JobPendingAsk;
+      const before = f.session.status();
+      const refused = await ports.commitUIAct(f.session.jobId, ui('acts', {...displayed.value,
+        askId: ask.askId, submissionId: 'isolated-ui', expectedGeneration: before.generation,
+        kind: 'review-verdict', value: historicalRig.request.value}));
+      expect(refused).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+      expect(f.session.status()).toEqual(before);
+      // The isolated client reads the historical finalized act through semantic next.
+      seedHistoricalDecisionAct(f.session, ask, historicalRig.receipt.value, {
+        stage: 'rig-review', verdict: 'approved', comments: [{text: 'isolated exact words'}],
+      });
+      // The imported event can arrive while the live session is already serving a long poll.
+      (f.session as unknown as {notify(): void}).notify();
     }
     const [exit, stdout, stderr] = await Promise.all([child.exited, output, errors]);
     console.log(JSON.stringify({ ownUid, exitCode: exit }));
@@ -126,6 +146,9 @@ test.skipIf(agentUid === undefined && !requiredInCI)(
     for (const verb of ['publish', 'ask', 'next', 'close']) {
       expect(result.messages.some(message => message.flow?.verb === verb && message.flow.ok)).toBe(true);
     }
+    expect(result.messages.filter(message => message.flow?.verb === 'ask').map(message => message.flow))
+      .toEqual([{verb: 'ask', ok: false, generation: 1, code: 'JOB_ASK_INVALID'},
+        {verb: 'ask', ok: true, generation: expect.any(Number)}]);
     const received = result.messages.find(message => message.receivedAct)?.receivedAct;
     expect(received.actId).toBeTruthy();
     expect(received.sourceHash).toMatch(/^[a-f0-9]{64}$/);

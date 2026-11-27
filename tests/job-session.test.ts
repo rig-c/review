@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { JobStore } from '../src/job-store.ts';
 import { Database } from 'bun:sqlite';
 import { jobFixture, jobInputHashes } from './helpers/job-api-fixture.ts';
-import { rigStillCapture } from './helpers/job-rig-still.ts';
+import {seedHistoricalDecisionAct} from './helpers/historical-decision-act.ts';
+import historicalRig from './fixtures/job-decision-1233/rig.json';
 import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { JobSession } from '../src/job-session.ts';
@@ -14,6 +15,7 @@ import { createJobHostPorts } from '../src/job-api.ts';
 import { JOB_API_V3_SCHEMA } from '../src/job-contract.ts';
 import { createSyntheticOptionRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
 import { seedHistoricalPicksAsks } from './helpers/historical-picks-act.ts';
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 const stores: JobStore<unknown>[] = [];
@@ -358,7 +360,8 @@ test('#1022 replay of a superseded publish or ask refuses by name and names the 
   const publishA = await f.publishRequest('publish-a');
   const firstA = await (await f.call(publishA)).json();
   const askA = { ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation, idempotencyKey: 'ask-a',
-    publicationId: firstA.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } };
+    publicationId: firstA.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } as const };
+  seedHistoricalVerdictAsk(f.session, askA.publicationId, askA.subject, askA.idempotencyKey);
   const firstAskA = await (await f.call(askA)).json();
   expect(firstAskA.ok).toBe(true);
   // Still current: the stored receipts come back exactly as before (the envelope reports the current generation, as on main).
@@ -366,17 +369,15 @@ test('#1022 replay of a superseded publish or ask refuses by name and names the 
   expect(await receipt(publishA)).toEqual({ok: true, value: firstA.value});
   expect(await receipt(askA)).toEqual({ok: true, value: firstAskA.value});
 
-  // An ask whose act was finalized keeps its stored receipt.
-  // #1235: the answered sample is the rig verdict with its synthetic still, not a signoff.
-  const signoffA = { ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation, idempotencyKey: 'ask-a-signoff',
-    publicationId: firstA.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } };
-  const firstSignoffA = await (await f.call(signoffA)).json();
-  const page = await f.display(firstA.value);
-  const committed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: firstSignoffA.value.askId,
-    expectedGeneration: f.session.status().generation, submissionId: 'signoff-a', kind: 'review-verdict',
-    value: { stage: 'rig-review', verdict: 'approved', words: '' },
-    capture: rigStillCapture(firstA.value, firstSignoffA.value, page).capture }));
-  expect(committed.ok).toBe(true);
+  // A finalized historical ask keeps its receipt even after the publication is superseded.
+  const finalizedAsk = {...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+    idempotencyKey: 'ask-a-finalized', publicationId: firstA.value.publicationId,
+    subject: {kind: 'review-verdict', stage: 'rig-review'} as const};
+  const pendingFinalized = seedHistoricalVerdictAsk(f.session, finalizedAsk.publicationId,
+    finalizedAsk.subject, finalizedAsk.idempotencyKey);
+  const finalizedReceipt = await receipt(finalizedAsk);
+  expect(finalizedReceipt).toEqual({ok: true, value: pendingFinalized});
+  seedHistoricalDecisionAct(f.session, pendingFinalized, historicalRig.receipt.value);
 
   // B replaces A before the first ask is answered.
   const publicationB = await f.publish();
@@ -389,7 +390,7 @@ test('#1022 replay of a superseded publish or ask refuses by name and names the 
   expect(askReplay.ok).toBe(false);
   expect(askReplay.error.code).toBe('JOB_ASK_SUPERSEDED');
   expect(askReplay.error.message).toBe(`ask ${firstAskA.value.askId} is superseded; ${head}`);
-  expect(await receipt(signoffA)).toEqual({ok: true, value: firstSignoffA.value});
+  expect(await receipt(finalizedAsk)).toEqual(finalizedReceipt);
   // A refusal writes nothing and leaves B the head.
   expect(f.session.status().publication?.publicationId).toBe(publicationB.publicationId);
 });

@@ -591,13 +591,6 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-act-row #workspace-ask-headline{flex:1 1 0;min-width:0;font-size:var(--font-size-headline);font-weight:var(--font-weight-medium);font-variant-numeric:tabular-nums;color:var(--fg-strong);white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row #workspace-pending-ask{order:2;flex:none}
 .workspace-act-row .review-dialog-actions{min-width:0;gap:var(--space-2);justify-content:flex-end}
-#request-changes-reason{flex:none;font-size:var(--font-size-meta);white-space:nowrap}
-@media(max-width:760px){
- .workspace-act-row .workspace-act-bar:has(#request-changes:not([hidden])){flex-wrap:wrap;justify-content:flex-end}
- .workspace-act-row .workspace-act-bar:has(#request-changes:not([hidden])) #workspace-ask-headline{flex-basis:100%}
- .workspace-act-row .review-dialog-actions:has(>#request-changes-reason:not([hidden])){width:100%;flex-wrap:wrap}
- .workspace-act-row #request-changes-reason{order:1;flex-basis:100%;text-align:end}
-}
 .workspace-act-row .review-message:not(.error){display:none}
 .workspace-act-row .review-message.error{max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 /* A refusal in the row never widens it nor changes its height (#1040, #1041): while one shows, the row is one grid line.
@@ -605,18 +598,21 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
  * the answers keep their content width, so the refusal reads in full while it fits and only then clamps to two lines. */
 .workspace-act-row .workspace-act-bar:has(.review-message.error){display:grid;grid-template-columns:minmax(12ch,1fr);grid-auto-flow:column;grid-auto-columns:auto;align-items:center}
 .workspace-act-row .workspace-act-bar:has(.review-message.error) .review-dialog-actions{display:contents}
-.workspace-act-row .workspace-act-bar:has(.review-message.error:not([hidden])) #request-changes-reason{display:none}
 .workspace-act-row .workspace-act-bar:has(.review-message.error) #workspace-ask-headline{grid-column:1;grid-row:1;min-width:0;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
 .workspace-act-row .workspace-act-bar:has(.review-message.error) .review-message.error{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;line-height:1.25;max-height:var(--control-height);overflow-wrap:normal}
-.workspace-act-row .workspace-act-bar:has(.review-message.error) :is(.review-draft-state,#save,#request-changes){min-width:max-content}
+.workspace-act-row .workspace-act-bar:has(.review-message.error) .review-draft-state{min-width:max-content}
 .workspace-act-row .review-draft-state{min-width:0;max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]){display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #workspace-ask-headline{grid-column:1;grid-row:1}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-dialog-actions{display:contents}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-draft-state{grid-column:1/-1;grid-row:2;order:0}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-draft-recovery{grid-column:2;grid-row:1;justify-content:flex-end}
-.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #save{grid-column:3;grid-row:1;justify-self:end}
-.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #request-changes{grid-column:4;grid-row:1;justify-self:end}
+.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #send-comments{grid-column:4;grid-row:1;justify-self:end}
+@media(max-width:480px){
+ .workspace-act-row .workspace-act-bar:has(#send-comments:not([hidden])){flex-wrap:wrap;justify-content:flex-end}
+ .workspace-act-row .workspace-act-bar:has(#send-comments:not([hidden])) #workspace-ask-headline{flex-basis:100%}
+ .workspace-act-row .workspace-act-bar .review-dialog-actions{max-width:100%;flex-wrap:wrap}
+}
 
 /* Interview forms share the workspace bottom panel. */
 .workspace-interview-panel{flex:1;min-height:0;overflow:auto;padding:var(--space-3) var(--space-4)}

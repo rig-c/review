@@ -163,7 +163,7 @@ test('#1249 the comment row attaches settled Made correction evidence to the ori
   const original=structuredClone(row),errors:string[]=[],updates:string[]=[];
   const {doc,root}=await statusDom();
   const scope={
-    document:doc,hasStageComment,session:saved,data:{direction:null},
+    document:doc,hasStageComment,session:saved,data:{direction:null},player:null,
     saving:false,readOnly:null,isSubmittedFeedback:()=>false,appliedOnStage:null as AppliedPatch|null,rebuildBusy:false,rigDifference:null,
     input:(id:string)=>{expect(id).toBe('correction-selector');return {value:'1'};},
     select:(id:string)=>{expect(id).toBe('correction-stage');return {value:'rig-review'};},

@@ -9,7 +9,7 @@ import { buildVerdict, checkFlags, loadPartsAtlas, loadPartsView, meshReportFlag
 import { preparePartsComment } from '../src/parts-comment-crops.ts';
 import { startPartsServer } from '../src/parts-server.ts';
 import { FOOTPRINT_ALPHA, frontParts, paintPart } from '../web/parts-render.ts';
-import { candidate } from './helpers/parts-comments-package.ts';
+import { candidate, partsIssueSubmission } from './helpers/parts-comments-package.ts';
 import { BACK_CONTROL, BACK_DEFECT, FAINT, FRONT, frontHolds, writePartsPackage } from './helpers/parts-package.ts';
 
 const roots: string[] = [];
@@ -132,22 +132,28 @@ test('#348 atlas bar: atlas mode on the public example shows every region named 
   expect(pkg.verdictPath.endsWith('examples/demo/parts-review.json')).toBe(true);
 });
 
-test('#348: the server serves the view, gates the sign-off on the capability, and saves it', async () => {
+test('#348: the server serves saved /4 verdicts and refuses standalone writes', async () => {
   const root = await planted(), pkg = await loadPartsView(root), capability = 'c'.repeat(64);
+  const saved = await saveVerdict(pkg, await partsIssueSubmission(pkg));
+  const before = await readFile(pkg.verdictPath);
   const server = await startPartsServer(pkg, { port: 0, capability });
   try {
     const origin = `http://127.0.0.1:${server.port}`;
-    const view = await (await fetch(origin + '/api/parts')).json() as { mode: string; items: unknown[]; flags: unknown[] };
+    const view = await (await fetch(origin + '/api/parts')).json() as { mode: string; items: unknown[]; flags: unknown[]; verdict: unknown };
     expect([view.mode, view.items.length, view.flags.length]).toEqual(['parts', 3, 3]);
+    expect(view.verdict).toEqual(saved);
+    const session = await fetch(origin + '/api/session');
+    expect(await session.json()).toEqual({subject: 'parts', issues: saved.issues});
     expect((await fetch(origin + '/api/parts/image/2')).headers.get('content-type')).toContain('image/png');
     expect((await fetch(origin + '/api/parts/image/9')).status).toBe(404);
     expect((await fetch(origin + '/')).status).toBe(200);
     expect((await fetch(origin + '/main.js')).status).toBe(200);
     const body = JSON.stringify({ status: 'approved', issues: [] });
     expect((await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body })).status).toBe(403);
-    const saved = await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': capability }, body });
-    expect(saved.status).toBe(200);
-    expect(JSON.parse(await readFile(join(root, 'rig', 'parts-review.json'), 'utf8')).status).toBe('approved');
+    const removed = await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': capability }, body });
+    expect(removed.status).toBe(404);
+    expect(await removed.json()).toEqual({error: 'Not found'});
+    expect(await readFile(pkg.verdictPath)).toEqual(before);
   } finally { server.stop(true); }
 });
 

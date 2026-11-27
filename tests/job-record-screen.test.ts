@@ -28,18 +28,19 @@ async function harness(picture:boolean|'parts'=false,capability:string|null='fix
  const options:Parameters<typeof createJobRigScreen>[0]={host:{classList:{remove(){}},replaceChildren(){}} as unknown as HTMLElement,pageId:deps.pageId,access:{capability,headers:()=>new Headers(capability?{'X-Review-Capability':capability}:{})},window:deps.window,formDependencies:deps,
   readPublication:async id=>{reads.push(id);const value=f.fake.publications.get(id);return value?{ok:true,value}:{ok:false,error:{code:'JOB_PUBLICATION_UNKNOWN',message:'unknown'}};},
   routes:display=>jobPublicationRoutes(display,f.origin),translate:key=>key,refusal:error=>error instanceof Error?error.message:String(error),
-  async load(){rigHost()!.attach({stage:()=>null,redraw(){},message(){},recordForms(){}});rigHost()!.displayed();}};screen=createJobRigScreen(options);
+  async load(){rigHost()!.attach({message(){},recordForms(){}});rigHost()!.displayed();}};screen=createJobRigScreen(options);
  return {f,dom,state,deps,screen,options,reads,submitted,store,async close(){screen.mounted()?.record?.inspection.dispose();setRigHost(null);dom.restore();await f.close();}};
 }
 
-test('#750 record backdrop rejects every mutation, including a parts backdrop submitParts',async()=>{
+test('#750 record backdrop exposes no verdict writer and rejects the stage-parts mutation',async()=>{
  const h=await harness(true);try{
   const ready=await h.screen.prepare(h.f.display,new AbortController().signal);expect(ready?.record?.picture).toBeTruthy();
   Object.assign(ready!.record!.picture!,{parts:{sourceHash:'synthetic-parts'}});
   h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
   const host=rigHost()!;expect(host.subject).toBe('parts');expect(host.access.capability).toBeNull();expect(host.access.headers().has('X-Review-Capability')).toBe(false);
-  await expect(host.submitParts!([])).rejects.toThrow('JOB_REVIEW_READ_ONLY');
-  await expect(host.submit({} as never,()=>{})).rejects.toThrow('JOB_REVIEW_READ_ONLY');
+  expect(host).not.toHaveProperty('submitParts');
+  expect(host).not.toHaveProperty('submit');
+  expect(typeof host.submitComments).toBe('function');
   for(const method of ['POST','PUT','PATCH','DELETE'])await expect(host.read('/api/stage-parts/verdict',method)).rejects.toThrow('JOB_REVIEW_READ_ONLY');
   expect(h.submitted).toHaveLength(0);
  }finally{await h.close();}
@@ -109,7 +110,7 @@ test('#989, #1228, #1229 and #1230 a publication resumed with historical pending
   const reopenAsk:PendingAskV3={...h.f.ask,askId:'ask-reopen',subject:{kind:'reopen',stage:'plan-approved'}};
   h.state.pending=[reopenAsk,signoffAsk,checkpointAsk,interviewAsk];
   let mountedForms:readonly HTMLElement[]=[];
-  h.options.load=async()=>{rigHost()!.attach({stage:()=>null,redraw(){},message(){},recordForms(forms){mountedForms=forms;}});rigHost()!.displayed();};
+  h.options.load=async()=>{rigHost()!.attach({message(){},recordForms(forms){mountedForms=forms;}});rigHost()!.displayed();};
   const ready=await h.screen.prepare(h.f.display,new AbortController().signal);
   expect([...ready!.record!.forms.keys()]).toEqual([]);
   h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
@@ -144,7 +145,7 @@ test('#1228 and #1229 publications declaring signoff or checkpoint show no form 
    let mountedForms: readonly HTMLElement[] = [];
    const messages: [string, boolean | undefined][] = [];
    h.options.load = async () => {
-    rigHost()!.attach({stage: () => null, redraw() {}, message(text, error) {messages.push([text, error]);}, recordForms(forms) {mountedForms = forms;}});
+    rigHost()!.attach({message(text, error) {messages.push([text, error]);}, recordForms(forms) {mountedForms = forms;}});
     rigHost()!.displayed();
    };
    const ready = await h.screen.prepare(h.f.display, new AbortController().signal);
@@ -282,17 +283,18 @@ test('#750 interview publication follows a genuinely retained picture before pen
 });
 
 
-for(const picture of [false,true])test('#743 record host never inherits navigation or verdict status; picture='+picture,async()=>{
+for(const picture of [false,true])test('#743 record host keeps its own source and never inherits backdrop navigation; picture='+picture,async()=>{
  const h=await harness(picture);try{
   const ready=await h.screen.prepare(h.f.display,new AbortController().signal);const tx=h.screen.commit(ready!);
   await h.screen.painted(ready!,new AbortController().signal);tx.finalize();
-  expect(rigHost()!.record?.hasPicture).toBe(picture);expect(rigHost()!.navigation).toBeUndefined();expect(rigHost()!.reviewState).toBeUndefined();
+  expect(rigHost()!.record?.hasPicture).toBe(picture);expect(rigHost()!.navigation).toBeUndefined();
+  expect(rigHost()!.record?.sourceHash).toBe(h.f.display.publication.source.sourceHash);
  }finally{await h.close();}
 });
 
 test('#743 record inspection lifetime follows ack finalization; rollback retains old forms and navigation does not cross record boundary',async()=>{
  const h=await harness(true);try{
-  h.options.load=async()=>{rigHost()!.attach({stage:()=>null,redraw(){},message(){},recordForms(){},navigation:()=>({subject:'rig',bookmark:{time:9}} as never)});rigHost()!.displayed();};
+  h.options.load=async()=>{rigHost()!.attach({message(){},recordForms(){},navigation:()=>({subject:'rig',bookmark:{time:9}} as never)});rigHost()!.displayed();};
   const first=await h.screen.prepare(h.f.display,new AbortController().signal);let oldDisposed=0;
   const close=first!.record!.inspection.dispose.bind(first!.record!.inspection);first!.record!.inspection.dispose=()=>{oldDisposed++;close();};
   let tx=h.screen.commit(first!);await h.screen.painted(first!,new AbortController().signal);tx.finalize();
@@ -304,7 +306,9 @@ test('#743 record inspection lifetime follows ack finalization; rollback retains
   expect(oldDisposed).toBe(0);await tx.rollback();candidate!.record!.inspection.dispose();
   expect(h.screen.mounted()).toBe(first);expect(first!.record!.forms).toBe(oldForms);expect(oldForms.get(h.f.ask.askId)).toBe(entry);expect(oldDisposed).toBe(0);expect(formDisposed).toBe(0);
   const picture=first!.record!.picture!;tx=h.screen.commit(picture);await h.screen.painted(picture,new AbortController().signal);
-  expect(rigHost()!.navigation).toBeUndefined();expect(typeof rigHost()!.reviewState).toBe('function');expect(oldDisposed).toBe(0);
+  expect(rigHost()!.navigation).toBeUndefined();expect(rigHost()!.record).toBeUndefined();
+  expect(await rigHost()!.read('/api/session','GET')).toMatchObject({sourceHash:picture.display.publication.source.sourceHash,feedback:[]});
+  expect(oldDisposed).toBe(0);
   tx.finalize();expect(oldDisposed).toBe(1);expect(formDisposed).toBe(1);expect(h.screen.mounted()).toBe(picture);
  }finally{await h.close();}
 });
@@ -443,7 +447,7 @@ test('#839 record parts pictures keep ordinary inspector eligibility without com
   expect(opened.subject).toBe('parts');expect(f.workspace.result.kind).toBe('option-set');
   let available:unknown='not-bound',inspector=false;
   const element={querySelector:()=>({append(){}}),parentElement:{},checked:false},defaults={defaultCameraSync:false,defaultIdleRepeat:false,theme:'system'};
-  const environment={questionPanel:{},recordPanel:{},host:{record:{hasPicture:true},ownerActAccess:null},partsOnly:true,data:undefined,screenRoot:element,shell:{language:{}},rigInspector:{body:{append(){}},strip:{},comments:{button:{},panel:{querySelector:()=>null}}},communicationPanel:{append(){}},communicationPending:()=>false,viewport:{state:{}},appearance:null,workspace:null,inspectorBlocks:null,liveIssueCount:null,readOnly:null,actReadOnly:null,
+  const environment={questionPanel:{},recordPanel:{},host:{record:{hasPicture:true},ownerActAccess:null},partsOnly:true,localCommentSource:null,data:undefined,screenRoot:element,shell:{language:{}},rigInspector:{body:{append(){}},strip:{},comments:{button:{},panel:{querySelector:()=>null}}},communicationPanel:{append(){}},communicationPending:()=>false,viewport:{state:{}},appearance:null,workspace:null,inspectorBlocks:null,partsSubmittedIssues:new Set(),readOnly:null,actReadOnly:null,
    el:()=>element,input:()=>element,select:()=>element,text(){},document:{},tr:(key:string)=>key,readOnlyReason:()=>null,access:{},fitCamera(){},bindAppearance:()=>({}),bindReviewDialog(){},bindInspector(){inspector=true;},
    bindWorkspaceUI:()=>({defaults:()=>defaults,refresh(){}}),bindInspectorBlocks:(options:{available:unknown})=>{available=options.available;return {};}};
   const run=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(gate+'\n'+parts)};return startParts;}`)(environment);

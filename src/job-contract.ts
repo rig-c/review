@@ -257,8 +257,8 @@ export function parsePanelComposition(input: unknown): JobPanelComposition {
   };
   const stage = slot(p.stage, 'panels.stage');
   const side = slot(p.side, 'panels.side');
-  if (stage.length !== 1 || side.length < 1 || side[side.length - 1] !== 'act.submit') {
-    throw new Error('JOB_PANELS_INVALID: stage must have exactly one component and side must end with act.submit');
+  if (stage.length !== 1) {
+    throw new Error('JOB_PANELS_INVALID: stage must have exactly one component');
   }
   return {
     schema: JOB_PANEL_COMPOSITION_SCHEMA,
@@ -953,6 +953,15 @@ export const JOB_ERROR_CODES = [
   'JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID',
   'JOB_PREVIOUS_BUILD_INVALID',
   'JOB_SOURCE_MISMATCH',
+  'SCENE_REQUIRED',
+  'SCENE_SOURCE_MISMATCH',
+  'SCENE_CAMERA_REPORT_INVALID',
+  'SCENE_CAMERA_REPORT_TOO_LARGE',
+  'SCENE_CAMERA_MODEL_MISMATCH',
+  'SCENE_CAMERA_CLIP_MISMATCH',
+  'SCENE_CAMERA_CLOCK_INVALID',
+  'SCENE_CAMERA_VIEW_INVALID',
+  'DIRECTION_TAKE_MISMATCH',
   'JOB_SOURCE_UNRETAINABLE',
   'JOB_ROOT_REPLACED',
   'JOB_PUBLICATION_UNKNOWN',

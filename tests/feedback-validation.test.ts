@@ -1,3 +1,4 @@
+import {lastLocalPackageFeedback,postLocalPackageFeedback} from './helpers/local-package-feedback.ts';
 import { afterEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -5,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadReview } from '../src/manifest.ts';
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type FeedbackCatalog, type FeedbackSelection } from '../src/feedback-validation.ts';
-import { freshSession, parseSession, readSession, saveSession, sessionFile } from '../src/session.ts';
+import { freshSession, parseSession, readSession, saveSession, sessionFile, validatePackageFeedback, type Feedback } from '../src/session.ts';
 import { loadCompare } from '../src/compare.ts';
 import { compareSessionFile, freshCompareSession, parseCompareSession, readCompareSession, saveCompareSession } from '../src/compare-session.ts';
 import { startServer } from '../src/server.ts';
@@ -125,14 +126,16 @@ test('legacy comparison preserves invalid selected-side rows and both reviewed-s
 test('single HTTP reproduces the wrong-slot refusal and persists chosen interval independently of playhead',async()=>{
  const f=await fixture(),p=await loadReview(f.path),state=await directory(),server=await startServer(p,{port:0,stateDir:state});try{
   const base=`http://127.0.0.1:${server.port}`,headers={Origin:base,'Content-Type':'application/json'};const response=await fetch(base+'/api/review');expect((await response.json()).feedbackCatalog).toEqual(p.feedbackCatalog);
-  const put=(feedback:unknown[])=>fetch(base+'/api/session',{method:'PUT',headers,body:JSON.stringify({...freshSession(p),feedback})});
+  const send=(feedback:Feedback[])=>postLocalPackageFeedback(base,p.sourceHash,feedback);
   await writeFile(sessionFile(p,state),JSON.stringify({...freshSession(p),feedback:[{...note(),target:{kind:'slot',name:'old_missing'}}],updatedAt:'legacy'}));
   const legacyResponse=await fetch(base+'/api/session');expect(legacyResponse.status).toBe(200);const legacy=await legacyResponse.json();expect(legacy.feedback[0].target.name).toBe('old_missing');expect(legacy.feedbackWarnings[0].id).toBe('note');expect(legacy.reviewedSource).toEqual(p.reviewedSource);
-  expect((await fetch(base+'/api/session',{method:'PUT',headers,body:JSON.stringify({...legacy,feedbackWarnings:[]})})).status).toBe(400);
-  let result=await put([{...note(),target:{kind:'slot',name:'no_such_slot'},frameStart:5000,frameEnd:9000}]);expect(result.status).toBe(400);expect((await result.json()).error).toBe('feedback.target.name: slot "no_such_slot" not in model');
-  result=await put([{...note(),frameEnd:4}]);expect(result.status).toBe(400);expect((await result.json()).error).toContain('feedback.frameEnd');
-  result=await put([{...note(),frameStart:0,frameEnd:1,context:{animation:'inspect',time:0.9,frame:3}}]);expect(result.status).toBe(200);const body=await result.json();expect(body.feedback[0].context).toEqual({animation:'inspect',time:0.9,frame:3,interval:{frameStart:0,frameEnd:1,inclusive:true}});expect(body.reviewedSource).toEqual(p.reviewedSource);
-  await writeFile(join(f.root,'build/skeleton.model.json'),f.modelBytes+' ');expect((await put([note()])).status).toBe(409);
+  expect((await fetch(base+'/api/session',{method:'PUT',headers,body:JSON.stringify({...legacy,feedbackWarnings:[]})})).status).toBe(405);
+  let result=await send([{...note(),target:{kind:'slot',name:'no_such_slot'},frameStart:5000,frameEnd:9000}]);expect(result.status).toBe(400);expect((await result.json()).error).toBe('feedback.target.name: slot "no_such_slot" not in model');
+  result=await send([{...note(),frameEnd:4}]);expect(result.status).toBe(400);expect((await result.json()).error).toContain('feedback.frameEnd');
+  result=await send([{...note(),frameStart:0,frameEnd:1,context:{animation:'inspect',time:0.9,frame:3}}]);expect(result.status).toBe(200);
+  const [saved]=await lastLocalPackageFeedback(p,state);
+  expect(validatePackageFeedback(saved!,p).context).toEqual({animation:'inspect',time:0.9,frame:3,interval:{frameStart:0,frameEnd:1,inclusive:true}});
+  await writeFile(join(f.root,'build/skeleton.model.json'),f.modelBytes+' ');expect((await send([{...note(),id:'after-change'}])).status).toBe(409);
  }finally{await server.stop(true);}
 });
 
@@ -153,7 +156,12 @@ test('legacy unsafe integers stay readable with named warnings but both HTTP sav
  const singleServer=await startServer(single,{port:0,stateDir:singleState}),pairServer=await startCompareServer(pair.p,{port:0,stateDir:pairState});try{
   for(const [server,path,bytes,file] of [[singleServer,'/api/session',singleBytes,singleFile],[pairServer,'/api/compare/session',pairBytes,pairFile]] as const){
    const base=`http://127.0.0.1:${server.port}`,response=await fetch(base+path);expect(response.status).toBe(200);const old=await response.json();expect(old.feedback[0].frameStart).toBe(unsafe);expect(old.feedbackWarnings).toHaveLength(1);expect(old.feedbackWarnings[0].error).toContain('feedback frames');expect(await readFile(file,'utf8')).toBe(bytes);
-   const denied=await fetch(base+path,{method:'PUT',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({...old,feedbackWarnings:[]})});expect(denied.status).toBe(400);expect((await denied.json()).error).toContain('feedback frames');expect(await readFile(file,'utf8')).toBe(bytes);
+   const denied=path==='/api/session'
+    ? await postLocalPackageFeedback(base,single.sourceHash,old.feedback)
+    : await fetch(base+path,{method:'PUT',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({...old,feedbackWarnings:[]})});
+   expect(denied.status).toBe(400);
+   expect((await denied.json()).error).toContain(path==='/api/session'?'JOB_ACT_INVALID':'feedback frames');
+   expect(await readFile(file,'utf8')).toBe(bytes);
   }
  }finally{await singleServer.stop(true);await pairServer.stop(true);}
 });

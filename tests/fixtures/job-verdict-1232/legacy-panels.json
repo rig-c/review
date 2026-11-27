@@ -1,0 +1,32 @@
+{
+  "schema": "rig-review/1",
+  "id": "legacy-parts",
+  "title": "Legacy parts",
+  "revision": "r1",
+  "model": "skeleton.model.json",
+  "references": [],
+  "animations": [],
+  "checkpoints": [],
+  "authoring": [],
+  "axes": [],
+  "panels": {
+    "schema": "rig-review/panels@1",
+    "left": [
+      "parts.list"
+    ],
+    "stage": [
+      "parts.canvas"
+    ],
+    "toolbar": [
+      "parts.layers"
+    ],
+    "side": [
+      "parts.issues",
+      "act.submit"
+    ]
+  },
+  "audio": {
+    "clips": [],
+    "cues": []
+  }
+}

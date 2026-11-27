@@ -86,22 +86,20 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
     !!document.querySelector('#rig-viewport') && !!document.querySelector('[data-part-list] button')`;
   async function screen(label: string, publication: JobPublication) {
     const catalog = lang === 'en' ? enCatalog : koCatalog;
-    // Attached ask completion precedes owner-stream delivery; await the actual verdict controls.
+    // The publication arrives through the owner stream and offers comments without an ask.
     await wait(label, () => page!.evaluate<boolean>(`(${ready}) &&
       document.querySelector('#provenance-full')?.textContent.includes(${JSON.stringify(publication.source.sourceHash)}) &&
-      !!document.querySelector('#save:not(:disabled)') && document.querySelector('#save')?.checkVisibility() &&
-      document.querySelector('#request-changes')?.checkVisibility() &&
-      document.querySelector('#save')?.textContent===${JSON.stringify(catalog['Approve'])} &&
-      document.querySelector('#request-changes')?.textContent===${JSON.stringify(catalog['Request changes'])} &&
-      document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog[stage==='parts'?'Check the parts and meshes.':'Check the rig and motion.'])}`));
+      document.querySelector('#send-comments')?.checkVisibility() &&
+      document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog["We're looking at the work together. Leave your thoughts as comments."])}`));
     const state = await page!.evaluate<{language: string; title: string; sourceHash: string; parts: string[];
-      counts: number[]; approve: string; changes: string; pending: string; message: string; layoutState: string; partStatus: string}>(`(()=>({
+      counts: number[]; send: string; primary: boolean; disabled: boolean; verdictVisible: boolean; message: string; layoutState: string; partStatus: string}>(`(()=>({
       language:document.documentElement.lang,title:document.querySelector('#package-title').textContent,
       sourceHash:JSON.parse(document.querySelector('#provenance-full').textContent).sourceHash,
       parts:[...document.querySelectorAll('[data-part-list] button[data-slot]')].map(n=>n.dataset.slot),
-      counts:['#app','.topbar','.layout','#rig-viewport','#zoom-in','#zoom-out','#fit','#native-one','#view-menu','#save','#request-changes'].map(s=>document.querySelectorAll(s).length),
-      approve:document.querySelector('#save').textContent,changes:document.querySelector('#request-changes').textContent,
-      pending:document.querySelector('#review-status').value,
+      counts:['#app','.topbar','.layout','#rig-viewport','#zoom-in','#zoom-out','#fit','#native-one','#view-menu','#send-comments'].map(s=>document.querySelectorAll(s).length),
+      send:document.querySelector('#send-comments').textContent,primary:document.querySelector('#send-comments').classList.contains('primary'),
+      disabled:document.querySelector('#send-comments').disabled,
+      verdictVisible:['#save','#request-changes','#review-status'].some(s=>document.querySelector(s)?.checkVisibility()),
       message:document.querySelector('#message').textContent,
       layoutState:document.querySelector('#layout-state').textContent,
       partStatus:document.querySelector('[data-part-status]').textContent
@@ -112,10 +110,11 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
     assert.equal(state.sourceHash, publication.source.sourceHash);
     if(stage==='parts')assert.deepEqual(state.parts.sort(),['body','front']);else assert.ok(state.parts.includes('mesh'));
     assert.ok(state.counts.every(count => count === 1), 'one existing shared screen and control set');
-    assert.equal(state.approve, catalog['Approve']);
-    assert.equal(state.changes, catalog['Request changes']);
-    assert.equal(state.pending, 'pending', 'opening does not approve');
-    const readyMessage = catalog[stage === 'parts' ? 'Parts ready. Source files remain unchanged.' : 'Record review status and structured feedback while preserving sources. Motion is read only.'];
+    assert.equal(state.send, catalog['Send comments']);
+    assert.equal(state.primary, true);
+    assert.equal(state.disabled, true, 'opening alone leaves nothing to send');
+    assert.equal(state.verdictVisible, false);
+    const readyMessage = catalog[stage === 'parts' ? 'Parts ready. Source files remain unchanged.' : 'Saves locally. The producer receives no feedback.'];
     assert.ok([publication.label, readyMessage].includes(state.message), 'status line shows the post-publication message');
     assert.equal(state.layoutState, catalog['Side by side']);
     assert.equal(state.partStatus, stage === 'parts' ? (lang === 'en' ? '2 parts' : '파츠 2개') : (lang === 'en' ? '1 declared slots · 1 results' : '선언된 슬롯 1개 · 결과 1개'));
@@ -128,7 +127,6 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
     let frozen: Awaited<ReturnType<typeof jobInputHashes>> | undefined;
     if (timing === 'already-published') {
       publication = await fixture.publish(stage, 'first-publication-904');
-      await fixture.ask(publication,stage==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:'rig-review'});
       frozen = await jobInputHashes(fixture.input.root);
       assert.ok(fixture.host.session.status().publication,'positive control has an actual publication before navigation');
     }
@@ -255,7 +253,7 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
         // #1226 owner ruling: a published rig with no ask shows the no-ask line (Send comments); #1242: parts too.
         assert.equal(filled.prompt,catalog["We're looking at the work together. Leave your thoughts as comments."],'no fabricated ask between publication and the actual pending subject');
         assert.equal(filled.sendComments,true,'a published source with no ask offers Send comments');
-        assert.ok([publication.label,catalog[stage==='parts'?'Parts ready. Source files remain unchanged.':'Record review status and structured feedback while preserving sources. Motion is read only.']].includes(filled.message));
+        assert.ok([publication.label,catalog[stage==='parts'?'Parts ready. Source files remain unchanged.':'Saves locally. The producer receives no feedback.']].includes(filled.message));
         assert.equal(filled.layoutState,catalog['Side by side']);
         assert.equal(filled.partStatus,stage==='parts'?(lang==='en'?'2 parts':'파츠 2개'):(lang==='en'?'1 declared slots · 1 results':'선언된 슬롯 1개 · 결과 1개'));
         cases.push({label:'published-without-ask',filled});
@@ -294,21 +292,23 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
         throw error; // Eventual recovery never changes the original five-second RED.
       }
       assert.ok(initialStream.bytes > 0, 'actual data arrived on the already-open response');
-      await fixture.ask(publication,stage==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:'rig-review'});
     }
     assert.ok(publication && frozen);
     if(timing==='first-publication'){
       await screen('just-published',publication);
+      const subject=stage==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'} as const:{kind:'review-verdict',stage:'rig-review'} as const;
+      await assert.rejects(fixture.ask(publication,subject),/JOB_ASK_INVALID/);
+      await screen('after-refused-verdict-ask',publication);
       await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
       const pendingFrame=await page.evaluate<{sameNodes:boolean;rects:unknown[];originalRects:unknown[];prompt:string}>(`(()=>({
         sameNodes:window.__review904Frame.every(({selector,node})=>document.querySelector(selector)===node),
         rects:window.__review904GeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};}),
         originalRects:window.__review904Rects,prompt:document.querySelector('#workspace-ask-headline').textContent
       }))()`);
-      cases.push({label:'actual-pending-frame-after-ask',pendingFrame});await save('RUNNING');
-      assert.equal(pendingFrame.sameNodes,true,'actual pending prompt/verdict keeps the original shared nodes');
-      assert.deepEqual(pendingFrame.rects,pendingFrame.originalRects,'actual pending prompt/verdict does not move or resize the original frame');
-      await writeFile(join(out,'actual-pending-frame.png'),await page.screenshot());
+      cases.push({label:'frame-after-refused-verdict-ask',pendingFrame});await save('RUNNING');
+      assert.equal(pendingFrame.sameNodes,true,'refused verdict ask keeps the original shared nodes');
+      assert.deepEqual(pendingFrame.rects,pendingFrame.originalRects,'refused verdict ask does not move or resize the original frame');
+      await writeFile(join(out,'frame-after-refused-verdict-ask.png'),await page.screenshot());
     }
     await screen('opened-screen', publication);
     if(timing==='already-published')await unchangedPublishedHeight(page,out);
@@ -330,7 +330,7 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
     const next = await fixture.next();
     assert.equal(next.events.filter(event => event.type === 'published').length, 1, 'exactly one actual publication');
     assert.equal(next.events.filter(event => event.type === 'act').length, 0, 'open/mount/reload never submits');
-    assert.equal(fixture.host.session.status().pending.length, 1, 'verdict stays pending');
+    assert.deepEqual(fixture.host.session.status().pending, [], 'no verdict ask was admitted');
     assert.deepEqual(await jobInputHashes(fixture.input.root), frozen, 'inspection leaves producer inputs unchanged');
     assert.deepEqual(exceptions, [], 'no runtime exceptions');
     await save('PASS');
@@ -581,9 +581,9 @@ async function ackRetry(lang:'en'|'ko'){
   assert.equal(await page.evaluate(`['#save','#request-changes'].some(selector=>document.querySelector(selector)?.checkVisibility())`),false);
   assert.deepEqual(await page.evaluate(`['#message','#layout-state','[data-part-status]'].map(s=>document.querySelector(s)?.textContent)`),['','','']);
   await writeFile(join(out,'waiting-after-failed-ack.png'),await page.screenshot());
-  const publication=await fixture.publish('parts','retry-904');await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
+  const publication=await fixture.publish('parts','retry-904');
   const frozen=await jobInputHashes(fixture.input.root);
-  await wait('retry ready',()=>page!.evaluate(`document.body.dataset.ready==='true'&&document.querySelector('#save:not(:disabled)')?.checkVisibility()&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['Check the parts and meshes.'])}`));
+  await wait('retry ready',()=>page!.evaluate(`document.body.dataset.ready==='true'&&document.querySelector('#send-comments')?.checkVisibility()&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog["We're looking at the work together. Leave your thoughts as comments."])}`));
   assert.ok([publication.label,catalog['Parts ready. Source files remain unchanged.']].includes(await page.evaluate(`document.querySelector('#message')?.textContent`)));
   assert.equal(await page.evaluate(`document.querySelector('#layout-state')?.textContent`),catalog['Side by side']);
   assert.equal(await page.evaluate(`document.querySelector('[data-part-status]')?.textContent`),lang==='en'?'2 parts':'파츠 2개');

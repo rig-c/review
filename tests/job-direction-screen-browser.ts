@@ -1,17 +1,17 @@
 import {tmpdir} from 'node:os';
-/** #796 ordinary Nova: direction take, comments and verdict on one screen, followed by #1228's sign-off-free plan publication check. */
+/** #796 ordinary Nova: direction take, comment-only submission on one screen, followed by #1228's sign-off-free plan publication check. */
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
 import {mkdir,readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {startJobHost} from '../src/job-front.ts';
-import {JOB_API_V3_SCHEMA,JOB_RECORD_READER_ID} from '../src/job-contract.ts';
+import {JOB_API_V3_SCHEMA,JOB_RECORD_READER_ID,type JobContextComment} from '../src/job-contract.ts';
 import {createSyntheticPlanRecordWorkspace,createSyntheticRecordReader} from './helpers/job-record-fixture.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
-import {feedbackItemComments,parseStageComment,timeOnlyBasis,unprojectMark} from '../src/stage-comment.ts';
-import {parseCommentsAct} from '../src/job-host.ts';
+import {feedbackContextComments,parseStageComment,timeOnlyBasis,unprojectMark} from '../src/stage-comment.ts';
+import {parseCommentOnlyAct} from '../src/job-host.ts';
 import {validateCommentCrop} from '../src/comment-crops.ts';
 import type {Feedback} from '../src/session.ts';
 import {jobSourceDraftId} from '../web/job-session.ts';
@@ -35,18 +35,16 @@ try{
   const host=await startJobHost({...builder.hostOptions,stateDir:join(output,'state-'+language),publicationMode:'record-and-package',readRecordPublished:reader.reader,recordReaderId:JOB_RECORD_READER_ID});
   let generation=0;
   async function api(verb:string,value:object={}){const response=await fetch(host.origin+'/jobs/'+host.session.jobId+'/api',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+host.session.hostCredentials().agent},body:JSON.stringify({schema:JOB_API_V3_SCHEMA,jobId:host.session.jobId,requestId:randomUUID(),verb,...verb==='next'?{}:{expectedGeneration:generation,idempotencyKey:randomUUID()},...value})});const result=await response.json();assert.equal(result.ok,true,JSON.stringify(result));generation=result.generation;return result.value;}
-  const askSubject=(publication:any,subject:any)=>api('ask',{publicationId:publication.publicationId,subject});
   try{
    const publication=await api('publish',{result:{kind:'package',path:'out',selector:builder.input.getContext().selector},freeze:{kind:'producer-held',holdId:'direction-held',record:{path:'project.json',sha256:hash(await readFile(join(builder.input.root,'project.json')))}}});
    const frozen=await jobInputHashes(builder.input.root);
-   const ask=await askSubject(publication,{kind:'review-verdict',stage:'direction-review'});
    const url=new URL(host.ownerUrl);url.searchParams.set('lang',language);
    await page.goto(url.href,language);
-   await wait(`document.body.dataset.ready==='true'&&!document.querySelector('#save').disabled&&!!document.querySelector('#rig-root canvas')`);
+   await wait(`document.body.dataset.ready==='true'&&document.querySelector('#send-comments')?.checkVisibility()&&!!document.querySelector('#rig-root canvas')`);
    assert.equal(await page.evaluate(`document.documentElement.lang`),language);
-   const layout:any=await page.evaluate(`(()=>{const visible=n=>!!n&&!n.closest('[hidden]')&&n.getBoundingClientRect().height>0;return {shells:document.querySelectorAll('#app').length,panels:document.querySelectorAll('#direction-panel').length,directionVisible:visible(document.querySelector('#direction-panel')),actBars:document.querySelectorAll('.workspace-act-bar').length,verdictInBar:!!document.querySelector('.workspace-act-bar #review-status'),notes:[...document.querySelectorAll('textarea[name="note"],textarea[name="words"],form[data-job-ask] textarea')].filter(visible).length,legacyDumps:document.querySelectorAll('[data-job-direction]').length};})()`);
+   const layout:any=await page.evaluate(`(()=>{const visible=n=>!!n&&!n.closest('[hidden]')&&n.getBoundingClientRect().height>0;return {shells:document.querySelectorAll('#app').length,panels:document.querySelectorAll('#direction-panel').length,directionVisible:visible(document.querySelector('#direction-panel')),actBars:document.querySelectorAll('.workspace-act-bar').length,verdictVisible:[...document.querySelectorAll('.workspace-act-bar #save,.workspace-act-bar #request-changes,.workspace-act-bar #review-status')].some(visible),sendPrimary:visible(document.querySelector('.workspace-act-bar #send-comments.primary')),notes:[...document.querySelectorAll('textarea[name="note"],textarea[name="words"],form[data-job-ask] textarea')].filter(visible).length,legacyDumps:document.querySelectorAll('[data-job-direction]').length};})()`);
    assert.equal(layout.shells,1);assert.equal(layout.panels,1);assert.equal(layout.directionVisible,true);
-   assert.equal(layout.actBars,1);assert.equal(layout.verdictInBar,true);assert.equal(layout.notes,0);assert.equal(layout.legacyDumps,0);
+   assert.equal(layout.actBars,1);assert.equal(layout.verdictVisible,false);assert.equal(layout.sendPrimary,true);assert.equal(layout.notes,0);assert.equal(layout.legacyDumps,0);
    const panelState=()=>page!.evaluate<any>(`(()=>{const p=document.querySelector('#direction-panel'),r=document.querySelector('#rig-overlay').getBoundingClientRect();return {open:p.open,summary:p.querySelector('summary').textContent,width:r.width,height:r.height,dpr:devicePixelRatio};})()`);
    const closed=await panelState();assert.equal(closed.open,false,'direction closed on initial load');
    assert.equal(closed.summary,language==='en'?'Direction v3 · 1 s · loop · fixed camera':'연출 v3 · 1초 · 반복 · 카메라 고정');
@@ -101,10 +99,10 @@ try{
    assert.ok(wrap,'short wraps with Repeat enabled');
    observations.push({kind:'short-repeat',language,ended,wrap});
    console.log('DIRECTION_SHORT_REPEAT',JSON.stringify({language,ended,wrap}));
-   await page.evaluate(`(()=>{const s=document.querySelector('#review-status');s.value='approved';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+   await click('#stage-comment');
    await click('[data-comment-general]');await composer('Direction comment · 연출');
    await wait(`document.querySelectorAll('.stage-comment-item').length===1`);
-   await click('#stage-comment');
+   if(!await page.evaluate(`document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`))await click('#stage-comment');
    const point:any=await page.evaluate(`(()=>{const r=document.querySelector('#rig-viewport').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
    await page.mouse('mousePressed',point.x,point.y);await page.mouse('mouseReleased',point.x,point.y);await composer('Direction spot · 연출 위치');
    await wait(`document.querySelectorAll('.stage-comment-item').length===2`);
@@ -112,16 +110,13 @@ try{
    const draft:any=await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)}))`);
    assert.deepEqual(draft.comments.map((row:any)=>row.summary),['Direction comment · 연출','Direction spot · 연출 위치']);
    assert.equal('target' in draft.comments[0],false);assert.ok(draft.comments[1].context.comment.crop.png);
-   const expected=draft.comments.map((row:Feedback|{summary:string})=>'target' in row?feedbackItemComments([row])[0]!:{text:row.summary});
-   assert.equal(draft.status,'approved','legacy comment draft records the earlier verdict');
-   await page.evaluate(`(()=>{const s=document.querySelector('#review-status');s.value='changes-requested';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+   const expected:JobContextComment[]=[...feedbackContextComments(draft.comments.filter((row:Feedback|{summary:string})=>'target' in row)),{text:draft.comments[0].summary}];
    await click('#direction-panel > summary');assert.equal((await panelState()).open,true);
    // Do not let the readiness check match the old document during same-URL navigation.
    await page.evaluate(`document.body.dataset.ready='reloading'`);reloading=true;
    await command!('Page.reload',{ignoreCache:true});
-   await wait(`document.body.dataset.ready==='true'&&!document.querySelector('#save').disabled&&document.querySelectorAll('.stage-comment-item').length===2`);
+   await wait(`document.body.dataset.ready==='true'&&!document.querySelector('#send-comments').disabled&&document.querySelectorAll('.stage-comment-item').length===2`);
    reloading=false;assert.equal((await panelState()).open,false,'direction closed again after reload');
-   assert.equal(await page.evaluate(`document.querySelector('#review-status').value`),'changes-requested','inspection draft is authoritative after reload');
    await click('#stage-comment');await wait(`!document.querySelector('#inspector-feedback').hidden`);
    const corrections:{handoffHidden:boolean;actions:number}=await page.evaluate(`(() => {
     const handoff=document.querySelector('#correction-controls');
@@ -130,15 +125,15 @@ try{
    assert.deepEqual(corrections,{handoffHidden:true,actions:0});
    assert.deepEqual(await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)})).comments.map(row=>row.summary)`),draft.comments.map((row:any)=>row.summary));
    const screenshot=language+'-direction.png';await writeFile(join(output,screenshot),await page.screenshot());
-   await click('#request-changes');
+   await click('#send-comments');
    let rawAct:unknown;const deadline=Date.now()+20000;
-   while(Date.now()<deadline){const next=await api('next',{after:null,waitMs:0});rawAct=next.events.find((e:any)=>e.type==='act'&&e.act.askId===ask.askId)?.act;if(rawAct)break;await Bun.sleep(25);}
+   while(Date.now()<deadline){const next=await api('next',{after:null,waitMs:0});rawAct=next.events.find((e:any)=>e.type==='act'&&e.act.kind==='comments'&&e.act.publicationId===publication.publicationId)?.act;if(rawAct)break;await Bun.sleep(25);}
    assert.ok(rawAct,'direction UI committed act');
-   const act=parseCommentsAct(rawAct);
-   assert.equal(act.schema,'rig-review/act@6');assert.equal(act.kind,'review-verdict');assert.equal(act.authority.channel,'review-ui');
-   assert.equal(act.value.stage,'direction-review');assert.equal(act.value.verdict,'changes-requested');
-   assert.deepEqual(act.value.comments,expected,'verdict retains the general row and the complete pin in draft order');
-   const pin=act.value.comments[1]?.anchor;assert.ok(pin&&'frameStart' in pin);
+   const act=parseCommentOnlyAct(rawAct);
+   assert.equal(act.schema,'rig-review/act@10');assert.equal(act.kind,'comments');assert.equal(act.authority.channel,'review-ui');
+   assert.equal('askId' in act,false);
+   assert.deepEqual(act.value.comments,expected,'comment act retains the complete pin and the general row');
+   const pin=act.value.comments[0]?.anchor;assert.ok(pin&&'frameStart' in pin);
    assert.equal(pin.frameStart,null);assert.equal(pin.frameEnd,null);
    const context=pin.context as {comment:unknown;time:number;frame:null;interval:null};
    const mark=parseStageComment(context.comment);
@@ -156,15 +151,27 @@ try{
    const views:string[]=await page.evaluate(`[...document.querySelectorAll('#view-menu button[data-view]:not(:disabled)')].map(n=>n.dataset.view)`);
    const submittedViews:any[]=[];
    for(const mode of ['rig','playback'])for(const view of views){
-    const nextAsk=await askSubject(publication,{kind:'review-verdict',stage:'direction-review'});
-    await wait(`!document.querySelector('#save').disabled`);
     await click(`[data-mode="${mode}"]`);await page.evaluate(`document.querySelector('#view-menu').open=true`);await click(`#view-menu [data-view="${view}"]`);
     const counts:any=await page.evaluate(`Object.fromEntries(['#app','#rig-viewport','#view-menu','#zoom-in','#zoom-out','#fit','#native-one','[data-part-list]'].map(s=>[s,document.querySelectorAll(s).length]))`);
     for(const count of Object.values(counts))assert.equal(count,1);
-    await click('#request-changes');let value:any;const until=Date.now()+20000;while(Date.now()<until){const next=await api('next',{after:null,waitMs:0});value=next.events.find((e:any)=>e.type==='act'&&e.act.askId===nextAsk.askId)?.act;if(value)break;await Bun.sleep(25);}
-    assert.ok(value,'verdict from '+mode+'/'+view);assert.equal(value.value.stage,'direction-review');submittedViews.push({mode,view,actId:value.actId,counts});
+    const text=mode+'/'+view;
+    if(!await page.evaluate(`document.querySelector('[data-comment-general]')?.checkVisibility()`))await click('#stage-comment');
+    await click('[data-comment-general]');await composer(text);
+    await wait(`!document.querySelector('#send-comments').disabled`);
+    await click('#send-comments');
+    let value:unknown;const until=Date.now()+20000;
+    while(Date.now()<until){
+     const next=await api('next',{after:null,waitMs:0});
+     value=next.events.find((e:any)=>e.type==='act'&&e.act.kind==='comments'&&e.act.value.comments.some((row:{text:string})=>row.text===text))?.act;
+     if(value)break;
+     await Bun.sleep(25);
+    }
+    const commentAct=parseCommentOnlyAct(value);
+    assert.deepEqual(commentAct.source.direction,publication.source.direction);
+    assert.deepEqual(commentAct.value.comments,[{text}]);
+    submittedViews.push({mode,view,actId:commentAct.actId,counts});
    }
-   observations.push({kind:'verdict-every-view',language,submittedViews});
+   observations.push({kind:'comment-every-view',language,submittedViews});
    const workspace=createSyntheticPlanRecordWorkspace(builder.input.root,{subjects:[{kind:'signoff',stage:'direction-review'}]});
    recordContext=workspace.context;
    await page.evaluate(`document.body.dataset.ready='switching-signoff'`);
@@ -174,7 +181,7 @@ try{
    const signoffAskBody=await signoffAskRes.json();
    assert.equal(signoffAskBody.ok,false);
    assert.equal(signoffAskBody.error.code,'JOB_ASK_INVALID');
-   observations.push({kind:'record-signoff-refused-after-verdict',language,code:signoffAskBody.error.code,verdictActId:act.actId});
+   observations.push({kind:'record-signoff-refused-after-comments',language,code:signoffAskBody.error.code,commentActId:act.actId});
    await wait(`document.body.dataset.ready==='true'`);
    type NoSignoffFormReadback={forms:number;recordPanels:number;errorText:string;openerVisible:boolean};
    const noSignoffForm:NoSignoffFormReadback=await page.evaluate<NoSignoffFormReadback>(`(()=>({
@@ -184,7 +191,7 @@ try{
     openerVisible:!!document.querySelector('#workspace-pending-ask:not([hidden])'),
    }))()`);
    assert.deepEqual(noSignoffForm,{forms:0,recordPanels:0,errorText:'',openerVisible:false});
-   observations.push({kind:'record-signoff-subject-no-form',language,publicationId:signoffPublication.publicationId,noSignoffForm,verdictActId:act.actId});
+   observations.push({kind:'record-signoff-subject-no-form',language,publicationId:signoffPublication.publicationId,noSignoffForm,commentActId:act.actId});
 
   }catch(error){await writeFile(join(output,'original-error.json'),JSON.stringify({error:String(error),stack:error instanceof Error?error.stack:undefined,observations,errors},null,2));await writeFile(join(output,'inner-failure-state.json'),await page.evaluate<string>(`JSON.stringify({text:document.body.innerText,ready:document.body.dataset.ready,forms:[...document.querySelectorAll('form[data-job-ask]')].map(f=>({id:f.dataset.jobAsk,disabled:f.querySelector('fieldset')?.disabled})),dialogs:[...document.querySelectorAll('dialog')].map(d=>({id:d.id,open:d.open}))})`));await writeFile(join(output,'inner-failure.png'),await page.screenshot()).catch(()=>{});throw error;}finally{await page.goto('about:blank');host.stop();await builder.close();}
  }

@@ -103,8 +103,7 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>, localStore = new Ma
   const rigAsk = node('button', 'workspace-pending-ask');
   rigAsk.className = 'workspace-act-ask';
   const sendComments = node('button', 'send-comments'); sendComments.hidden = true; setSourceText(sendComments, 'Send comments');
-  const save = node('button', 'save'), requestChanges = node('button', 'request-changes');
-  const reason = node('span', 'request-changes-reason'), notice = node('p', 'review-message');
+  const save = node('button', 'save'), notice = node('p', 'review-message');
   const communicationPanel = node('aside', 'workspace-communication');
   const inspector = node('div'); inspector.className = 'inspector';
   const heading = node('div'); heading.className = 'inspector-heading';
@@ -112,7 +111,7 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>, localStore = new Ma
   inspector.append(heading, body);
   const dialog = node('div', 'review-dialog'), dialogHeader = node('div'), dialogActions = node('div');
   dialogHeader.className = 'review-dialog-header'; dialogActions.className = 'review-dialog-actions';
-  dialogActions.append(sendComments, save, reason, requestChanges, actStatus, notice); dialog.append(dialogHeader, dialogActions);
+  dialogActions.append(sendComments, save, actStatus, notice); dialog.append(dialogHeader, dialogActions);
   const feedback = node('div', 'inspector-feedback'), verdict = node('select', 'review-status'), label = node('label');
   label.setAttribute('for', verdict.id); feedback.append(label, verdict);
   root.append(inspector, dialog, feedback, row, dirty, communicationPanel, node('p', 'message'), node('p', 'draft-state'), node('div', 'draft-recovery'),
@@ -122,7 +121,7 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>, localStore = new Ma
   const el = (id: string) => document.getElementById(id)!;
   const recordComments: {id: string; summary: string}[] = [];
   const probe: {communicationPending?: () => boolean; refresh?: () => void} = {};
-  mountRecord({probe, communicationPanel, host, interview: undefined, rigInspector, sendComments, rigAsk, askHeadline: headline, requestChanges, requestChangesReason: reason,
+  mountRecord({probe, communicationPanel, host, interview: undefined, rigInspector, sendComments, rigAsk, askHeadline: headline,
     document, el, button: el, select: el, text: (id: string, value: string) => setSourceText(el(id), value),
     t, setSourceText, setSourceAttribute, sourceTextContent, jobSubmissionRefusal,
     localStorage: {getItem: (k: string) => localStore.get(k) ?? null, setItem: (k: string, v: string) => {localStore.set(k, v);}},
@@ -145,7 +144,7 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>, localStore = new Ma
         status: actStatus.textContent!, statusKind: actStatus.dataset.saveState ?? '',
         form: forms.length > 0, formStatus: notice.textContent ?? '',
         submitDisabled: sendComments.hidden || sendComments.disabled,
-        actions: [rigAsk, sendComments, save, requestChanges].filter(control => !row.hidden && !control.hidden).map(control => ({
+        actions: [rigAsk, sendComments, save].filter(control => !row.hidden && !control.hidden).map(control => ({
           id: control.id, disabled: control.disabled, opacityOverride: control.classList.contains('workspace-act-ask'),
         }))};
     },

@@ -49,7 +49,7 @@ test('#839 Korean saved readback aliases use the requested conversational ending
  }
 });
 
-test('#788 active Rig still refusals have paired visible EN/KO messages without exemptions',()=>{
+test('#788 Setup and historical still refusals retain paired EN/KO messages without exemptions',()=>{
  for(const code of ['JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED'])for(const catalog of [enCatalog,koCatalog]) {
   expect(catalog[code]).toBeUndefined();
  }
@@ -66,7 +66,7 @@ test('#788 active Rig still refusals have paired visible EN/KO messages without 
 });
 
 for(const [language,catalog] of [['en',enCatalog],['ko',koCatalog]] as const){
- test(`#1166 still capture submission refusals render specific ${language} copy`,()=>{
+ test(`#1166 historical still refusal codes retain specific ${language} copy`,()=>{
   const previous=getLanguagePreference();
   try{
    setLanguagePreference(language);
@@ -76,6 +76,11 @@ for(const [language,catalog] of [['en',enCatalog],['ko',koCatalog]] as const){
   }finally{setLanguagePreference(previous);}
  });
 }
+
+test('Korean catalogue calls a comment 코멘트 everywhere and never 댓글',()=>{
+ expect(Object.values(koCatalog).filter(value=>value.includes('댓글'))).toEqual([]);
+ expect(Object.values({...koCatalog,planted:'이 댓글'}).filter(value=>value.includes('댓글'))).toEqual(['이 댓글']);
+});
 
 test('Bar 1: English and Korean catalogues hold the exact same key and placeholder set, and a planted missing key fails it',()=>{
  expect(()=>assertCatalogParity(enCatalog,koCatalog)).not.toThrow();
@@ -1305,11 +1310,10 @@ test('#743 live host notices and act status retain English source and render in 
  const text = main.slice(main.indexOf('const text = '), main.indexOf('const option = '));
  const message = main.slice(main.indexOf('function message('), main.indexOf('async function api<'));
  const saveState = inspector.slice(inspector.indexOf(' const setSaveState='), inspector.indexOf(' return {element,refresh,setSaveState'));
- const cases: {key: string; values?: (string | number)[]; missing?: boolean; status?: boolean}[] = [
+ const cases: {key: string; values?: (string | number)[]; missing?: boolean; status?: 'unsaved' | 'saving' | 'saved'}[] = [
   {key: 'job.updated', values: ['A', 'B']}, {key: 'job.updated', values: ['B', 'C'], missing: true},
   {key: 'job.failed'}, {key: 'job.closed'}, {key: 'job.saved'},
-  {key: 'job.parts.reviewing', values: [2], status: true}, {key: 'job.parts.sending', status: true},
-  {key: 'job.parts.sent', status: true}, {key: 'job.review.approved', status: true}
+  {key: 'Not submitted', status: 'unsaved'}, {key: 'Sending', status: 'saving'}, {key: 'Submitted', status: 'saved'}
  ];
  const preference = getLanguagePreference(), link = getLinkLanguage();
  try {
@@ -1333,7 +1337,7 @@ test('#743 live host notices and act status retain English source and render in 
     const expected = t(entry.key, entry.values, lang) + (entry.missing ? ' · '+t('job.incompatible', undefined, lang) : '');
     const value = translate(entry.key, entry.values) + (entry.missing ? ' · '+translate('job.incompatible') : '');
     render(value);
-    if (entry.status) renderStatus({kind: 'saved', text: value});
+    if (entry.status) renderStatus({kind: entry.status, text: value});
     // Repeated observer sweeps must not reverse a rendered Korean template into a raw key.
     applyDomI18n(doc as unknown as Document); applyDomI18n(doc as unknown as Document);
     for (const id of ['message', 'review-message', ...(entry.status ? ['review-draft-state', 'status-copy'] : [])]) {

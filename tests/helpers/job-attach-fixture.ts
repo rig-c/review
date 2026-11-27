@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_READER_ID, startJobHost, type JobHostOptions, type JobOwnerHost} from '../../src/job-host.ts';
 import {jobHash} from '../../src/job-api.ts';
 import {jobFixture} from './job-api-fixture.ts';
+import {seedHistoricalVerdictAsk} from './historical-verdict-ask.ts';
 import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './job-record-fixture.ts';
 import type {OptionContext, PlanContext, RecordActKind} from '../../src/job-contract.ts';
 
@@ -47,9 +48,11 @@ export async function attachedPair(fixtures: Awaited<ReturnType<typeof jobFixtur
   const published = await publish();
   expect(published.ok).toBe(true);
   const publication = published.value;
-  const asked = await agentCall(owner, {verb: 'ask', expectedGeneration: owner.session.status().generation,
+  const ask = {verb: 'ask', expectedGeneration: owner.session.status().generation,
     idempotencyKey: `ask-${++sequence}`, publicationId: publication.publicationId,
-    subject: {kind: 'review-verdict', stage: 'rig-review'}});
+    subject: {kind: 'review-verdict', stage: 'rig-review'} as const};
+  seedHistoricalVerdictAsk(owner.session, ask.publicationId, ask.subject, ask.idempotencyKey);
+  const asked = await agentCall(owner, ask);
   expect(asked.ok).toBe(true);
   async function display(pageId = 'page-one') {
     const shown = await owner.ports.ackDisplayed(jobId, uiRequest('displayed',

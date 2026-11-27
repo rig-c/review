@@ -4,105 +4,114 @@ import {readFileSync} from 'node:fs';
 // Execute the production act-bar renderer with the same host/DOM seams, without a browser.
 const main=readFileSync(new URL('../web/main.ts',import.meta.url),'utf8');
 const start=main.indexOf('function renderAnswerControls():void {');
-const end=main.indexOf('\nlet verdictSubmit:',start);
-const rowStart=main.indexOf('function syncJobActRow('),rowEnd=main.indexOf('function setJobProgress(',rowStart);
+const end=main.indexOf('async function restorePublicationNavigation(',start);
+const rowStart=main.indexOf('function renderPendingSubjects('),rowEnd=main.indexOf('function setJobProgress(',rowStart);
+if(start<0||end<=start||rowStart<0||rowEnd<=rowStart)throw new Error('ACT_BAR_SOURCE_ANCHOR');
 const renderer=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(rowStart,rowEnd)+main.slice(start,end));
-function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
- const control=()=>({hidden:false,disabled:false,title:'',textContent:'',onclick:null as null|((e:unknown)=>unknown),attributes:new Map<string,string>(),setAttribute(name:string,value:string){this.attributes.set(name,value);},removeAttribute(name:string){this.attributes.delete(name);},classList:{values:new Set<string>(),toggle(name:string,on:boolean){on?this.values.add(name):this.values.delete(name);}}});
- const save=control(),requestChanges=control(),rigAsk=control(),select=control(),label=control(),submit=control();
- const requestChangesReason={...control(),id:'request-changes-reason'};
- let state:{kind:string;text:string}|null=null;const rigInspector={act:{hidden:true},actBar:{saveState:()=>state,setSaveState:(value:{kind:string;text:string})=>{state=value;}}};
- const calls:string[]=[],session={feedbackWarnings:[] as {id:string}[],status:'pending'};
- const env={host:{pendingSubjects:()=>subjects,unavailable:false,canSubmitMeshEdits:()=>false,jobClosed:()=>false},pendingAnswers:subjects,firstPublicationPrompt:false,jobProgress:null as object|null,saving:false,draftConflict:conflict,actReadOnly:null as string|null,readOnly:null as string|null,
-  session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,requestChangesReason,rigAsk,
-  button:()=>save,select:()=>select,document:{querySelector:()=>label},el:()=>({classList:{contains:()=>false}}),
-  setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
-  verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};
- const render=new Function('env',`with(env){${renderer};return renderAnswerControls;}`)(env);
- render();return {save,requestChanges,requestChangesReason,rigAsk,submit,session,calls,env,render,rigInspector};
+function harness(commenting=true) {
+ const control=()=>({hidden:false,disabled:false,classList:{values:new Set<string>(),toggle(name:string,on:boolean){on?this.values.add(name):this.values.delete(name);}}});
+ const save=control(),rigAsk=control(),select=control(),label=control(),sendComments=control();
+ const rigInspector={act:{hidden:true},comments:{panel:{querySelector:()=>null}}};
+ const headlines:string[]=[];
+ const env={
+  host:{unavailable:false,jobClosed:()=>false},pendingAnswers:[] as {kind:string;stage?:string}[],
+  firstPublicationPrompt:false,jobProgress:null as object|null,saving:false,draftConflict:false,
+  actReadOnly:null as string|null,readOnly:null as string|null,partsOnly:false,partsSubject:{hasPendingComment:()=>false},
+  rigInput:{state:'loaded'},comments:{hasPendingComment:()=>false},
+  rigInspector,rigAsk,sendComments,button:()=>save,select:()=>select,document:{querySelector:()=>label},
+  el:()=>({classList:{contains:()=>false}}),commentHost:()=>commenting,hasUnsentContent:()=>false,
+  renderAskHeadline:(value:string)=>headlines.push(value),
+  renderDraftState:()=>api.render(),
+ };
+ const api=new Function('env',`with(env){${renderer};return {render:renderAnswerControls,subjects:renderPendingSubjects};}`)(env) as {
+  render():void;subjects(subjects:typeof env.pendingAnswers):void;
+ };
+ api.render();
+ return {save,rigAsk,select,label,sendComments,env,headlines,rigInspector,...api};
 }
-for(const stage of ['rig-review','direction-review'])test('#809 '+stage+' directly submits the selected answer and requires a comment for changes',()=>{
- const h=harness([{kind:'review-verdict',stage}]);
- expect(h.save.hidden).toBe(false);expect(h.save.disabled).toBe(false);expect(h.requestChanges.disabled).toBe(true);expect(h.requestChanges.title).toBe('Add a comment where changes are needed.');
- h.save.onclick!({});expect(h.calls).toEqual(['approved']);
- h.env.liveIssueCount=()=>3;h.render();expect(h.requestChanges.disabled).toBe(false);
- h.requestChanges.onclick!({});expect(h.calls).toEqual(['approved','changes-requested']);
+for(const subject of [
+ {kind:'review-verdict',stage:'rig-review'},
+ {kind:'review-verdict',stage:'direction-review'},
+ {kind:'parts-verdict'},
+])test('#1232 hides historical '+subject.kind+' controls and uses the no-ask Send comments state',()=>{
+ const h=harness();
+ h.subjects([subject]);
+ expect(h.headlines).toEqual(["We're looking at the work together. Leave your thoughts as comments."]);
+ expect(h.env.pendingAnswers).toEqual([]);
+ expect([h.save,h.rigAsk,h.select,h.label].every(control=>control.hidden)).toBe(true);
+ expect(h.sendComments.hidden).toBe(false);
+ expect(h.sendComments.classList.values.has('primary')).toBe(true);
+ expect(h.sendComments.disabled).toBe(true);
+ h.env.hasUnsentContent=()=>true;h.render();expect(h.sendComments.disabled).toBe(false);
 });
-test('#809 parts preserves the existing issue-derived verdict contract',()=>{
- const h=harness([{kind:'parts-verdict'}]);expect(h.save.disabled).toBe(false);expect(h.requestChanges.disabled).toBe(true);
- h.env.liveIssueCount=()=>1;h.render();expect(h.save.disabled).toBe(true);expect(h.save.title).toBe('Remove the flagged parts comments before approving.');expect(h.requestChanges.disabled).toBe(false);
-});
-test('#1159 shows the existing reason only while missing changes blocks a visible verdict',()=>{
- const h=harness([{kind:'review-verdict',stage:'rig-review'}]);
- const {env,requestChanges,requestChangesReason,render}=h;
- expect(requestChangesReason.hidden).toBe(false);
- expect(requestChangesReason.textContent).toBe(requestChanges.title);
- expect(requestChanges.attributes.get('aria-describedby')).toBe(requestChangesReason.id);
+test('#1232 Send comments is gated while loading, saving, read-only, blocked or closed',()=>{
+ const {env,sendComments,render}=harness();
+ env.hasUnsentContent=()=>true;
  const blockedStates:Partial<typeof env>[]=[
   {saving:true},{draftConflict:true},{actReadOnly:'Job closed'},{readOnly:'Read only'},
-  {host:{...env.host,unavailable:true}},{host:{...env.host,jobClosed:()=>true}},
-  {session:{...env.session,feedbackWarnings:[{id:'invalid'}]}},
-  {firstPublicationPrompt:true},
+  {host:{...env.host,unavailable:true}},{partsOnly:true,rigInput:{state:'pending'}},
  ];
  for(const state of blockedStates){
   const previous={...env};
-  Object.assign(env,state);render();
-  expect(requestChangesReason.hidden).toBe(true);
-  expect(requestChanges.attributes.has('aria-describedby')).toBe(false);
-  Object.assign(env,previous);render();
-  expect(requestChangesReason.hidden).toBe(false);
+  Object.assign(env,state);render();expect(sendComments.disabled).toBe(true);
+  Object.assign(env,previous);render();expect(sendComments.disabled).toBe(false);
  }
- env.host.canSubmitMeshEdits=()=>true;render();
- expect(requestChanges.disabled).toBe(false);
- expect(requestChangesReason.hidden).toBe(true);
- env.host.pendingSubjects=()=>[];render();
- expect(requestChanges.hidden).toBe(true);
- expect(requestChangesReason.hidden).toBe(true);
- const parts=harness([{kind:'parts-verdict'}]);
- parts.env.partsAnswerBlocked=()=>true;parts.render();
- expect(parts.requestChanges.disabled).toBe(true);
- expect(parts.requestChangesReason.hidden).toBe(true);
+ env.host.jobClosed=()=>true;render();expect(sendComments.hidden).toBe(true);
 });
-// #1229 / #1230: both checkpoint and interview-picks openers are retired; mixed legacy subjects leave only verdict actions visible.
-test('#809 and #986 retired interview-picks and checkpoint subjects open no dialog opener alongside or without a verdict',()=>{
- for(const kind of ['interview-picks','checkpoint']){
-  const h=harness([{kind}]);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);expect(h.rigAsk.classList.values.has('primary')).toBe(false);
-  const mixed=harness([{kind:'review-verdict',stage:'rig-review'},{kind}]);expect(mixed.rigAsk.hidden).toBe(true);expect(mixed.save.hidden).toBe(false);expect(mixed.requestChanges.hidden).toBe(false);
- }
- const both=harness([{kind:'interview-picks'},{kind:'checkpoint'}]);
- expect(both.rigAsk.hidden).toBe(true);expect(both.save.hidden).toBe(true);expect(both.requestChanges.hidden).toBe(true);
+test('#1232 a pending composer can enable Send comments on rig and parts',()=>{
+ const h=harness();
+ h.env.comments.hasPendingComment=()=>true;h.render();expect(h.sendComments.disabled).toBe(false);
+ h.env.partsOnly=true;h.render();expect(h.sendComments.disabled).toBe(true);
+ h.env.partsSubject.hasPendingComment=()=>true;h.render();expect(h.sendComments.disabled).toBe(false);
 });
-test('#809 no pending ask has no emphasised action',()=>{
- const h=harness([]);expect(h.save.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);expect(h.save.classList.values.size+h.rigAsk.classList.values.size).toBe(0);expect(h.rigInspector.act.hidden).toBe(true);
-});
-test('#987 progress reveals the act row with the existing actions hidden',()=>{
- const h=harness([]);h.env.jobProgress={};h.render();
- expect(h.rigInspector.act.hidden).toBe(false);
- expect([h.save,h.requestChanges,h.rigAsk].every(control=>control.hidden)).toBe(true);
- h.env.jobProgress=null;h.render();expect(h.rigInspector.act.hidden).toBe(true);
-});
-// #1229 / #1230: checkpoint and interview-picks submitting controls retired; verdict controls remain blocked on restore conflict.
-for(const kind of ['review-verdict','parts-verdict'])test('#825 restore conflict blocks all '+kind+' submitting controls',()=>{
- const h=harness([{kind}],3,true);
- expect(h.rigAsk.hidden).toBe(true);expect(h.save.disabled).toBe(true);expect(h.requestChanges.disabled).toBe(true);
+test('#987 and #904 progress and first-publication waiting show the row with no answer controls',()=>{
+ const h=harness(false);
+ expect(h.rigInspector.act.hidden).toBe(true);
+ h.env.jobProgress={};h.render();expect(h.rigInspector.act.hidden).toBe(false);
+ for(const control of [h.save,h.rigAsk,h.sendComments])expect(control.hidden).toBe(true);
+ h.env.jobProgress=null;h.env.firstPublicationPrompt=true;h.render();
+ expect(h.rigInspector.act.hidden).toBe(false);expect(h.save.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);
+ expect(h.sendComments.hidden).toBe(true);
 });
 
-test('#825 draft failure leads the live job state; saved sessions use the act-bar saved label',()=>{
+function draftStateRenderer(env:object):()=>void {
  const begin=main.indexOf('function renderDraftState(): void {'),end=main.indexOf('\nfunction renderProvenance',begin);
  const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end));
+ return new Function('env',`with(env){${script};return renderDraftState;}`)(env);
+}
+
+test('#825 draft failure leads the live job state; saved sessions use the act-bar saved label',()=>{
  const states:any[]=[];
- const env={host:{reviewState:()=> 'Reviewing · 0 issues'},liveIssueCount:()=>0,saving:false,draftConflict:true,draftStatus:'Saved local draft was not restored: fixture.',actReadOnly:null,dirty:false,partsOnly:false,verdictSubmit:null,session:{updatedAt:'2026-11-20T00:00:00.000Z',feedbackWarnings:[]},
+ const env={host:{},saving:false,draftConflict:true,draftStatus:'Saved local draft was not restored: fixture.',actReadOnly:null,dirty:false,partsOnly:false,session:{updatedAt:'2026-11-20T00:00:00.000Z',feedbackWarnings:[]},
   renderAnswerControls(){},rigInspector:{actBar:{setSaveState:(state:any)=>states.push(state)}}};
- const render=new Function('env',`with(env){${script};return renderDraftState;}`)(env);render();
+ const render=draftStateRenderer(env);render();
  expect(states.at(-1).kind).toBe('failed');expect(states.at(-1).text).toBe('Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.');
  env.draftConflict=false;env.draftStatus='Local draft could not be saved: Draft exceeds 512 KiB. Export feedback before leaving.';render();expect(states.at(-1).text).toBe(env.draftStatus);
  (env as any).draftStatus=null;(env as any).host=null;render();expect(states.at(-1)).toEqual({kind:'saved',text:'Submitted'});
 });
 
-test('#833 live act reveals only after controls render and initialises the shared save state once',()=>{
- const h=harness([{kind:'review-verdict',stage:'rig-review'}]);expect(h.rigInspector.act.hidden).toBe(false);
- const state=h.rigInspector.actBar.saveState();expect(state).toEqual({kind:'unsaved',text:'Not submitted'});
- h.render();expect(h.rigInspector.actBar.saveState()).toBe(state);
+test.each([
+ {name:'standalone package',host:null,showsRefusal:true},
+ {name:'live job',host:{},showsRefusal:false},
+])('#1232 $name keeps the inspection restore refusal precedence from main',({host,showsRefusal})=>{
+ const draftStatus='Inspection was not restored: Saved inspection time is outside the selected clip/reference';
+ const states:{kind:string;text:string}[]=[];
+ draftStateRenderer({host,draftStatus,saving:false,draftConflict:false,actReadOnly:null,dirty:false,
+  renderAnswerControls(){},commentHost:()=>true,hasUnsentContent:()=>false,
+  commentSendState:null,session:{updatedAt:null},sentAloneRows:()=>({}),
+  rigInspector:{actBar:{setSaveState:(state:{kind:string;text:string})=>states.push(state)}},
+ })();
+ expect(states).toEqual([showsRefusal?{kind:'saved',text:draftStatus}:{kind:'unsaved',text:'Not submitted'}]);
+});
+
+test('#833 revealing the live act row from initial markup hides the legacy controls first',()=>{
+ const h=harness();
+ for(const control of [h.save,h.rigAsk,h.select,h.label])control.hidden=false;
+ h.rigInspector.act.hidden=true;
+ h.render();
+ expect([h.save,h.rigAsk,h.select,h.label].every(control=>control.hidden)).toBe(true);
+ expect(h.rigInspector.act.hidden).toBe(false);
+ expect(h.sendComments.disabled).toBe(true);
 });
 
 for(const item of [
@@ -128,66 +137,10 @@ for(const item of [
  expect(legacy.map(control=>control.hidden)).toEqual(item.reveal&&!item.rendered?[true,true,true]:[false,false,false]);
 });
 
-// A first publication with no ask must not invent an answer or emphasise a verdict.
-test('#904 first publication keeps its waiting row until an actual subject arrives',()=>{
- const h=harness([]);h.env.firstPublicationPrompt=true;h.render();
- expect(h.rigInspector.act.hidden).toBe(false);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);
- expect(h.save.classList.values.has('primary')).toBe(false);expect(h.requestChanges.classList.values.has('primary')).toBe(false);
-});
-
-// #1229 / #1230: checkpoint and interview-picks answer openers retired; synchronous reveal covers verdict labels.
-for(const kind of ['review-verdict','parts-verdict'])test('#904 synchronous reveal prepares '+kind+' labels and keeps pending controls hidden under the waiting prompt',()=>{
- const h=harness([{kind,stage:'rig-review'}]);h.rigInspector.act.hidden=false;
- const controls=[['save',h.save],['request-changes',h.requestChanges],['workspace-pending-ask',h.rigAsk]] as const;
- const reveals:{id:string;text:string;disabled:boolean}[]=[];
- for(const [id,node]of controls){
-  let hidden=true;
-  Object.defineProperty(node,'hidden',{configurable:true,get:()=>hidden,set(value:boolean){hidden=value;if(!value)reveals.push({id,text:node.textContent,disabled:node.disabled});}});
- }
- h.save.textContent='Submit review';h.requestChanges.textContent='';h.rigAsk.textContent='';
- h.env.firstPublicationPrompt=true;h.render();
- expect(reveals).toEqual([]);expect(controls.every(([,node])=>node.hidden)).toBe(true);
- // Execute the real renderer from the legacy initial labels after the actual subject has been written.
- h.save.textContent='Submit review';h.requestChanges.textContent='';h.rigAsk.textContent='';
- h.env.firstPublicationPrompt=false;h.render();
- expect(reveals).toEqual([{id:'save',text:'Approve',disabled:false},{id:'request-changes',text:'Request changes',disabled:true}]);
-});
-
-test('#1228 and #1229 pending signoff and checkpoint subjects open no answer control and show neither retired opener nor retired headline',()=>{
- for(const subject of [{kind:'signoff',stage:'plan-approved'},{kind:'checkpoint',checkpointId:'step-one'}]){
-  const h=harness([subject]);
-  expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);
-  expect(h.rigAsk.hidden).toBe(true);
-  expect(h.rigAsk.textContent).not.toBe('Approve…');
-  expect(h.rigAsk.textContent).not.toBe('Review…');
- }
- // Once isPendingOwnerAsk filters signoff and checkpoint out of pendingSubjects(), the act row stays hidden too.
- const filtered=harness([]);
- expect(filtered.rigInspector.act.hidden).toBe(true);
- const begin=main.indexOf('function renderPendingSubjects('),end=main.indexOf('\nfunction syncJobActRow(',begin);
- const headlines:string[]=[];
- const scope={partsSubject:null,partsOnly:false,host:null,pendingAnswers:[] as {kind:string;stage?:string}[],firstPublicationPrompt:false,
-  renderAskHeadline:(value:string)=>headlines.push(value),renderDraftState(){}};
- const renderSubjects=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end))};return renderPendingSubjects;}`)(scope);
- renderSubjects([{kind:'signoff',stage:'plan-approved'}]);
- renderSubjects([{kind:'checkpoint',checkpointId:'step-one'}]);
- expect(headlines).toEqual(['Nothing is waiting for your answer.','Nothing is waiting for your answer.']);
-});
-
-test('#1230 a pending interview-picks subject opens no answer control and shows neither the removed opener nor the question headline',()=>{
- const h=harness([{kind:'interview-picks'}]);
- expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);
- expect(h.rigAsk.hidden).toBe(true);
- expect(h.rigAsk.textContent).not.toBe('Answer'+'\u2026');
- expect(h.rigInspector.actBar.saveState()).toBeNull();
- // Once isPendingOwnerAsk filters interview-picks out of pendingSubjects(), the act row stays hidden without a record prompt.
- const filtered=harness([]);
- expect(filtered.rigInspector.act.hidden).toBe(true);
- const begin=main.indexOf('function renderPendingSubjects('),end=main.indexOf('\nfunction syncJobActRow(',begin);
- const headlines:string[]=[];
- const scope={partsSubject:null,partsOnly:false,host:null,pendingAnswers:[] as {kind:string;stage?:string}[],firstPublicationPrompt:false,
-  renderAskHeadline:(value:string)=>headlines.push(value),renderDraftState(){}};
- const renderSubjects=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end))};return renderPendingSubjects;}`)(scope);
- renderSubjects([{kind:'interview-picks'}]);
- expect(headlines).toEqual(['Nothing is waiting for your answer.']);
-});
+for(const subject of [{kind:'signoff',stage:'plan-approved'},{kind:'checkpoint'},{kind:'interview-picks'}]){
+ test('#1230 and #1232 retired '+subject.kind+' has no answer opener or question headline',()=>{
+  const h=harness(false);h.subjects([subject]);
+  expect(h.save.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);expect(h.sendComments.hidden).toBe(true);
+  expect(h.headlines).toEqual(['Nothing is waiting for your answer.']);
+ });
+}

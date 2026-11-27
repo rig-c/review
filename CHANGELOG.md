@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+* Review reads the optional sealed `sceneReport` manifest entry. Authored shots play through their camera, and pinned comments and crops follow the displayed frame and projection. This requires `@rig-c/play` 1.28.0. Older Review versions silently skip `sceneReport` without refusing the package, so camera packages require Create's exact Review version pin. Review names report admission failures as `SCENE_REQUIRED`, `SCENE_SOURCE_MISMATCH`, `SCENE_CAMERA_REPORT_INVALID`, `SCENE_CAMERA_REPORT_TOO_LARGE`, `SCENE_CAMERA_MODEL_MISMATCH` or `SCENE_CAMERA_CLIP_MISMATCH`. It reports invalid camera sampling or geometry as `SCENE_CAMERA_CLOCK_INVALID` or `SCENE_CAMERA_VIEW_INVALID`, and a mismatched authored take as `DIRECTION_TAKE_MISMATCH` (#1316).
+
 ### Changed
 
+* Leave comments on live reviews and in Compare without choosing a verdict. Send comments saves feedback locally when you open a package or parts folder (#1232).
 * Output from a build on one side no longer appears while the other side is selected, and its result is shown when you return.
 
 ### Fixed
@@ -14,6 +19,11 @@
 * Compare keeps the selected chest-row bones when Apply, Undo or Reset reloads the picked build (#1304).
 * Compare shows the Idle refusal instead of the other side's tracks when the picked side has no producer handoff (#1305).
 * Idle, dial, and animation previews stay visible in Compare while you use the turn pad (#1303).
+
+### Removed
+
+* Fresh `parts-verdict` and `review-verdict` job submissions refuse with `JOB_ACT_KIND_DISABLED`. A committed submission still replays its stored act (#1233).
+* Retired standalone parts verdict and package session writes, including the parts CLI's durable save notifications. Send comments saves feedback locally, and existing verdicts and sessions remain readable (#1233).
 
 ## 4.24.0
 

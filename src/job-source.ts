@@ -1641,6 +1641,7 @@ export async function prepareJobSource(options: {
     review = await loadJobReview(target, root.path, context.selector);
   } catch (error) {
     if (error instanceof JobError && error.code === 'JOB_PREVIOUS_BUILD_INVALID' && context.selector?.kind !== 'current') throw error;
+    if (error instanceof JobError && (error.code.startsWith('SCENE_') || error.code === 'DIRECTION_TAKE_MISMATCH')) throw error;
     throw new JobError('JOB_SOURCE_MISMATCH', error instanceof HandoffError ? error.message : undefined);
   }
   if (review.manifest.previousBuild && context.selector?.kind === 'current') throw new JobError('JOB_SOURCE_MISMATCH');
@@ -1672,7 +1673,10 @@ export async function prepareJobSource(options: {
     }
     wanted.set(path, sha256 ?? existing ?? null);
   }
-  for (const path of review.files) add(rootRelative(root.path, resolve(review.root, path)));
+  for (const path of review.files) {
+    const expected = path === review.manifest.sceneReport?.path ? review.manifest.sceneReport.sha256 : undefined;
+    add(rootRelative(root.path, resolve(review.root, path)), expected);
+  }
   for (const file of review.handoff?.record.files ?? []) add(rootRelative(root.path, resolve(review.root, file.path)), file.sha256);
   if (review.handoff?.source && review.handoff.record.source) {
     add(rootRelative(root.path, review.handoff.source), review.handoff.record.source.sha256);

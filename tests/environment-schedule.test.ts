@@ -1,3 +1,4 @@
+import {lastLocalPackageFeedback,postLocalPackageFeedback} from './helpers/local-package-feedback.ts';
 import {expect,test} from 'bun:test';
 import {createHash} from 'node:crypto';
 import {mkdir,mkdtemp,readdir,readFile,realpath,rm,writeFile} from 'node:fs/promises';
@@ -9,7 +10,7 @@ import {environmentSchedule,parseReadingsRequest} from '../src/readings.ts';
 import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
-import {freshSession} from '../src/session.ts';
+import {freshSession,type Feedback} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
 import {environmentCheckArgs,type EnvironmentCheckJob} from '../src/environment-check.ts';
 import {parseAppliedContext} from '../src/applied-context.ts';
@@ -309,23 +310,23 @@ test('#112 bar 2: feedback carries the schedule\'s sha256 and bytes through save
   const world=worldExport(snap({base:10,breeze:true,repeat:true}),1.25,true,'idle',10/3);if('error' in world)throw new Error(world.error);
   const schedule=scheduleContext(world,true);
   expect(schedule).toEqual({schema:SCHEDULE_CONTEXT_SCHEMA,sha256:sha(world.text),size:Buffer.byteLength(world.text),text:world.text,usedForReadings:true});
-  const note={id:'n1',frameStart:0,frameEnd:0,target:{kind:'rig',name:p.feedbackCatalog.rig},category:'quality',summary:'skirt under breeze',context:{animation:null,environmentSchedule:schedule}};
-  const put=(feedback:unknown[])=>fetch(base+'/api/session',{method:'PUT',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({...freshSession(p),feedback})});
-  expect((await put([note])).status).toBe(200);
-  const read=await (await fetch(base+'/api/session')).json();
-  const carried=read.feedback[0].context.environmentSchedule;
+  const note:Feedback={id:'n1',frameStart:0,frameEnd:0,target:{kind:'rig',name:p.feedbackCatalog.rig},category:'quality',summary:'skirt under breeze',context:{animation:null,environmentSchedule:schedule} as unknown as Feedback['context']};
+  const send=(feedback:Feedback[])=>postLocalPackageFeedback(base,p.sourceHash,feedback);
+  expect((await send([note])).status).toBe(200);
+  const read={...freshSession(p),feedback:await lastLocalPackageFeedback(p,state)};
+  const carried=(read.feedback[0]!.context as unknown as {environmentSchedule:typeof schedule}).environmentSchedule;
   expect(carried).toEqual(schedule);expect(sha(carried.text)).toBe(carried.sha256);
   expect(parseSchedule(JSON.parse(carried.text))).toEqual(world.schedule);
   // The issue text (markdown-escaped) names the step count and the full hash.
   expect(formatFeedbackIssues(read)).toContain(`- Environment schedule: rigc&#45;environment/1, ${world.schedule.steps.length} step&#40;s&#41; · schedule sha256 ${sha(world.text)} · used for readings and Apply`);
   // Mutants: a hash of other bytes; a text that is not a schedule; an extra key.
-  const wrong=await put([{...note,context:{animation:null,environmentSchedule:{...schedule,sha256:sha(world.text+' ')}}}]);
+  const wrong=await send([{...note,id:'invalid-hash',context:{animation:null,environmentSchedule:{...schedule,sha256:sha(world.text+' ')}}}]);
   expect(wrong.status).toBe(400);expect((await wrong.json()).error).toBe('feedback.context.environmentSchedule: sha256 is not the sha256 of text');
   const notSchedule='{"spec":"rigc-environment/1","steps":[]}\n';
   expect(()=>parseScheduleContext({...schedule,text:notSchedule,sha256:sha(notSchedule),size:Buffer.byteLength(notSchedule)},sha)).toThrow('is not a rigc-environment/1 schedule');
   expect(()=>parseScheduleContext({...schedule,path:'/tmp'},sha)).toThrow('expected exactly');
   // Absent or null stays valid.
-  expect((await put([{...note,context:{animation:null,environmentSchedule:null}}])).status).toBe(200);
+  expect((await send([{...note,id:'null-context',context:{animation:null,environmentSchedule:null}}])).status).toBe(200);
   // The applied record's optional environment is validated by shape.
   expect(()=>parseAppliedContext({schema:'rig-review-applied/2',environment:{sha256:'x',steps:1}})).toThrow();
  }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}

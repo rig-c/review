@@ -9,10 +9,12 @@ import * as fs from 'node:fs';
 import {existsSync, fstatSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync} from 'node:fs';
 import {readFile, readdir, mkdir, writeFile, symlink, rm} from 'node:fs/promises';
 import {rigStillInput} from './helpers/job-rig-still.ts';
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {createJobFront} from '../src/job-front.ts';
 import {jobHash} from '../src/job-api.ts';
 import {parseCommentsAct, projectComments, type JobComment} from '../src/job-host.ts';
 import commentsLegacy from './fixtures/comments-contract-legacy.json';
+import historicalRig from './fixtures/job-decision-1233/rig.json';
 import {JobSession} from '../src/job-session.ts';
 import {JobError, JobStore} from '../src/job-store.ts';
 import {legacyActComments} from '../src/feedback-export.ts';
@@ -124,15 +126,28 @@ test('#646 new-raw-replay: consumer CLI keeps exact @6 and old @2/@3/@5 bytes, w
   expect(projectComments(parseCommentsAct(JSON.parse(raw)).value.comments)).toBe(projectComments(fresh.value.comments));
 });
 
-test('#646 rig-still-new-version: prepared raw reader/CLI reuse existing still byte and hash checks', async () => {
-  const f = await fixture(), {input, bytes, sha256} = await rigStillInput(f);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  if (!saved.ok) throw new Error(saved.error.code);
-  const {words: _words, ...value} = saved.value.value as {words: string; stage: string; verdict: string};
-  const fresh = {...saved.value, schema: 'rig-review/act@6', value: {...value, comments: [permutedFeedbackComment()]}};
+/** Import the base writer's finalized envelope and still into this disposable host. */
+function seedHistoricalRigStill(f: Awaited<ReturnType<typeof jobFixture>>, png?: Buffer) {
+  const fixture = historicalRig;
+  const bytes = png ?? Buffer.from(fixture.still.png, 'base64');
+  const sha256 = png ? jobHash(png) : fixture.still.sha256;
+  const act = {...fixture.receipt.value, jobId: f.session.jobId,
+    still: {...fixture.receipt.value.still, path: sha256 + '.png', sha256}};
+  const {store} = f.session as unknown as {store: JobStore<{acts: Record<string, unknown>}>};
+  store.update(f.session.jobId, null, ({data}) => {
+    data.acts[act.actId] = act;
+    return {data, still: {actId: act.actId, pageId: fixture.request.pageId, submissionId: fixture.request.submissionId,
+      sha256, binding: fixture.still.binding, png: bytes, actBytes: Buffer.from(JSON.stringify(act))}};
+  });
+  return {act, bytes, sha256};
+}
+
+test('#646 rig still raw reader and CLI preserve original act key order and validate retained bytes', async () => {
+  const f = await fixture(), {act, bytes, sha256} = seedHistoricalRigStill(f);
+  const fresh = {...act, value: {...act.value, comments: [permutedFeedbackComment()]}};
   const raw = JSON.stringify(fresh), db = new Database(join(f.state, 'jobs.sqlite'));
   try {
-    // Test-only finalized-reader fixture. Production finalizers stay on their old versions.
+    // Plant a noncanonical anchor order in both persisted representations.
     const row = db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!;
     const document = JSON.parse(row.document);
     document.acts[fresh.actId] = fresh;
@@ -193,7 +208,7 @@ test('#900 scalar job revision observes publish and sealClose without loading do
   expect(closed).toMatchObject({code: 'JOB_STORAGE_FAILED'});
 });
 
-test('#900 an already waiting subscription sees an independent attachment publish, ask and close', async () => {
+test('#900 an already waiting subscription sees an independent attachment publish, historical pending ask and close', async () => {
   const f = await fixture(), abort = new AbortController();
   const iterator = f.ports.subscribeJob({jobId: f.session.jobId, after: null, signal: abort.signal})[Symbol.asyncIterator]();
   let pending = iterator.next();
@@ -217,13 +232,17 @@ test('#900 an already waiting subscription sees an independent attachment publis
     expect(first.value).toMatchObject({type: 'published', publication: {publicationId: published.value.publicationId}});
     pending = iterator.next();
     await Bun.sleep(0);
-    const asked = await call({...f.base(), verb: 'ask', expectedGeneration: attached.status().generation,
+    const generation = attached.status().generation;
+    const subject = {kind: 'review-verdict', stage: 'rig-review'} as const;
+    const asked = await call({...f.base(), verb: 'ask', expectedGeneration: generation,
       idempotencyKey: '900-attached-ask', publicationId: published.value.publicationId,
-      subject: {kind: 'review-verdict', stage: 'rig-review'}});
-    expect(asked.ok).toBe(true);
+      subject});
+    expect(asked).toMatchObject({ok: false, generation, error: {code: 'JOB_ASK_INVALID'}});
+    expect(attached.status().cursor).toBe(first.value?.cursor);
+    const historical = seedHistoricalVerdictAsk(attached, published.value.publicationId, subject);
     const second = await subscriptionDeadline(pending);
     expect(second.done).toBe(false);
-    expect(second.value).toMatchObject({type: 'pending', ask: {askId: asked.value.askId}});
+    expect(second.value).toMatchObject({type: 'pending', ask: {askId: historical.askId}});
     expect(second.value?.cursor).not.toBe(first.value?.cursor);
     pending = iterator.next();
     await Bun.sleep(0);
@@ -615,20 +634,17 @@ test('#557 control oversized stdin grant fails before any request or stdout', as
 
 test('#557 R10 one production CLI call writes the PNG before emitting exact act bytes', async () => {
   const f = await fixture();
-  const {input, bytes, sha256} = await rigStillInput(f);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error(saved.error.code);
+  const {act, bytes, sha256} = seedHistoricalRigStill(f);
   const destination = join(f.scratch, 'consumer-output');
   await mkdir(destination);
   await writeFile(join(destination, 'consumer-owned.txt'), 'preserve');
   const server = Bun.serve({hostname: '127.0.0.1', port: 0,
     fetch: request => f.ports.handleJobApi(new Request(f.origin + new URL(request.url).pathname, request))});
   try {
-    const output = await consumerCLI(server.url.origin + `/jobs/${f.session.jobId}`, saved.value.actId,
+    const output = await consumerCLI(server.url.origin + `/jobs/${f.session.jobId}`, act.actId,
       f.session.writerGrant().fetchCapability, destination);
     expect(output.exit).toBe(0);
-    expect(output.stdout).toBe(JSON.stringify(saved.value));
+    expect(output.stdout).toBe(JSON.stringify(act));
     expect(output.stderr).toBe('');
     expect((await readFile(join(destination, sha256 + '.png'))).equals(bytes)).toBe(true);
     expect((await readdir(destination)).sort()).toEqual([sha256 + '.png', 'consumer-owned.txt'].sort());
@@ -639,10 +655,7 @@ test('#557 R10 one production CLI call writes the PNG before emitting exact act 
 
 test('#557 R11 failed PNG read emits empty stdout and preserves consumer-owned files', async () => {
   const f = await fixture();
-  const {input} = await rigStillInput(f);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error(saved.error.code);
+  const {act} = seedHistoricalRigStill(f);
   const destination = join(f.scratch, 'consumer-output');
   await mkdir(destination);
   await writeFile(join(destination, 'act.json'), 'consumer-owned-before-command');
@@ -654,7 +667,7 @@ test('#557 R11 failed PNG read emits empty stdout and preserves consumer-owned f
     return f.ports.handleJobApi(new Request(f.origin + new URL(request.url).pathname, request));
   }});
   try {
-    const output = await consumerCLI(server.url.origin + `/jobs/${f.session.jobId}`, saved.value.actId,
+    const output = await consumerCLI(server.url.origin + `/jobs/${f.session.jobId}`, act.actId,
       f.session.writerGrant().fetchCapability, destination);
     expect(output.exit).not.toBe(0);
     expect(output.stdout).toBe('');
@@ -680,7 +693,7 @@ function padSyntheticPng(bytes: Buffer, length: number): Buffer {
   return Buffer.concat([bytes.subarray(0, -12), chunk, bytes.subarray(-12)]);
 }
 
-test('#557 backend actual HTTP front forwards an authenticated 8 MiB PNG and both consumer representations', async () => {
+test('#557 backend actual HTTP front reads a legacy 8 MiB capture request and exports both historical representations', async () => {
   const f = await fixture();
   const {input, bytes} = await rigStillInput(f);
   const png = padSyntheticPng(bytes, 8 * 1024 * 1024);
@@ -691,21 +704,22 @@ test('#557 backend actual HTTP front forwards an authenticated 8 MiB PNG and bot
   const origin = server.url.origin;
   front = createJobFront({origin, ports: createJobHostPorts(f.session, origin), resource: async () => ''});
   try {
+    const before = f.session.status();
     const response = await fetch(origin + `/jobs/${f.session.jobId}/ui/acts`, {method: 'POST',
       headers: {'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': f.credentials.ui},
       body: JSON.stringify({...input, capture})});
-    expect(response.status).toBe(200);
-    const saved = await response.json();
-    expect(saved.ok).toBe(true);
-    expect(saved.value.still.sha256).toBe(jobHash(png));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+    expect(f.session.status()).toEqual(before);
+    const {act} = seedHistoricalRigStill(f, png);
     const grant = f.session.writerGrant().fetchCapability;
     for (const accept of ['application/vnd.rig-review.act+json', 'image/png']) {
       const fetched = await fetch(origin + `/jobs/${f.session.jobId}/api`, {method: 'POST',
         headers: {'Content-Type': 'application/json', Accept: accept, Authorization: 'Bearer ' + grant},
-        body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: saved.value.actId})});
+        body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: act.actId})});
       expect(fetched.status).toBe(200);
       expect(fetched.headers.get('content-type')).toBe(accept);
-      expect(Buffer.from(await fetched.arrayBuffer()).equals(accept === 'image/png' ? png : Buffer.from(JSON.stringify(saved.value)))).toBe(true);
+      expect(Buffer.from(await fetched.arrayBuffer()).equals(accept === 'image/png' ? png : Buffer.from(JSON.stringify(act)))).toBe(true);
     }
     const nonRig = await fetch(origin + `/jobs/${f.session.jobId}/ui/acts`, {method: 'POST',
       headers: {'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': f.credentials.ui},
@@ -721,16 +735,13 @@ test('#557 backend actual HTTP front forwards an authenticated 8 MiB PNG and bot
 for (const ending of ['zero-write', 'midwrite', 'partial-success', 'existing-zero-write'] as const) {
   test(`#557 backend consumer ${ending} obeys PNG ownership and exact stdout ordering`, async () => {
     const f = await fixture();
-    const {input, bytes, sha256} = await rigStillInput(f);
-    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-    expect(saved.ok).toBe(true);
-    if (!saved.ok) throw new Error(saved.error.code);
+    const {act, bytes, sha256} = seedHistoricalRigStill(f);
     const directory = join(f.scratch, 'consumer');
     await mkdir(directory);
     if (ending === 'existing-zero-write') await writeFile(join(directory, sha256 + '.png'), bytes);
     const chunks: Buffer[] = [];
     let writes = 0;
-    const pending = jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+    const pending = jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId,
       '--still-out', directory], {consumerCapability: f.session.writerGrant().fetchCapability,
       fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
       writeBytes(chunk) {
@@ -744,7 +755,7 @@ for (const ending of ['zero-write', 'midwrite', 'partial-success', 'existing-zer
       }});
     if (ending === 'partial-success') {
       await pending;
-      expect(Buffer.concat(chunks)).toEqual(Buffer.from(JSON.stringify(saved.value)));
+      expect(Buffer.concat(chunks)).toEqual(Buffer.from(JSON.stringify(act)));
     } else await expect(pending).rejects.toThrow('JOB_STILL_OUTPUT_FAILED');
     const names = await readdir(directory);
     if (ending === 'zero-write') expect(names).toEqual([]);
@@ -760,10 +771,7 @@ for (const ending of ['zero-write', 'midwrite', 'partial-success', 'existing-zer
 for (const target of ['symlink', 'different-bytes', 'other-writer-lock'] as const) {
   test(`#557 backend ${target} output refuses without changing another writer's bytes`, async () => {
     const f = await fixture();
-    const {input, sha256} = await rigStillInput(f);
-    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-    expect(saved.ok).toBe(true);
-    if (!saved.ok) throw new Error(saved.error.code);
+    const {act, sha256} = seedHistoricalRigStill(f);
     const directory = join(f.scratch, 'consumer');
     await mkdir(directory);
     const sentinel = join(f.scratch, 'other-writer');
@@ -772,7 +780,7 @@ for (const target of ['symlink', 'different-bytes', 'other-writer-lock'] as cons
     if (target === 'different-bytes') await writeFile(join(directory, sha256 + '.png'), 'different bytes');
     if (target === 'other-writer-lock') await writeFile(join(directory, '.rig-review-still.lock'), 'other owner');
     let stdout = '';
-    await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+    await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId,
       '--still-out', directory], {consumerCapability: f.session.writerGrant().fetchCapability,
       fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
       write: text => {stdout += text;}})).rejects.toThrow('JOB_STILL_OUTPUT_FAILED');
@@ -809,10 +817,7 @@ test('#557 backend consumer bounds stdin and raw streams before filesystem or st
 
 test('#567 consumer still output fsyncs destination directory after verified PNG rename and before first stdout byte, and reuses existing verified PNG', async () => {
   const f = await fixture();
-  const {input, bytes, sha256} = await rigStillInput(f);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error(saved.error.code);
+  const {act, bytes, sha256} = seedHistoricalRigStill(f);
   const directory = join(f.scratch, 'consumer-dirsync');
   await mkdir(directory);
   const dirStat = statSync(directory);
@@ -841,7 +846,7 @@ test('#567 consumer still output fsyncs destination directory after verified PNG
     return realFsync(fd);
   });
   try {
-    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId,
       '--still-out', directory], {
       consumerCapability: f.session.writerGrant().fetchCapability,
       fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
@@ -868,14 +873,14 @@ test('#567 consumer still output fsyncs destination directory after verified PNG
     ]);
     expect(fsyncCountAtFirstWrite).toBe(2);
     expect(dirFsyncBeforeFirstWrite).toBe(true);
-    expect(Buffer.concat(chunks)).toEqual(Buffer.from(JSON.stringify(saved.value)));
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from(JSON.stringify(act)));
     expect(await readdir(directory)).toEqual([sha256 + '.png']);
 
     const installedIno = statSync(join(directory, sha256 + '.png')).ino;
     fsyncEvents.length = 0;
     chunks.length = 0;
     writes = 0;
-    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId,
       '--still-out', directory], {
       consumerCapability: f.session.writerGrant().fetchCapability,
       fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
@@ -890,7 +895,7 @@ test('#567 consumer still output fsyncs destination directory after verified PNG
       isFile: false, isDirectory: true, dev: dirStat.dev, ino: dirStat.ino,
       pngPresent: true, pngVerified: true, tmpCount: 0, stdoutBytes: 0, writeCalls: 0,
     }]);
-    expect(Buffer.concat(chunks)).toEqual(Buffer.from(JSON.stringify(saved.value)));
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from(JSON.stringify(act)));
   } finally {
     spy.mockRestore();
   }
@@ -899,10 +904,7 @@ test('#567 consumer still output fsyncs destination directory after verified PNG
 for (const fault of ['ebadf', 'eio', 'einval'] as const) {
   test(`#567 directory fsync ${fault} failure emits zero stdout bytes, cleans up own install and lock, and preserves preexisting verified PNG`, async () => {
     const f = await fixture();
-    const {input, bytes, sha256} = await rigStillInput(f);
-    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-    expect(saved.ok).toBe(true);
-    if (!saved.ok) throw new Error(saved.error.code);
+    const {act, bytes, sha256} = seedHistoricalRigStill(f);
     const directory = join(f.scratch, 'consumer-dirsync-' + fault);
     await mkdir(directory);
     const realFsync = fs.fsyncSync;
@@ -917,7 +919,7 @@ for (const fault of ['ebadf', 'eio', 'einval'] as const) {
     try {
       let writes = 0;
       const chunks: Buffer[] = [];
-      await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+      await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId,
         '--still-out', directory], {
         consumerCapability: f.session.writerGrant().fetchCapability,
         fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
@@ -933,7 +935,7 @@ for (const fault of ['ebadf', 'eio', 'einval'] as const) {
 
       await writeFile(join(directory, sha256 + '.png'), bytes);
       const preexistingIno = statSync(join(directory, sha256 + '.png')).ino;
-      await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+      await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId,
         '--still-out', directory], {
         consumerCapability: f.session.writerGrant().fetchCapability,
         fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
@@ -957,9 +959,7 @@ for (const fault of ['ebadf', 'eio', 'einval'] as const) {
 for (const ending of ['success', 'zero-write', 'midwrite', 'legacy-write'] as const) {
   test(`#567 newly installed PNG descriptor pins its unlinked inode through ${ending} output and closes once`, async () => {
     const f = await fixture();
-    const {input, sha256} = await rigStillInput(f);
-    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-    if (!saved.ok) throw new Error(saved.error.code);
+    const {act, sha256} = seedHistoricalRigStill(f);
     const directory = join(f.scratch, 'consumer-pinned-' + ending);
     await mkdir(directory);
     const target = join(directory, sha256 + '.png');
@@ -999,7 +999,7 @@ for (const ending of ['success', 'zero-write', 'midwrite', 'legacy-write'] as co
       return ending === 'midwrite' ? Math.min(17, chunk.byteLength) : chunk.byteLength;
     };
     try {
-      const pending = jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+      const pending = jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId,
         '--still-out', directory], {
         consumerCapability: f.session.writerGrant().fetchCapability,
         fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
@@ -1030,9 +1030,7 @@ for (const ending of ['success', 'zero-write', 'midwrite', 'legacy-write'] as co
 for (const fault of ['file-fsync', 'directory-fsync', 'rename'] as const) {
   test(`#567 newly created PNG descriptor closes once after ${fault} failure`, async () => {
     const f = await fixture();
-    const {input} = await rigStillInput(f);
-    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-    if (!saved.ok) throw new Error(saved.error.code);
+    const {act} = seedHistoricalRigStill(f);
     const directory = join(f.scratch, 'consumer-close-' + fault);
     await mkdir(directory);
     const realFsync = fs.fsyncSync, realClose = fs.closeSync;
@@ -1054,7 +1052,7 @@ for (const fault of ['file-fsync', 'directory-fsync', 'rename'] as const) {
       throw Object.assign(new Error('planted rename EIO'), {code: 'EIO'});
     }) : undefined;
     try {
-      await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+      await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId,
         '--still-out', directory], {
         consumerCapability: f.session.writerGrant().fetchCapability,
         fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
@@ -1075,10 +1073,7 @@ for (const fault of ['file-fsync', 'directory-fsync', 'rename'] as const) {
 
 test('#567 retained .rig-review-still.lock produces named actionable refusal with exact local path, preserves lock bytes and owner serialization, and retries after removal', async () => {
   const f = await fixture();
-  const {input, bytes, sha256} = await rigStillInput(f);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error(saved.error.code);
+  const {act, bytes, sha256} = seedHistoricalRigStill(f);
   const directory = join(f.scratch, 'consumer-lock');
   const alias = join(f.scratch, 'consumer-lock-alias');
   await mkdir(directory);
@@ -1089,7 +1084,7 @@ test('#567 retained .rig-review-still.lock produces named actionable refusal wit
   let inProcessStdout = '';
   let caught: unknown;
   try {
-    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId,
       '--still-out', alias], {
       consumerCapability: f.session.writerGrant().fetchCapability,
       fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
@@ -1110,7 +1105,7 @@ test('#567 retained .rig-review-still.lock produces named actionable refusal wit
   try {
     const grant = f.session.writerGrant().fetchCapability;
     const locator = server.url.origin + `/jobs/${f.session.jobId}`;
-    const refused = await consumerCLI(locator, saved.value.actId, grant, alias);
+    const refused = await consumerCLI(locator, act.actId, grant, alias);
     expect(refused.exit).not.toBe(0);
     expect(refused.stdout).toBe('');
     expect(refused.stderr).toContain('JOB_STILL_OUTPUT_FAILED');
@@ -1119,15 +1114,15 @@ test('#567 retained .rig-review-still.lock produces named actionable refusal wit
     expect(await readdir(directory)).toEqual(['.rig-review-still.lock']);
 
     await rm(lockPath);
-    const recovered = await consumerCLI(locator, saved.value.actId, grant, alias);
+    const recovered = await consumerCLI(locator, act.actId, grant, alias);
     expect(recovered.exit).toBe(0);
-    expect(recovered.stdout).toBe(JSON.stringify(saved.value));
+    expect(recovered.stdout).toBe(JSON.stringify(act));
     expect(recovered.stderr).toBe('');
     expect((await readFile(join(directory, sha256 + '.png'))).equals(bytes)).toBe(true);
     expect(await readdir(directory)).toEqual([sha256 + '.png']);
 
     await rm(join(directory, sha256 + '.png'));
-    await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+    await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId,
       '--still-out', directory], {
       consumerCapability: grant,
       fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,

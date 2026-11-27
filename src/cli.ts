@@ -8,7 +8,7 @@ import {createRebuilds} from './rebuild.ts';
 import {readFile} from 'node:fs/promises';
 import {parseControlCommand} from './control.ts';
 import { loadReview, reviewProducerStarts } from './manifest.ts';
-import { formatFeedbackIssues,feedbackWithCommentGroups,formatCorrectionIssue } from './feedback-export.ts';
+import { formatFeedbackIssues,feedbackWithCommentGroups,formatCorrectionIssue,jsonBlock } from './feedback-export.ts';
 import {loadReferencedReview,selectedReference,assertReviewUnchanged} from './reference.ts';
 import {animationDiagnostic,selectAnimation} from './animation-selection.ts';
 import {shellWord} from './open-shell.ts';
@@ -19,7 +19,8 @@ import { readFeedbackSession, readFeedbackCompareSession } from './session-histo
 import { startServer } from './server.ts';
 import { loadCompare } from './compare.ts';
 import { startCompareServer } from './compare-server.ts';
-import { loadPartsView, readVerdict, readPartsVerdictForCli, readPartsVerdictJson, exportPartsVerdict, exportPartsCorrection, assertPartsUnchanged, assertPartsCanOpen, type PartsViewOptions } from './parts-view.ts';
+import { loadPartsView, readPartsVerdictForCli, readPartsVerdictExport, exportPartsCorrection, assertPartsUnchanged, assertPartsCanOpen, type PartsViewOptions } from './parts-view.ts';
+import { readPackageCommentCorrection, readPackageComments, readPartsComments, type LocalCommentsExport } from './local-comments.ts';
 import { startPartsServer } from './parts-server.ts';
 import { readSession, parseSession, sessionFile, type Feedback } from './session.ts';
 import { readCompareSession } from './compare-session.ts';
@@ -256,53 +257,31 @@ async function partsCommand(args:string[]){
    process.stdout.write(format==='json'?exportPartsCorrection(verdict,projected):formatCorrectionIssue(projected)+'\n');
    return;
  }
- if(format==='json'){process.stdout.write(await readPartsVerdictJson(pkg));return;}
- if(format){const verdict=await readPartsVerdictForCli(pkg);if(!verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a verdict first');process.stdout.write(exportPartsVerdict(verdict,format));return;}
+ if(format){
+   const verdict=await readPartsVerdictExport(pkg,format), localComments=await readPartsComments(pkg);
+   if(!verdict&&!localComments)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a verdict first');
+   if(!localComments){process.stdout.write(verdict!);return;}
+   await assertPartsUnchanged(pkg);
+   process.stdout.write(format==='json' ? JSON.stringify({...(verdict?JSON.parse(verdict):{}),localComments},null,2)+'\n'
+     : (verdict?verdict+'\n':'')+jsonBlock(localComments)+'\n');
+   return;
+ }
  assertPartsCanOpen(pkg);
  const capability=randomBytes(32).toString('hex');
- let outputFailure: Error | null = null;
- let rejectWrite: ((error: Error) => void) | undefined;
- let server: Awaited<ReturnType<typeof startPartsServer>> | undefined;
+ const server = await startPartsServer(pkg, {port, capability, by});
  let stopping: Promise<void> | undefined;
- const shutdown = () => stopping ??= server!.shutdown();
- const failOutput = (cause: unknown) => {
-   if (outputFailure) return;
-   outputFailure = new Error('PARTS_VERDICT_NOTIFY_FAILED: stdout failed', {cause});
-   process.exitCode = 1;
-   console.error(outputFailure.message);
-   rejectWrite?.(outputFailure);
-   if (server) void shutdown();
- };
- const outputClosed = () => failOutput(new Error('stdout closed'));
- process.stdout.on('error', failOutput);
- process.stdout.on('close', outputClosed);
  const stop = (signal: string) => {
-   if (!outputFailure) console.log(`review parts: exiting — received ${signal}.`);
-   void shutdown();
+   console.log(`review parts: exiting — received ${signal}.`);
+   stopping ??= server.shutdown();
  };
  const interrupt = () => stop('SIGINT'), terminate = () => stop('SIGTERM');
  try {
-   server = await startPartsServer(pkg, {port, capability, by, onNotifyFailure: failOutput,
-     onWriteFailure: error => console.error(error.message),
-     onSaved: async event => {
-       if (outputFailure) throw outputFailure;
-       const line = 'RIG_REVIEW_PARTS_SAVED ' + JSON.stringify(event).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029') + '\n';
-       // The callback settles after the complete write, including when write() reports backpressure.
-       await new Promise<void>((resolve, reject) => {
-         rejectWrite = reject;
-         try { process.stdout.write(line, error => error ? failOutput(error) : resolve()); }
-         catch (error) { failOutput(error); }
-       }).finally(() => { rejectWrite = undefined; });
-     },
-   });
    process.once('SIGINT', interrupt);process.once('SIGTERM', terminate);
    console.log(`Parts view ready: http://127.0.0.1:${server.port}/#cap=${capability}\nMode: ${pkg.mode} · ${pkg.items.length} ${pkg.mode==='parts'?'parts':'regions'} · ${pkg.flags.length} producer flags\nSign-off: ${pkg.verdictPath}\nPress Ctrl+C to stop.`);
-   if (outputFailure) await shutdown();
    await server.live.exited;
    if (stopping) await stopping;
  } finally {
    process.removeListener('SIGINT', interrupt);process.removeListener('SIGTERM', terminate);
-   process.stdout.removeListener('error', failOutput);process.stdout.removeListener('close', outputClosed);
  }
 }
 export async function main(args:string[],options:{stateDir?:string}={}){
@@ -355,7 +334,11 @@ export async function main(args:string[],options:{stateDir?:string}={}){
   let format:'json'|'issue'='json',correctionId:string|undefined;if(command==='feedback'){const parsed=feedbackFormat(args);args=parsed.args;format=parsed.format;correctionId=parsed.correctionId;}
   // Feedback formatting assigns --format/value ownership before the help pass.
   if(commandHelpRequested(args,command)){console.log(usage);return;}
-  const printFeedback=(session:Parameters<typeof formatFeedbackIssues>[0])=>{const exported=commentCropPaths(session,options.stateDir);console.log(format==='issue'?formatFeedbackIssues(exported).trimEnd():JSON.stringify(feedbackWithCommentGroups(exported),null,2));};
+  const printFeedback=(session:Parameters<typeof formatFeedbackIssues>[0],localComments?:LocalCommentsExport)=>{
+    const exported=commentCropPaths(session,options.stateDir);
+    console.log(format==='issue'?formatFeedbackIssues(exported).trimEnd()+(localComments?'\n\n'+jsonBlock(localComments):'')
+      :JSON.stringify({...feedbackWithCommentGroups(exported),...(localComments?{localComments}:{})},null,2));
+  };
   if(args[0]==='compare'){
     if(correctionId)throw new Error('CORRECTION_COMPARE_UNSUPPORTED: select a single reviewed package');
     args.shift();const a=args.shift(),b=args.shift();if(!a||!b)throw new Error(usage);let reference:string|undefined,animation:string|undefined,port=4317;
@@ -383,11 +366,16 @@ export async function main(args:string[],options:{stateDir?:string}={}){
   const selection=animation!==undefined||fromReport?selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],animation,true):null;const initialAnimation=selection?.name;if(command==='feedback'&&correctionId){
     await unchanged();
     const stateDir=options.stateDir!;
-    const bytes=await readFile(sessionFile(p,stateDir)).catch(error=>{if(error.code==='ENOENT')throw new Error('CORRECTION_ITEM_INVALID: save a correction first');throw error;});
-    const session=parseSession(JSON.parse(bytes.toString('utf8')),p,false);
-    const item=session.feedback.find(row=>row.id===correctionId);
-    const correction=parseCorrection((item?.context as any)?.correction);
-    if(!item||!correction||session.feedbackWarnings.some(warning=>warning.id===item.id))throw new Error('CORRECTION_ITEM_INVALID: expected a valid saved correction');
+    const legacyBytes=await readFile(sessionFile(p,stateDir)).catch(error=>{if(error.code==='ENOENT')return undefined;throw error;});
+    const legacy=legacyBytes&&parseSession(JSON.parse(legacyBytes.toString('utf8')),p,false);
+    const legacyItem=legacy?.feedback.find(row=>row.id===correctionId);
+    const legacyCorrection=legacyItem&&!legacy?.feedbackWarnings.some(warning=>warning.id===legacyItem.id)
+      ? parseCorrection((legacyItem.context as any)?.correction) : undefined;
+    const sent=legacyCorrection?undefined:await readPackageCommentCorrection(p,stateDir,correctionId);
+    const bytes=sent?.bytes??legacyBytes, session=sent?.session??legacy, item=sent?.session.feedback[0]??legacyItem;
+    if(!bytes||!session)throw new Error('CORRECTION_ITEM_INVALID: save a correction first');
+    const correction=sent?parseCorrection((item?.context as any)?.correction):legacyCorrection;
+    if(!item||!correction)throw new Error('CORRECTION_ITEM_INVALID: expected a valid saved correction');
     const source={id:p.manifest.id,revision:p.manifest.revision,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource};
     const rebuilds=createRebuilds(p,{stateDir,starts:reviewProducerStarts(p),unchanged,bones:p.feedbackCatalog.bones});
     const settled=correction.path==='made'&&correction.selector.kind!=='post'?await rebuilds.correctionEvidence(appliedValue(item)):undefined;
@@ -397,7 +385,7 @@ export async function main(args:string[],options:{stateDir?:string}={}){
     process.stdout.write(format==='json'?bytes:formatCorrectionIssue(projected,item.context)+'\n');
     return;
   }
-  if(command==='feedback'){const saved=await readFeedbackSession(p,options.stateDir);await unchanged();printFeedback(saved);return;}if(command==='check'){console.log(`Package valid: ${p.manifest.title}\nRevision: ${p.manifest.revision}\nSource SHA-256: ${p.sourceHash}\nDeclared files: ${p.files.size}\nPlayback: ${p.manifest.model?'compiled model present':'unavailable (no model)'}`);return;}
+  if(command==='feedback'){const saved=await readFeedbackSession(p,options.stateDir);const localComments=await readPackageComments(p,options.stateDir);await unchanged();printFeedback(saved,localComments);return;}if(command==='check'){console.log(`Package valid: ${p.manifest.title}\nRevision: ${p.manifest.revision}\nSource SHA-256: ${p.sourceHash}\nDeclared files: ${p.files.size}\nPlayback: ${p.manifest.model?'compiled model present':'unavailable (no model)'}`);return;}
   if(checkpoint&&!p.manifest.checkpoints.some(v=>v.id===checkpoint))throw new Error(`Unknown checkpoint ${checkpoint}`);
   // Foreground serving uses the same `#cap=` fragment handoff as open: the printed link alone can submit.
   const capability=randomBytes(32).toString('hex'),server=await startServer(p,{port,stateDir:options.stateDir,initialAnimation,capability,exitOnClose:true,viewOnly});const url=new URL(`http://127.0.0.1:${server.port}/`);if(checkpoint)url.searchParams.set('checkpoint',checkpoint);url.hash='cap='+capability;

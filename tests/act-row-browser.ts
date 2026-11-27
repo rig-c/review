@@ -50,7 +50,7 @@ const sampler=`(()=>{
   const save=document.getElementById('save'),row=document.getElementById('workspace-act-row'),headline=document.getElementById('workspace-ask-headline');
   const controls=[...document.querySelectorAll('#send-comments,#save,#request-changes,#workspace-pending-ask')].filter(visible).map(n=>({id:n.id,text:n.textContent.trim(),disabled:n.disabled,rect:n.getBoundingClientRect().toJSON()}));
   const state={row:visible(row),bar:visible(bar),ready:document.body?.dataset.ready==='true',headlinePresent:!!headline,headlineVisible:visible(headline),headline:headline?.textContent.trim()??'',controls,
-   legacySave:visible(save)&&/^(Submit review|리뷰 제출)$/.test(save.textContent.trim()),status:visible(document.getElementById('review-status')),label:visible(document.querySelector('label[for="review-status"]'))};
+   legacySave:visible(save)||visible(document.getElementById('request-changes')),status:visible(document.getElementById('review-status')),label:visible(document.querySelector('label[for="review-status"]'))};
   const signature=JSON.stringify(state);if(signature===previous&&trigger!=='animation-frame')return;previous=signature;
   const reading={sequence:sequence++,frame,ms:performance.now(),trigger,...state,controlsBeforeQuestion:controls.length>0&&(!state.headlineVisible||!state.headline)};
   if(samples.length<2000)samples.push(reading);
@@ -114,10 +114,10 @@ async function capture(page:InputCdpSession,out:string,name:string,expectedFoote
  await writeFile(join(out,name+'.png'),await page.screenshot());return state;
 }
 function assertPending(state:any,mode:Mode,width:number,expectedFooter?:string){
- if(mode==='rig')assert.equal(state.footerMessage,expectedFooter,'pending Rig verdict preserves its publication label');
+ if(mode==='rig')assert.equal(state.footerMessage,expectedFooter,'live Rig preserves its publication label');
  if(mode==='parts'){
   const catalog=state.language==='ko'?koCatalog:enCatalog;
-  assert.ok([expectedFooter,catalog['Parts ready. Source files remain unchanged.']].includes(state.footerMessage),'pending Parts verdict shows a valid status');
+  assert.ok([expectedFooter,catalog['Parts ready. Source files remain unchanged.']].includes(state.footerMessage),'live Parts shows a valid status');
  }
  for(const part of state.footer){
   assert.ok(part.rect.left>=0&&part.rect.right<=width&&part.rect.top>=state.footer[0].rect.top&&part.rect.bottom<=state.footer[0].rect.bottom,'shown footer item inside viewport and footer: '+part.id);
@@ -179,7 +179,6 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    const publication=await fixture.publish(stage,stage,variant==='parts-ready'?{title:readyTitle}:undefined);
    // origin/main changed(): a fresh compatible publication has no previousLabel, so its label is the footer.
    if(mode==='rig'||mode==='parts')expectedPendingFooter=variant==='parts-ready'?(language==='ko'?koCatalog[readyTitle]:enCatalog[readyTitle]):publication.label;
-   await fixture.ask(publication,stage==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:stage==='direction'?'direction-review':'rig-review'});
    url=fixture.host.ownerUrl;
   }
   const target=new URL(url);target.searchParams.set('lang',language);url=target.href;
@@ -281,8 +280,13 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   await click(page,'#workspace-bottom-collapse');await wait(page,`!document.querySelector('.inspector-body').hidden`);
   }
   if(['rig','direction','parts','embedded-rig','standalone'].includes(mode)){
-   assert.equal(await page.evaluate(`document.getElementById('request-changes').disabled`),true,'changes needs a comment');
    if(mode==='standalone'){
+    const catalog=language==='en'?enCatalog:koCatalog;
+    assert.deepEqual(initial.answers.map((answer:any)=>answer.id),['send-comments']);
+    assert.deepEqual(initial.primary,['send-comments']);
+    assert.equal(initial.headline.text,catalog["We're looking at the work together. Leave your thoughts as comments."]);
+    assert.equal(initial.footerMessage,catalog['Saves locally. The producer receives no feedback.']);
+    assert.equal(await page.evaluate(`document.getElementById('send-comments').disabled`),true);
     const standaloneStyles:{msg:{maxWidth:string;whiteSpace:string;textOverflow:string};state:{maxWidth:string;whiteSpace:string;textOverflow:string}}=await page.evaluate(`(()=>{
      const msg=document.getElementById('review-message'),state=document.getElementById('review-draft-state');
      msg.textContent='Refusal: very long refusal message that must wrap cleanly inside #workspace-act-row without 36ch truncation or ellipsis on standalone package screens';
@@ -297,6 +301,9 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
     observations[observationIndex]={mode,language,width,height,initial,collapsed,held,flash};
     continue;
    }
+   assert.deepEqual(initial.answers.map((answer:any)=>answer.id),['send-comments']);
+   assert.deepEqual(initial.primary,['send-comments']);
+   assert.equal(await page.evaluate(`document.getElementById('send-comments').disabled`),true);
    if(mode==='rig'){
     await click(page,'#zoom-in');await wait(page,`Object.keys(localStorage).some(key=>key.startsWith('rig-review-draft/1:'))`);
     const key:string=await page.evaluate(`Object.keys(localStorage).find(key=>key.startsWith('rig-review-draft/1:'))`);
@@ -305,27 +312,31 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
      await page.goto(new URL('/favicon.ico',url).href);
      await page.evaluate(`localStorage.setItem(${JSON.stringify(key)},'{corrupt saved draft')`);await page.goto(url,language);
      await wait(page,`document.body.dataset.ready==='true'&&!document.body.inert&&document.querySelector('#review-draft-recovery button')`);
-     const blocked:{submit:boolean;changes:boolean;noticeInRow:boolean;noticeVisible:boolean;kind:string}=await page.evaluate<any>(`({submit:document.getElementById('save').disabled,changes:document.getElementById('request-changes').disabled,noticeInRow:!!document.querySelector('#workspace-act-row #review-draft-recovery'),noticeVisible:!!document.getElementById('review-draft-recovery').getClientRects().length,kind:document.getElementById('review-draft-state').dataset.saveState})`);
-     assert.deepEqual(blocked,{submit:true,changes:true,noticeInRow:true,noticeVisible:true,kind:'failed'});
+     const blocked:{submit:boolean;noticeInRow:boolean;noticeVisible:boolean;kind:string}=await page.evaluate<any>(`({submit:document.getElementById('send-comments').disabled,noticeInRow:!!document.querySelector('#workspace-act-row #review-draft-recovery'),noticeVisible:!!document.getElementById('review-draft-recovery').getClientRects().length,kind:document.getElementById('review-draft-state').dataset.saveState})`);
+     assert.deepEqual(blocked,{submit:true,noticeInRow:true,noticeVisible:true,kind:'failed'});
      const recovery:any=await capture(page,out,'restore-'+action+'-blocked',mode==='rig'?expectedPendingFooter:undefined);assertPending(recovery,mode,width,expectedPendingFooter);
      const bands:any=await page.evaluate(`(()=>{const r=id=>document.getElementById(id).getBoundingClientRect().toJSON();return {headline:r('workspace-ask-headline'),notice:r('review-draft-state'),recovery:r('review-draft-recovery')};})()`);
      assert.ok(bands.headline.top<bands.notice.top,'restore notice follows the first-line question');
      assert.ok(Math.abs((bands.headline.top+bands.headline.bottom)/2-(bands.recovery.top+bands.recovery.bottom)/2)<=1,'restore actions stay beside the first-line question');
      await click(page,'#review-draft-recovery button:'+(action==='download'?'first-child':'last-child'));
-     await wait(page,`!document.getElementById('save').disabled&&!document.querySelector('#review-draft-recovery button')`);
+     await wait(page,`!document.querySelector('#review-draft-recovery button')`);
      await capture(page,out,'restore-'+action+'-unlocked');
     }
    }
-   await click(page,'#save');
-   // #1226 owner ruling: a live rig with no ask keeps its row (no-ask line, Send comments); the approved outcome stays its state.
-   // #1242 owner ruling: the direction and parts screens hold the same row.
-   const liveRig=true,stateId='review-draft-state';
-   await wait(page,`document.getElementById('workspace-act-row').hidden===${!liveRig}&&!document.getElementById('${stateId}').hidden&&document.getElementById('${stateId}').dataset.saveState==='saved'`);
-   const submitted:any=await capture(page,out,'submitted');assert.equal(submitted.rowVisible,liveRig);
+   await click(page,'#stage-comment');
+   await click(page,'[data-comment-general]');
+   await wait(page,`!!document.querySelector('.stage-comment-composer input')`);
+   await page.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value='Act row comment';f.requestSubmit();})()`);
+   await wait(page,`!document.querySelector('.stage-comment-composer')&&!document.querySelector('#send-comments').disabled`);
+   await click(page,'#send-comments');
+   const stateId='review-draft-state';
+   await wait(page,`!document.getElementById('workspace-act-row').hidden&&document.getElementById('${stateId}').dataset.saveState==='saved'`);
+   const submitted:any=await capture(page,out,'submitted');
+   assert.equal(submitted.rowVisible,true);
    if(mode!=='embedded-rig')assert.deepEqual(submitted.states,[stateId]);
    const catalog=language==='en'?enCatalog:koCatalog;
-   assert.equal(await page.evaluate(`document.getElementById('${stateId}').textContent`),catalog['job.review.approved']);
-   if(liveRig)assert.equal(await page.evaluate(`document.getElementById('workspace-ask-headline').textContent`),catalog["We're looking at the work together. Leave your thoughts as comments."]);
+   assert.equal(await page.evaluate(`document.getElementById('${stateId}').textContent`),catalog['Submitted']);
+   assert.equal(await page.evaluate(`document.getElementById('workspace-ask-headline').textContent`),catalog["We're looking at the work together. Leave your thoughts as comments."]);
   }else{
    const catalog=language==='en'?enCatalog:koCatalog;
    assert.deepEqual(initial.answers.map((answer:any)=>answer.id),['send-comments']);
@@ -342,7 +353,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    const saved:any=await capture(page,out,'answer-saved');
    const savedState:{pending:boolean;row:{kind:string;text:string};dirty:{kind:string;text:string}}=await page.evaluate(`(()=>{
     const state=id=>{const n=document.getElementById(id);return {kind:n.dataset.saveState,text:n.textContent};};
-    return {pending:['save','request-changes','workspace-pending-ask'].some(id=>!document.getElementById(id).hidden),row:state('review-draft-state'),dirty:state('dirty')};
+    return {pending:['save','request-changes','workspace-pending-ask'].some(id=>document.getElementById(id)?.checkVisibility()),row:state('review-draft-state'),dirty:state('dirty')};
    })()`);
    await writeFile(join(out,'answer-saved-state.json'),JSON.stringify(savedState,null,2)+'\n');
    // #1242 owner ruling: the record screen keeps its row with Send comments, so the submitted state stays in the row.

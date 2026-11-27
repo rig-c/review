@@ -22,7 +22,6 @@ for (const language of ['en', 'ko'] as const) {
   let page: Awaited<ReturnType<typeof launchCdpSession>> | undefined;
   try {
     const publication = await fixture.publish('parts');
-    const verdict = await fixture.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
     const url = new URL(fixture.host.ownerUrl);
     const actsUrl = new URL('ui/acts', url);
     let send: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
@@ -45,19 +44,25 @@ for (const language of ['en', 'ko'] as const) {
       throw new Error('908_WAIT ' + label);
     }
     const catalog = language === 'en' ? enCatalog : koCatalog;
-    await wait(`document.body.dataset.ready === 'true' && !document.querySelector('#save').disabled`, 'parts ready');
+    await wait(`document.body.dataset.ready === 'true' && document.querySelector('#send-comments')?.checkVisibility()`, 'parts ready');
     const before = await jobInputHashes(fixture.input.root);
-    await click(page, '#save');
-    // A clean, pending review also uses the saved draft state.
+    await click(page, '#stage-comment');
+    await click(page, '[data-comment-general]');
+    await wait(`!!document.querySelector('.stage-comment-composer input')`, 'first comment composer');
+    const firstComment = 'Before the record moves · ' + language;
+    await page.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(firstComment)};f.requestSubmit();})()`);
+    await wait(`!document.querySelector('#send-comments').disabled`, 'first comment ready');
+    await click(page, '#send-comments');
     await wait(`(() => {
       const state = document.getElementById('review-draft-state');
-      return state?.dataset.saveState === 'saved' && state.textContent === ${JSON.stringify(catalog['job.review.approved'])};
-    })()`, 'verdict approved after act POST', () => responses[0]?.status === 200);
+      return state?.dataset.saveState === 'saved' && state.textContent === ${JSON.stringify(catalog['Submitted'])};
+    })()`, 'comments saved after act POST', () => responses[0]?.status === 200);
     const next = await fixture.next();
-    const approved = next.events.find(event => event.type === 'act' && event.act.askId === verdict.askId);
-    assert.ok(approved && approved.type === 'act' && approved.act.kind === 'parts-verdict');
-    assert.equal(approved.act.value.verdict, 'approved');
-    assert.deepEqual(await jobInputHashes(fixture.input.root), before, 'UI approval leaves producer inputs immutable');
+    const submitted = next.events.find(event => event.type === 'act' && event.act.kind === 'comments');
+    assert.ok(submitted?.type === 'act' && submitted.act.kind === 'comments');
+    assert.equal(submitted.act.publicationId, publication.publicationId);
+    assert.deepEqual(submitted.act.value.comments, [{text: firstComment}]);
+    assert.deepEqual(await jobInputHashes(fixture.input.root), before, 'Sending comments leaves producer inputs immutable');
 
     // Only this fixture's project record changes; no Review state or fabricated act is ingested.
     const record = join(fixture.input.root, 'project.json');
@@ -109,10 +114,10 @@ for (const language of ['en', 'ko'] as const) {
     const final = await fixture.next();
     assert.equal(final.events.filter(event => event.type === 'act').length, 1, 'stale Send comments creates no second act');
     await writeFile(join(output, 'record-moved-' + language + '.png'), await page.screenshot());
-    const observation = {language, fixture: 'synthetic package and consumer CLI record write; not installed Create ingest', approvedActId: approved.act.actId, status, responses, ingest: {exit: ingestExit, stdout: ingestStdout, stderr: ingestStderr}, recordHashes: {before: before['project.json'], after: after['project.json']}};
+    const observation = {language, fixture: 'synthetic package and consumer CLI record write; not installed Create ingest', commentActId: submitted.act.actId, status, responses, ingest: {exit: ingestExit, stdout: ingestStdout, stderr: ingestStderr}, recordHashes: {before: before['project.json'], after: after['project.json']}};
     cases.push(observation);
     await writeFile(join(output, 'record-moved-' + language + '.json'), JSON.stringify(observation, null, 2) + '\n');
-    console.log('908_BROWSER_PASS ' + language + ' approve=200 synthetic-cli-ingest=0 comments=409');
+    console.log('908_BROWSER_PASS ' + language + ' first-comment=200 synthetic-cli-ingest=0 comments=409');
   } catch (error) {
     if (page) await writeFile(join(output, 'failure-' + language + '.png'), await page.screenshot());
     throw error;

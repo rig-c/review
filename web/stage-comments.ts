@@ -12,6 +12,7 @@ export interface CommentPose {
  mode:StageComment['mode'];camera:ControlNumericCamera;frame:StageComment['frame'];timeBasis?:StageComment['timeBasis'];time:number;animation:string|null;
  turn:unknown;sourceHash:string;modelHash:string|null;referenceHash:string|null;referenceId:string|null;frameReason?:string;
  capture?:ViewportCapture;rig:string;side?:'a'|'b';posed?:PosedFrame;assets?:ModelAssets;media?:HTMLVideoElement|HTMLImageElement;
+ projection?:{worldToPane:(point:MarkPoint)=>MarkPoint;paneToWorld:(point:MarkPoint)=>MarkPoint;clip:MarkRegion};
 }
 export interface CommentRow {id:string;summary:string;context?:unknown}
 export interface CommentUiPose extends Partial<Omit<CommentPose,'mode'>> {mode:string;camera:ControlNumericCamera}
@@ -153,10 +154,24 @@ function mountRigAnchor(
 }
 
 function rigCommentGeometry(pose:CommentPose,screen:MarkRegion) {
- const world=region(unprojectMark(screen,pose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},pose.camera));
+ const unproject=pose.projection?.paneToWorld??(point=>unprojectMark(point,pose.camera));
+ const world=region(unproject(screen),unproject({x:screen.x+screen.width,y:screen.y+screen.height}));
  const slots=pose.posed?drawnSlots(pose.posed,world):[];
  const target:Feedback['target']=slots[0]?{kind:'slot',name:slots[0].slot}:{kind:'rig',name:pose.rig};
  return {world,slots,target};
+}
+
+function clipMark(mark:MarkRegion,clip?:MarkRegion):MarkRegion|null {
+ if(!clip)return mark;
+ const right=mark.x+mark.width,bottom=mark.y+mark.height;
+ if(right<clip.x||bottom<clip.y||mark.x>clip.x+clip.width||mark.y>clip.y+clip.height)return null;
+ return region(mark,{x:right,y:bottom},clip);
+}
+
+function markOnPane(mark:CommentUiMark,pose:CommentUiPose):MarkRegion {
+ const project=pose.projection?.worldToPane??(point=>projectMark(point,pose.camera));
+ const {x,y,width,height}=mark.world;
+ return region(project({x,y}),project({x:x+width,y:y+height}));
 }
 
 function rigCommentLabel(feedback:Feedback,frame:StageComment['frame'],seconds:string):string {
@@ -172,7 +187,9 @@ function rectElement(r:MarkRegion):HTMLDivElement{const node=document.createElem
 async function crop(pose:CommentUiPose,r:MarkRegion):Promise<StageComment['crop']>{
  if(!pose.capture)throw new Error(t('COMMENT_CROP_UNAVAILABLE: viewport pixel source unavailable'));
  const camera=pose.camera,padding=24,rawLeft=Math.max(0,Math.floor(r.x-padding)),rawTop=Math.max(0,Math.floor(r.y-padding)),pane=pose.capture.pane,bounds=pane.getBoundingClientRect(),ratio=globalThis.devicePixelRatio||1;
- const {x:left,y:top,width,height}=pixelAlignedCrop({x:rawLeft,y:rawTop,width:Math.min(camera.viewport.width-rawLeft,Math.ceil(r.width+2*padding)),height:Math.min(camera.viewport.height-rawTop,Math.ceil(r.height+2*padding))},{x:bounds.left+pane.clientLeft,y:bounds.top+pane.clientTop},ratio);
+ const padded=clipMark({x:rawLeft,y:rawTop,width:Math.min(camera.viewport.width-rawLeft,Math.ceil(r.width+2*padding)),height:Math.min(camera.viewport.height-rawTop,Math.ceil(r.height+2*padding))},pose.projection?.clip);
+ if(!padded)throw new Error(t('COMMENT_CROP_UNAVAILABLE: mark is outside the viewport'));
+ const {x:left,y:top,width,height}=pixelAlignedCrop(padded,{x:bounds.left+pane.clientLeft,y:bounds.top+pane.clientTop},ratio);
  if(width<=0||height<=0)throw new Error(t('COMMENT_CROP_UNAVAILABLE: mark is outside the viewport'));
  const out=document.createElement('canvas'),stroke=getComputedStyle(document.documentElement).getPropertyValue('--link').trim()||'#3b82f6';
  let scale=Math.min(ratio,768/width,768/height),png='';
@@ -262,7 +279,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   if(reason){setCapture(false);host.error(reason);return;}
   setCapture(layers.size>0);for(const view of layers.keys())poseFor(view);
  };
- const openComment=async(f:Row)=>{const mark=readMark(f);if(!mark){if(host.general?.matches(f))openComposer(null,{x:0,y:0,width:0,height:0},f);return;}if(list.hidden)setOpen(true);if(list.hidden)return;if(await jump(f)){const reason=updateRefusal();setCapture(!reason&&!host.blocked());const pose=poseFor(mark.viewport),picture=host.codec?null:host.picture?.(mark as StageComment),screen=pose&&(host.codec?.geometry||picture&&typeof picture==='object')?region(projectMark(mark.world,pose.camera),projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera)):mark.screen;openComposer(mark.viewport,screen,f,pose?.mode??mark.mode);}};
+ const openComment=async(f:Row)=>{const mark=readMark(f);if(!mark){if(host.general?.matches(f))openComposer(null,{x:0,y:0,width:0,height:0},f);return;}if(list.hidden)setOpen(true);if(list.hidden)return;if(await jump(f)){const reason=updateRefusal();setCapture(!reason&&!host.blocked());const pose=poseFor(mark.viewport),picture=host.codec?null:host.picture?.(mark as StageComment),screen=pose&&(pose.projection||host.codec?.geometry||picture&&typeof picture==='object')?markOnPane(mark,pose):mark.screen;openComposer(mark.viewport,screen,f,pose?.mode??mark.mode);}};
  const renderList=()=>{
   placeList();
   list.setAttribute('aria-label',t('Comments'));
@@ -542,7 +559,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     e.preventDefault();e.stopImmediatePropagation();suppressPinClick=true;pinPress={id:e.pointerId,view,start:local(e),pin};pane!.setPointerCapture(e.pointerId);return;
    }
    if(target.closest('.stage-comment-ui,button,input')&&!(e.shiftKey&&handle&&host.codec?.geometry)){if(host.codec?.geometry)e.stopImmediatePropagation();return;}
-   if(enabled||!inline&&!list.hidden){try{assertCapture();}catch{return;}}if(!enabled||host.blocked())return;e.preventDefault();e.stopImmediatePropagation();cancel();const mode=poseFor(view)?.mode;if(!mode)return;const at=local(e),generation=interaction;pending={view,start:at,end:at,mode,id:e.pointerId,interaction:generation,settled:host.pause()};pending.settled.catch(e=>{if(interaction===generation&&!disposed)host.error(String(e));});pane!.setPointerCapture(e.pointerId);};
+   if(enabled||!inline&&!list.hidden){try{assertCapture();}catch{return;}}if(!enabled||host.blocked())return;e.preventDefault();e.stopImmediatePropagation();cancel();const pose=poseFor(view),at=local(e);if(!pose||!clipMark(region(at,at),pose.projection?.clip))return;const generation=interaction;pending={view,start:at,end:at,mode:pose.mode,id:e.pointerId,interaction:generation,settled:host.pause()};pending.settled.catch(e=>{if(interaction===generation&&!disposed)host.error(String(e));});pane!.setPointerCapture(e.pointerId);};
   const move=(e:PointerEvent)=>{
    if(geometryDrag?.id===e.pointerId&&geometryEdit){
     e.preventDefault();e.stopImmediatePropagation();const p=local(e),g=geometryDrag,r=g.screen,dx=p.x-g.start.x,dy=p.y-g.start.y;
@@ -557,11 +574,11 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     const start=p.start;pinPress=null;cancel();const mode=poseFor(view)?.mode;if(!mode)return;
     pending={view,start,end:at,mode,id:e.pointerId,interaction,settled:host.pause()};pending.settled.catch(error=>host.error(String(error)));
    }
-   if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();pending.end=local(e);draftMark={view,mode:pending.mode,screen:region(pending.start,pending.end)};last='';};
+   if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();pending.end=local(e);const screen=clipMark(region(pending.start,pending.end),poseFor(view)?.projection?.clip);draftMark=screen?{view,mode:pending.mode,screen}:null;last='';};
   const up=async(e:PointerEvent)=>{
    if(geometryDrag?.id===e.pointerId){e.preventDefault();e.stopImmediatePropagation();geometryDrag=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);if(composer&&!composerReadOnly)composerField?.focus();return;}
    if(pinPress?.id===e.pointerId){e.preventDefault();e.stopImmediatePropagation();const pin=pinPress.pin;pinPress=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);pin.click();return;}
-   if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();const p=pending;pending=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);try{await p.settled;assertCapture();if(disposed||interaction!==p.interaction||!enabled)return;const r=Math.hypot(p.end.x-p.start.x,p.end.y-p.start.y)<4?region(p.start,p.start):region(p.start,p.end);openComposer(view,r,undefined,p.mode);}catch(error){host.error(String(error));cancel();}};
+   if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();const p=pending;pending=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);try{await p.settled;assertCapture();if(disposed||interaction!==p.interaction||!enabled)return;const r=Math.hypot(p.end.x-p.start.x,p.end.y-p.start.y)<4?region(p.start,p.start):region(p.start,p.end);const screen=clipMark(r,poseFor(view)?.projection?.clip);if(screen)openComposer(view,screen,undefined,p.mode);else cancel();}catch(error){host.error(String(error));cancel();}};
   const abort=(e:PointerEvent)=>{if(pending?.view===view&&pending.id===e.pointerId||geometryDrag?.id===e.pointerId||pinPress?.id===e.pointerId)cancel();};
   const suppressClick=(e:MouseEvent)=>{if((e.target as Element)?.closest('.stage-comment-pin')&&e.isTrusted&&e.detail>0&&(suppressPinClick||spaceHeld())){suppressPinClick=false;e.preventDefault();e.stopImmediatePropagation();}};
   pane!.addEventListener('click',suppressClick,true);disposers.push(()=>pane!.removeEventListener('click',suppressClick,true));
@@ -577,10 +594,17 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const poses=new Map(all.length||draftMark||pending?[...layers.keys()].map(view=>[view,poseFor(view)]):[]);
  if(draftMark&&poses.get(draftMark.view)?.mode!==draftMark.mode||pending&&poses.get(pending.view)?.mode!==pending.mode)cancel();
  if(geometryEdit&&(geometryEdit.id&&host.locked(geometryEdit.id)||JSON.stringify(poses.get(geometryEdit.view)?.camera)!==geometryEdit.camera))cancel();
- const signature=JSON.stringify([geometryEdit?.screen,curLang(),refusal,all.map(({f,mark})=>[f.id,f.summary,mark!.mode,mark!.world]),[...poses].map(([view,p])=>[view,host.codec&&p?host.codec.signature(p):[p?.mode,p?.animation,p?.frame,p?.timeBasis,p?.time,p?.turn,p?.camera,p?.referenceId,p?.referenceHash]]),draftMark]);
- if(signature!==last){last=signature;for(const layer of layers.values())layer.replaceChildren();const occupied=new Map<StageComment['viewport'],{x:number;y:number;width:number;height:number}[]>();for(const [i,{f,mark:m}]of all.entries()){
+ const signature=JSON.stringify([geometryEdit?.screen,curLang(),refusal,all.map(({f,mark})=>[f.id,f.summary,mark!.mode,mark!.world]),[...poses].map(([view,p])=>[view,host.codec&&p?host.codec.signature(p):[p?.mode,p?.animation,p?.frame,p?.timeBasis,p?.time,p?.turn,p?.camera,p?.referenceId,p?.referenceHash,p?.projection?.clip]]),draftMark]);
+ if(signature!==last){last=signature;for(const [view,layer] of layers){
+  layer.replaceChildren();
+  const clip=poses.get(view)?.projection?.clip;
+  const corners=clip?[[clip.x,clip.y],[clip.x+clip.width,clip.y],
+    [clip.x+clip.width,clip.y+clip.height],[clip.x,clip.y+clip.height]]:null;
+  layer.style.clipPath=corners?'polygon('+corners.map(point=>point.map(value=>value+'px').join(' ')).join(', ')+')':'';
+ }const occupied=new Map<StageComment['viewport'],{x:number;y:number;width:number;height:number}[]>();for(const [i,{f,mark:m}]of all.entries()){
   const mark=m!,pose=poses.get(mark.viewport),layer=layers.get(mark.viewport);if(refusal||!pose||!layer||(host.codec?!host.codec.matches(mark,pose,f):pose.mode!==mark.mode||pose.animation!==mark.animation||pose.sourceHash!==mark.sourceHash||pose.modelHash!==mark.modelHash||pose.referenceId!==mark.referenceId||pose.referenceHash!==mark.referenceHash||JSON.stringify(pose.frame)!==JSON.stringify(mark.frame)||JSON.stringify(pose.timeBasis??null)!==JSON.stringify(mark.timeBasis??null)||Math.abs((pose.time??0)-(mark.time??0))>1e-7||JSON.stringify(pose.turn)!==JSON.stringify((f.context as any)?.turn??null)))continue;
-  const a=projectMark(mark.world,pose.camera),b=projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera),r=geometryEdit?.id===f.id?geometryEdit.screen:region(a,b),box=rectElement(r),pin=document.createElement('button');pin.type='button';pin.className='stage-comment-pin stage-comment-ui';pin.textContent=String(i+1);pin.setAttribute('aria-label',`${t('Comment {0}:').replace('{0}',String(i+1))} ${f.summary}`);pin.title=f.summary;Object.assign(pin.style,{left:r.x+'px',top:r.y+'px'});pin.onclick=()=>openComment(f);layer.append(box,pin);
+  const r=geometryEdit?.id===f.id?geometryEdit.screen:clipMark(markOnPane(mark,pose),pose.projection?.clip);if(!r)continue;
+  const box=rectElement(r),pin=document.createElement('button');pin.type='button';pin.className='stage-comment-pin stage-comment-ui';pin.textContent=String(i+1);pin.setAttribute('aria-label',`${t('Comment {0}:').replace('{0}',String(i+1))} ${f.summary}`);pin.title=f.summary;Object.assign(pin.style,{left:r.x+'px',top:r.y+'px'});pin.onclick=()=>openComment(f);layer.append(box,pin);
   const pane=host.viewports[mark.viewport]!;
   if(host.codec?.geometry&&r.x>=0&&r.y>=0&&r.x<=pane.clientWidth&&r.y<=pane.clientHeight){
    const width=pin.offsetWidth||24,height=pin.offsetHeight||24,placed=occupied.get(mark.viewport)??[];

@@ -3,6 +3,7 @@ import {mkdtemp,readFile,readdir,realpath,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {startServer} from '../src/server.ts';
+import {LOCAL_COMMENTS_ROUTE} from '../src/local-comments.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {setLanguagePreference,t} from '../web/i18n.ts';
@@ -329,14 +330,14 @@ test('pre-rig joined project preserves source-bound refusal and verdict output a
    try{for(const button of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){expect(button.disabled).toBe(true);expect(button.getAttribute('aria-pressed')).toBe('false');const reason=enCatalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.'];expect(button.title).toBe(reason);expect(button.getAttribute('aria-description')).toBe(reason);}}finally{dispose();}
   });
 
-  // Session submission remains refused with MODEL_UNAVAILABLE on pre-rig draft.
-  const sessionRes=await fetch(origin+'/api/session',{
-   method:'PUT',
+  // The pre-rig draft refuses package comment sends.
+  const commentRes=await fetch(origin+LOCAL_COMMENTS_ROUTE,{
+   method:'POST',
    headers:{Origin:origin,'X-Review-Capability':capability,'Content-Type':'application/json'},
-   body:JSON.stringify({}),
+   body:JSON.stringify({sendId:crypto.randomUUID(),sourceHash:review.sourceHash,value:{comments:[{text:'Draft comment'}]}}),
   });
-  expect(sessionRes.status).toBe(409);
-  expect(await sessionRes.json()).toEqual({error:'MODEL_UNAVAILABLE'});
+  expect(commentRes.status).toBe(409);
+  expect(await commentRes.json()).toEqual({error:'MODEL_UNAVAILABLE'});
 
   // Source-bound Stage 1 verdict mismatch is refused and exact binding writes the verdict cleanly.
   const partsData=await (await fetch(origin+'/api/stage-parts')).json();

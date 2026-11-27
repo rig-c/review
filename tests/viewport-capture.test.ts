@@ -24,16 +24,17 @@ test('fractionally placed viewport crop matches actual page device pixels withou
 });
 for(const mode of ['compare','main'])test(`${mode} comment hold preserves the already displayed pose and overlays without replaying a paused inspection`,async()=>{
  const source=readFileSync(new URL(`../web/${mode}.ts`,import.meta.url),'utf8'),body=source.match(/pause:async\(\)=>\{(.*?)\},\s*bookmark:/s)?.[1];expect(body).toBeDefined();
- for(const running of [false,true]){
+ for(const running of [false,true])for(const authored of mode==='main'?[false,true]:[false]){
   let drawnBoneY=40,held=false;const camera={x:2,y:3,zoom:1.5};
   const context:any={idleHeld:false,seekingControl:false,playing:running,time:.5,trace:{reference:.5},lastPresented:{time:.5},video:{paused:!running,readyState:4},player:{time:.5}};
   context.stop=context.pause=()=>{context.video.paused=true;context.playing=false;};
+  context.heldSceneCamera=()=>authored?{}:null;
   context.seekTo=context.inspectControlTime=async()=>{drawnBoneY+=10;};
   context.turnPad={snapshot:()=>({held,values:{yaw:7.25}}),restore:(snapshot:any,redraw=true)=>{held=snapshot.held;if(redraw)drawnBoneY+=10;}};
   const hold=new Function('context',`with(context){return async()=>{${body}}}`)(context);await hold();
   expect(context.video.paused).toBe(true);expect(held).toBe(true);expect(camera).toEqual({x:2,y:3,zoom:1.5});
   // A still view is evidence already: replaying it changes history-dependent bone/overlay pixels.
-  if(!running)expect(drawnBoneY).toBe(40);
+  if(!running||authored)expect(drawnBoneY).toBe(40);
   const beforeUntouched=drawnBoneY;
   context.turnPad={snapshot:()=>undefined,restore:()=>{throw Error('Untouched comment must not set Hold');}};
   await hold();
