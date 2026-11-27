@@ -1,16 +1,15 @@
 import {boxesIntersect} from '../web/label-placement.ts';
 import {rigWorkspaceMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
+import {compareWorkspaceMarkup} from '../web/compare-markup.ts';
 import {expect,test} from 'bun:test';
 import {readFile,readdir} from 'node:fs/promises';
 test('Comment is visible as one control on both stage toolbars with no reference to the removed list-toggle id',async()=>{
  const removedId='stage-comment-'+'list-toggle';
- for(const file of ['web/index.html','web/compare.html']){
-  const source=await readFile(file,'utf8');expect(file==='web/index.html'?rigWorkspaceMarkup:source).toContain('data-workspace-comment');const html=sharedCommentMarkup;
-  expect(html).toContain('id="stage-comment"');
-  expect(html).toContain('Comment · C (0)');
-  expect(html).toContain('aria-controls="stage-comment-list"');
-  expect(html).not.toContain(removedId);
- }
+ for(const markup of [rigWorkspaceMarkup,compareWorkspaceMarkup])expect(markup).toContain('data-workspace-comment');
+ expect(sharedCommentMarkup).toContain('id="stage-comment"');
+ expect(sharedCommentMarkup).toContain('Comment · C (0)');
+ expect(sharedCommentMarkup).toContain('aria-controls="stage-comment-list"');
+ expect(sharedCommentMarkup).not.toContain(removedId);
  for(const dir of ['src','web','docs','skills/rig-review','tests']){
   for(const entry of await readdir(dir,{ withFileTypes:true })){
    if(!entry.isFile())continue;

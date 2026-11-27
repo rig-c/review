@@ -5,7 +5,7 @@ import {tr,onLanguageChange,setSourceText,setSourceAttribute} from './i18n.ts';
  * block alone and hides the others with `hidden`, so one block is on screen at a time and nothing scrolls between them.
  * A tab may carry blocks that belong to its group (`data-block-includes`, e.g. Transport's Angle block): those keep
  * their own `hidden` for their own reasons and are hidden with the group by `data-block-hidden` instead. Arrow keys,
- * Home and End move between tabs and select as they go (the pattern compare.html's Inspector tabs follow).
+ * Home and End move between tabs and select as they go (the pattern Compare's Inspector tabs follow).
  * Hiding writes nothing inside a block, so a hidden block keeps whatever it held. Each block keeps its own scroll
  * offset for the session; the section's saved offset stays with the Inspector scroll memory. The active tab per
  * section is the only thing this adds to the inspection draft (its `ui` record, key `inspectorBlocks`). */

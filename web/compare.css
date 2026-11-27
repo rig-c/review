@@ -37,6 +37,8 @@ input::placeholder,textarea::placeholder{color:var(--fg-muted)}
 
 /* The application shell never scrolls; each Inspector tab and the source list owns overflow. */
 html,body{height:100%;overflow:hidden}body{height:100dvh}#app{height:100dvh;display:grid;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden}
+/* Keep the Compare children in the existing body grid. */
+#app[data-review-screen=compare]{display:contents}
 .layout{min-height:0!important;overflow:hidden;grid-template-columns:170px minmax(0,1fr)!important}
 main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 .left-panel{min-height:0;overflow:auto;padding:var(--space-3)}
