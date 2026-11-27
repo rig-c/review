@@ -3,13 +3,13 @@
  * goes to `/api/rebuild`, the job's lines stream back by polling, and the applied state is recorded. The client formats
  * the applied history for the page; the server owns every path and the producer's flags.
  */
-import {setSourceText} from './i18n.ts';
-import {bustLandmarkFields} from './chest-editor.ts';
+import {setSourceText,sourceTextContent} from './i18n.ts';
+import {bustLandmarkFields,type ChestEditor} from './chest-editor.ts';
 import {ellipsePolygon,fitChestEllipse,CHEST_ELLIPSE_MIN_POINTS} from '../src/chest-regions.ts';
 import {deriveBust,parseBustSpec,type BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
 import {APPLIED_ANIMATION_SCHEMA,APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,APPLIED_RETARGET_SCHEMA,filesDiffText,type AppliedAnimation,type AppliedAssembled,type AppliedDelta,type AppliedPatch,type AppliedRetarget,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
-import {appliedBuildOwner,type RestoredPanelOutcome} from '../src/applied-blocks.ts';
+import {appliedBuildOwner,appliedPanelOps,reconcilePanelStatuses,staleReadouts,type RebuildPanelKind,type RestoredPanelOutcome} from '../src/applied-blocks.ts';
 import {meshApplyOutcome,meshMode} from '../src/mesh-entry.ts';
 import type {AnimationSourceOp} from '../src/animation-ops.ts';
 import type {MotionSummary,RetargetFlags,RetargetLine,RetargetRecord} from '../src/retarget.ts';
@@ -19,6 +19,16 @@ import type {InspectedCheckView} from '../src/physics-tuning.ts';
 import {samplesClock,type StageClock} from '../src/frame-clock.ts';
 import type {ReadingsRequest} from '../src/readings.ts';
 import type {ReadingsJobView,ReadingsRefusal} from './readings-panel.ts';
+import type {AnimationInspectionPanel} from './animation-inspection.ts';
+import type {BonesPanel} from './bones-panel.ts';
+import type {ClothPanel} from './cloth-panel.ts';
+import type {CutsPanel} from './cuts-panel.ts';
+import type {IdlePanel} from './idle-panel.ts';
+import type {MeshEditor} from './mesh-editor.ts';
+import type {MeshPanel} from './mesh-panel.ts';
+import type {PhysicsPanel} from './physics-panel.ts';
+import type {RetargetPanel} from './retarget-panel.ts';
+import type {RigFieldsPanel} from './rig-fields-panel.ts';
 
 export type RegionEntry=
  |{name:string;shape:'circle';cx:number;cy:number;r:number;bone:string;spacing:number;band:number}
@@ -278,7 +288,12 @@ async function followRebuild<J extends AnyJobView>(job:J,deps:Omit<RebuildDeps<u
 
 interface JobApi {path:string;api:<T>(path:string,init?:RequestInit)=>Promise<T>;sleep?:(ms:number)=>Promise<void>}
 const wait=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
-const jsonPost=(body:unknown):RequestInit=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+export const jsonPost=(body:unknown):RequestInit=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+const stripResponseStatus=(error:unknown)=>(error instanceof Error?error.message:String(error)).replace(/^\d+: /,'');
+function refusalBodyText(text:string):string {
+ try{return (JSON.parse(text) as {error?:string}).error??text;}catch{return text;}
+}
+export const requestRefusalText=(error:unknown):string=>refusalBodyText(stripResponseStatus(error));
 /** Run an Apply against the selected rebuild endpoint and resolve its outcome before the caller updates the stage. */
 export async function runRebuildApply<B,J extends AnyJobView>(body:B,options:JobApi&{
  onLine:RebuildDeps<B,J>['onLine'];
@@ -432,13 +447,11 @@ export async function runRebuildUndo(from:string,{path,api,onLine,showLines=()=>
 
 type ReadingsActions={onProgress?:(job:ReadingsJobView)=>void;onError?:(text:string)=>void};
 export async function runReadingsRequest(body:ReadingsRequest,{path,api,onProgress,onError,sleep=wait}:JobApi&ReadingsActions):Promise<ReadingsJobView|ReadingsRefusal> {
- let job=await api<ReadingsJobView|ReadingsRefusal>(path,jsonPost(body)).catch(error=>{
-  const text=error instanceof Error?error.message:String(error);
-  return {status:'refused' as const,error:text.replace(/^\d+: /,'')};
- });
+ let job=await api<ReadingsJobView|ReadingsRefusal>(path,jsonPost(body)).catch(error=>({
+  status:'refused' as const,error:stripResponseStatus(error),
+ }));
  if(!('id' in job)){
-  let {error}=job;
-  try{error=(JSON.parse(error) as {error?:string}).error??error;}catch{/* The response may be plain text. */}
+  const error=refusalBodyText(job.error);
   onError?.(error);
   return {status:'refused',error};
  }
@@ -503,6 +516,32 @@ export function undoControl(history:AppliedHistoryView|null,stageId:string|null,
  const back=depth>1?`record ${depth-1} (model ${history!.records[depth-2]!.modelHash.slice(0,12)}…)`:'the inspected build';
  return {label,enabled:!busy,title:`Return the stage to ${back}; the package is unchanged`};
 }
+export function appliedStatus(node:HTMLElement,text:string,error=false):void {
+ node.textContent=text;
+ node.classList.toggle('error',error);
+}
+
+export function renderApplied(
+ renderBlocks:()=>void,
+ readStage:()=>{appliedHistory:AppliedHistoryView|null;appliedOnStage:ReturnType<typeof parseApplied>},
+ blocked:()=>boolean,
+ el:<T extends HTMLElement=HTMLElement>(id:string)=>T,
+ doc:Pick<Document,'getElementById'>=document,
+):void {
+ renderBlocks();
+ const section=doc.getElementById('applied-records');if(!section)return;
+ const stage=readStage(),h=stage.appliedHistory;
+ section.hidden=!h||h.depth===0;
+ renderAppliedHistory(el('applied-list'),h,stage.appliedOnStage?.buildId??null);
+ const control=undoControl(h,stage.appliedOnStage?.buildId??null,blocked()),undo=el<HTMLButtonElement>('applied-undo');
+ undo.textContent=control.label;undo.disabled=!control.enabled;undo.title=control.title;
+}
+
+/** The inspected build's check as the last `GET /api/rebuild` returned it. */
+export function inspectedCheckView(status:Pick<RebuildStatusView,'inspectedCheck'>|null|undefined):InspectedCheckView|null {
+ return status?.inspectedCheck??null;
+}
+
 /**
  * #183: a density-strip row pending on the stage after a stage change. Every landed Apply — whichever block sent it
  * (regions, any patch block, Edit Mesh's delta, retarget) — and every Reset and Undo replaces the stage the row was
@@ -520,6 +559,14 @@ export function stripPendingAfter<P>(pending:P|null,change:StageChange<P>):P|nul
  return null;
 }
 
+/** #183: after every landed Apply, Reset or Undo the pending row and Back go (`stripPendingAfter`); the strip re-reads (a row Applied is marked). */
+export function stageChanged<P>(stage:{stripPending:P|null},change:StageChange<P>,refresh:()=>Promise<void>):void {
+ const next=stripPendingAfter(stage.stripPending,change);
+ if(next===stage.stripPending)return;
+ stage.stripPending=next;
+ void refresh();
+}
+
 /** #250: the owning panel and status outcome line for a built job (used when Undo restores a previous Apply onto the stage). */
 export function restoredOutcomeForJob(job:AnyJobView):(RestoredPanelOutcome&{error:boolean})|null {
  if(job.status!=='built'||!job.build)return null;
@@ -533,4 +580,98 @@ export function restoredOutcomeForJob(job:AnyJobView):(RestoredPanelOutcome&{err
   :owner.panel==='animation'?animationOutcomeLine(job as AnimationJobView)
   :patchOutcomeLine(job as PatchJobView);
  return {panel:owner.panel,...(owner.part?{part:owner.part}:{}),text:outcome.text,error:outcome.error};
+}
+
+type AppliedPanelStage={
+ readonly appliedOnStage:ReturnType<typeof parseApplied>;
+ readoutStage:ReturnType<typeof parseApplied>;
+ readonly stripPending:unknown;
+};
+
+type AppliedPanels={
+ chestEditor?:Pick<ChestEditor,'noticeText'|'notify'>|null;
+ meshEditor?:Pick<MeshEditor,'statusNote'|'setStatusNote'>|null;
+ meshPanel?:Pick<MeshPanel,'status'|'counts'|'readout'>|null;
+ bonesPanel?:Pick<BonesPanel,'applied'|'status'>|null;
+ rigFieldsPanel?:Pick<RigFieldsPanel,'applied'|'status'|'readout'>|null;
+ cutsPanel?:Pick<CutsPanel,'applied'|'status'|'shown'>|null;
+ clothPanel?:Pick<ClothPanel,'applied'|'status'|'shown'>|null;
+ physicsPanel?:Pick<PhysicsPanel,'applied'|'status'|'readout'>|null;
+ idlePanel?:Pick<IdlePanel,'applied'|'status'|'readout'>|null;
+ retargetPanel?:Pick<RetargetPanel,'status'|'result'>|null;
+ animationPanel?:Pick<AnimationInspectionPanel,'reconcileStageApplied'>|null;
+};
+
+/** #172 / #250: every panel marks as applied only what the stage's applied record holds for that panel, and clears stale applied-outcome status text on non-owning panels (restoring it on Undo). */
+export function renderAppliedBlocks(
+ stage:AppliedPanelStage,
+ panels:AppliedPanels,
+ renderDropNotices:()=>void,
+ restoredJob:AnyJobView|null=null,
+ doc:Pick<Document,'getElementById'|'querySelector'>=document,
+):void {
+ const {chestEditor,meshEditor,meshPanel,bonesPanel,rigFieldsPanel,cutsPanel,clothPanel,physicsPanel,idlePanel,retargetPanel,animationPanel}=panels;
+ const on=appliedPanelOps(stage.appliedOnStage);
+ cutsPanel?.applied(on.cuts);clothPanel?.applied(on.cloth);
+ physicsPanel?.applied(on.physics);bonesPanel?.applied(on.bones);
+ const applied=stage.appliedOnStage;
+ idlePanel?.applied(on.idle,appliedCheckState(applied&&'check' in applied?applied.check:null));
+ rigFieldsPanel?.applied(on['rig-fields']);
+ const restored=restoredJob?restoredOutcomeForJob(restoredJob):null;
+ animationPanel?.reconcileStageApplied(
+  stage.appliedOnStage?.schema===APPLIED_ANIMATION_SCHEMA?stage.appliedOnStage:null,
+  restored?.panel==='animation'?{text:restored.text,error:restored.error}:null,
+ );
+ const statusText=(id:string)=>sourceTextContent(doc.getElementById(id));
+ const reconciled=reconcilePanelStatuses(
+  {
+   chest:chestEditor?.noticeText()??'',
+   'mesh-edit':meshEditor?.statusNote()??'',
+   mesh:statusText('mesh-status'),
+   bones:statusText('bones-status'),
+   'rig-fields':statusText('rig-fields-status'),
+   cuts:statusText('cuts-status'),
+   cloth:statusText('cloth-status'),
+   physics:statusText('physics-apply-status'),
+   idle:statusText('idle-apply-status'),
+   retarget:statusText('retarget-status'),
+   animation:sourceTextContent(doc.querySelector('[data-animation-editor-status]')),
+  },
+  stage.appliedOnStage,
+  restored,
+ );
+ const owner=appliedBuildOwner(stage.appliedOnStage);
+ if(owner?.panel!=='chest'){
+  if(reconciled.chest!==(chestEditor?.noticeText()??''))chestEditor?.notify(null,false,[]);
+ }else if(restored?.panel==='chest'){
+  chestEditor?.notify(restored.text,restored.error,[]);
+ }
+ if(owner?.panel!=='mesh-edit'){
+  if(reconciled['mesh-edit']!==(meshEditor?.statusNote()??''))meshEditor?.setStatusNote('',false);
+ }else if(restored?.panel==='mesh-edit'){
+  meshEditor?.setStatusNote(restored.text,restored.error);
+ }
+ const syncPanelStatus=(panel:RebuildPanelKind,id:string,set:(t:string,e:boolean)=>void,clearExtra?:()=>void)=>{
+  const cur=statusText(id),next=reconciled[panel];
+  if(owner?.panel!==panel){
+   if(next!==cur){set('',false);clearExtra?.();}
+  }else if(restored?.panel===panel){
+   set(restored.text,restored.error);
+  }
+ };
+ syncPanelStatus('mesh','mesh-status',(t,e)=>meshPanel?.status(t,e),()=>{if(!stage.stripPending){meshPanel?.counts([]);meshPanel?.readout([]);}});
+ syncPanelStatus('bones','bones-status',(t,e)=>bonesPanel?.status(t,e));
+ syncPanelStatus('rig-fields','rig-fields-status',(t,e)=>rigFieldsPanel?.status(t,e),()=>rigFieldsPanel?.readout([]));
+ syncPanelStatus('cuts','cuts-status',(t,e)=>cutsPanel?.status(t,e));
+ syncPanelStatus('cloth','cloth-status',(t,e)=>clothPanel?.status(t,e));
+ syncPanelStatus('physics','physics-apply-status',(t,e)=>physicsPanel?.status(t,e),()=>physicsPanel?.readout([]));
+ syncPanelStatus('idle','idle-apply-status',(t,e)=>idlePanel?.status(t,e),()=>idlePanel?.readout([]));
+ syncPanelStatus('retarget','retarget-status',(t,e)=>retargetPanel?.status(t,e),()=>retargetPanel?.result(null));
+ if(restored?.panel==='retarget'&&restoredJob&&(restoredJob as RetargetJobView).kind==='retarget'){
+  retargetPanel?.result(restoredJob as RetargetJobView);
+ }
+ renderDropNotices();
+ // #186: when the stage record changes, a Cuts / Cloth readout the new record is not that block's names an older build.
+ for(const block of staleReadouts(stage.readoutStage,stage.appliedOnStage))(block==='cuts'?cutsPanel:clothPanel)?.shown(null);
+ stage.readoutStage=stage.appliedOnStage;
 }

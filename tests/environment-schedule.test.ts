@@ -13,7 +13,61 @@ import {freshSession} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
 import {environmentCheckArgs,type EnvironmentCheckJob} from '../src/environment-check.ts';
 import {parseAppliedContext} from '../src/applied-context.ts';
-import {bindEnvironmentInputs,environmentCheckRows,restartsWindClock,windClockOnMove,scheduleContext,worldExport,ENVIRONMENT_NOT_APPLIED} from '../web/environment-world.ts';
+import * as environmentWorld from '../web/environment-world.ts';
+import type {RigPlayer} from '@rig-c/play';
+
+const {bindEnvironmentInputs,environmentCheckRows,restartsWindClock,windClockOnMove,scheduleContext,worldExport,ENVIRONMENT_NOT_APPLIED}=environmentWorld;
+
+test('#1285 slice 4: the check clip reads the drawn fallback only when idle is absent',()=>{
+ const fallback=()=>{throw Error('the drawn clip should not be read');};
+ expect(environmentWorld.checkAnimation([{name:'bow'},{name:'idle'}],fallback)).toBe('idle');
+ let reads=0;
+ const drawn=()=>{reads++;return 'turn';};
+ expect(environmentWorld.checkAnimation([{name:'Idle'}],drawn)).toBe('turn');
+ expect(environmentWorld.checkAnimation(undefined,drawn)).toBe('turn');
+ expect(reads).toBe(2);
+});
+
+test('#1285 slice 4: world stepping updates pending jolts before sorted moves and renders last',()=>{
+ const calls:string[]=[];
+ const clock=createWindModel();
+ clock.setBase(8);
+ const wind={...clock,
+  advance(dt:number){calls.push(`advance:${dt}`);return clock.advance(dt);},
+  read(){calls.push('wind:read');return clock.read();},
+ };
+ const future={at:1,x:4,y:2};
+ let jolts=[{at:.2,x:2,y:3},future,{at:.1,x:1,y:-2}];
+ let applied=true;
+ const {stepEnvironment}=bindEnvironmentInputs(id=>{
+  calls.push(id);
+  return {checked:applied,value:'.75'};
+ },wind,()=>{calls.push('queue:read');return jolts;},()=>calls.push('render'));
+ const writeJolts=(pending:typeof jolts)=>{calls.push('queue:write');jolts=pending;};
+ const player:Pick<RigPlayer,'moved'|'environment'>={
+  moved({x,y}){
+   expect(this).toBe(player);
+   expect(jolts).toEqual([future]);
+   calls.push(`moved:${x},${y}`);
+  },
+  environment(world){
+   expect(this).toBe(player);
+   expect(world).toEqual({wind:[8,0],gravity:[0,.75]});
+   calls.push('environment');
+   return {wind:[8,0],gravity:[0,.75]};
+  },
+ };
+ const readPlayer=()=>{calls.push('player');return player;};
+ stepEnvironment(.25,()=>{calls.push('no player');return null;},writeJolts);
+ expect(calls.splice(0)).toEqual(['no player']);
+ stepEnvironment(.25,readPlayer,writeJolts);
+ expect(calls.splice(0)).toEqual(['player','advance:0.25','queue:read','wind:read','queue:write',
+  'player','moved:1,-2','player','moved:2,3','environment-applied','player','wind:read','gravity','environment','render']);
+ applied=false;
+ stepEnvironment(.25,readPlayer,writeJolts);
+ expect(calls).toEqual(['player','advance:0.25','queue:read','wind:read','queue:write','environment-applied','render']);
+ expect(jolts).toEqual([future]);
+});
 
 test('#1285 slice 3: world controls use the caller’s lookup, wind and current jolt queue',()=>{
  const fields=new Map<string,{value:string;checked:boolean}>();

@@ -114,10 +114,18 @@ test('#345 the detail block\'s Markers button mirrors the toggle: off at bind, e
 }));
 
 test('#345 both pages draw the chest overlay only while the toggle is on',async()=>{
+ const editor=await readFile(new URL('../web/chest-editor.ts',import.meta.url),'utf8');
+ const circles=editor.slice(editor.indexOf('export function chestCircles('),editor.indexOf('export function chestMarkers('));
+ expect(circles).toMatch(/!chestEditor\?\.active\(\)\)\s*return \[\]/);
  for(const file of ['../web/main.ts','../web/compare-picked-tools.ts']){
   const source=await readFile(new URL(file,import.meta.url),'utf8');
   // The guard sits at the top of each overlay source, before anything is drawn.
-  for(const name of ['chestRegions','chestCircles']){const at=source.indexOf(`function ${name}()`);expect(at).toBeGreaterThan(-1);expect(source.slice(at,at+260)).toMatch(/!chestEditor\?\.active\(\)\)\s*return \[\]/);}
+  const regions=source.indexOf('function chestRegions()');
+  expect(regions).toBeGreaterThan(-1);
+  expect(source.slice(regions,regions+260)).toMatch(/!chestEditor\?\.active\(\)\)\s*return \[\]/);
+  const caller=source.indexOf('function chestCircles()');
+  expect(caller).toBeGreaterThan(-1);
+  expect(source.slice(caller,caller+260)).toMatch(/return readChestCircles\(activeChestMapping\(\),\s*chestEditor,\s*chestField\);/);
   // The valid-designation fallback (drawn with the toggle off) is gone.
   expect(source).not.toContain('chestOverlayCircles(');
  }

@@ -10,11 +10,25 @@ import {anchorAt,boneAnchors,boneOps,bonesApplyEnabled,configBones,dragAnchor,dr
 import type {PatchOp} from '../src/config-patch.ts';
 import type {CropWorldMapping} from '../src/chest-regions.ts';
 import type {BonesCheckResult} from '../src/bones-check.ts';
+import {jsonPost,requestRefusalText,type RebuildStatusView} from './rebuild-client.ts';
 import {canvasToCrop} from './chest-editor.ts';
 import type {OverlayAnchors,OverlayPoint,OverlayProject} from './rig-overlays.ts';
 import {panelNode as node,panelMake as make,textEntryFocused} from './view-controls.ts';
 
 export type BonesCheckView=BonesCheckResult|{status:'refused';error:string};
+
+/** Bones Check (#109): the pending ops go to `POST /api/bones-check` with the handoff config's hash; a refusal is shown verbatim. */
+export async function requestBonesCheck(ops:PatchOp[],status:Pick<RebuildStatusView,'inputs'|'reason'>|null,{
+ path,api,
+}:{path:string;api:<T>(path:string,init?:RequestInit)=>Promise<T>}):Promise<BonesCheckView> {
+ if(!status?.inputs)return {status:'refused',error:status?.reason??'REBUILD_STATUS_UNAVAILABLE'};
+ try{
+  return await api<BonesCheckView>(path,jsonPost({ops,configHash:status.inputs.configHash}));
+ }catch(error){
+  return {status:'refused',error:requestRefusalText(error)};
+ }
+}
+
 export interface BonesPanelDeps {
  /** Receives capture-phase pointer events before the viewport's pan. */
  pane:HTMLElement;
