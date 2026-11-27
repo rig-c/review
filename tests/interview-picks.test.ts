@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test';
-import { linkSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { linkSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readProject } from '../src/interview-project.ts';
-import { outputDirectory, readPicks, savePicks, validatePicks, type Picks } from '../src/interview-picks.ts';
+import { outputDirectory, readPicks, validatePicks, type Picks } from '../src/interview-picks.ts';
 import { projectFixture } from './interview-project.test.ts';
 
-test('exact Other and note bytes survive save and reopen; forged and aliased writes do not', () => {
+test('legacy picks preserve exact Other and note bytes and refuse forged or aliased files', () => {
   const fixture = projectFixture();
   try {
     const opened = readProject(fixture.root);
@@ -13,17 +13,20 @@ test('exact Other and note bytes survive save and reopen; forged and aliased wri
     const output = outputDirectory(fixture.root,'picks',opened.project);
     const payload: Picks = {schema:'rig-review/interview-picks@1',set:question.ref,
       picks:[{ask:'reference',option_id:'other',other_text:'한글\r\nKeep spaces  \ne\u0301'}],note:'  \n',by:'user',at:'2020-01-03T00:00:00Z'};
-    expect(() => savePicks(output,question,{...payload,picks:[{ask:'reference',option_id:'forged'}]})).toThrow('INTERVIEW_CHOICE_INVALID');
-    expect(readdirSync(output)).toEqual([]);
-    savePicks(output,question,payload);
-    expect(readPicks(output,readProject(fixture.root).questions[0]!)).toEqual(payload);
-    expect(() => validatePicks({...payload,shown:{}},question)).toThrow('INTERVIEW_CHOICE_INVALID');
     const target = join(output,question.ref.sha256 + '.json');
+    const bytes = JSON.stringify(payload) + '\n';
+    expect(readPicks(output,question)).toBeNull();
+    writeFileSync(target,JSON.stringify({...payload,picks:[{ask:'reference',option_id:'forged'}]}));
+    expect(() => readPicks(output,question)).toThrow('INTERVIEW_PICKS_OUTPUT');
+    writeFileSync(target,bytes);
+    expect(readPicks(output,readProject(fixture.root).questions[0]!)).toEqual(payload);
+    expect(readFileSync(target,'utf8')).toBe(bytes);
+    expect(() => validatePicks({...payload,shown:{}},question)).toThrow('INTERVIEW_CHOICE_INVALID');
     const input = join(fixture.root,'project.json');
     const before = readFileSync(input);
     rmSync(target);
     linkSync(input,target);
-    expect(() => savePicks(output,question,payload)).toThrow('INTERVIEW_PICKS_OUTPUT');
+    expect(() => readPicks(output,question)).toThrow('INTERVIEW_PICKS_OUTPUT');
     expect(readFileSync(input)).toEqual(before);
     symlinkSync(output,join(fixture.root,'picks-alias'));
     expect(() => outputDirectory(fixture.root,'picks-alias',opened.project)).toThrow('INTERVIEW_PICKS_OUTPUT');

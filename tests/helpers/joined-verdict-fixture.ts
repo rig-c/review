@@ -27,8 +27,7 @@ export async function joinedVerdictFixture(root:string,name:keyof typeof archive
       throw new Error('Checkpoint file changed: '+file.path);
   };
   await assertFixture();
-  const project={root,draftId:name==='reopened'?'example':'chain',picksDir:'reviewer-picks',partsVerdictDir:'reviewer-verdicts'};
-  await mkdir(join(root,project.picksDir));
+  const project={root,draftId:name==='reopened'?'example':'chain',partsVerdictDir:'reviewer-verdicts'};
   const output=join(root,project.partsVerdictDir);
   await mkdir(output);
   const input=join(root,'derived/drafts',project.draftId,'out/check');

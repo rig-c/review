@@ -1,5 +1,5 @@
 /** #750/#986/#1230 browser checks for record option-set pictures, shared main viewport controls, communication panel resize and draft survival.
- * Form-specific cases (long interview pick scroll/focus, survey hitbox layout, empty-note form baseline and joined --picks-dir form drawer)
+ * Form-specific cases (long interview pick scroll/focus, survey hitbox layout, empty-note form baseline)
  * were removed (#1230 removes the answer form).
  * --serve starts a loopback fixture for interactive review without launching Chromium. */
 import assert from 'node:assert/strict';

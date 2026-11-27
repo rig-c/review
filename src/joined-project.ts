@@ -7,7 +7,7 @@ import { outputDirectory } from './interview-picks.ts';
 import { packagePath, type ReviewPackage } from './manifest.ts';
 import { assertReviewUnchanged, withReviewAssertion } from './reference.ts';
 
-export type ProjectDesignation={root:string;picksDir:string}&(
+export type ProjectDesignation={root:string}&(
   {version:number;postVersion?:number;draftId?:never;partsVerdictDir?:never} |
   {draftId:string;partsVerdictDir?:string;version?:never;postVersion?:never} |
   {version?:never;draftId?:never;postVersion?:never;partsVerdictDir?:never}
@@ -79,7 +79,6 @@ export function joinProject(p:ReviewPackage|null,designation:ProjectDesignation,
          !(project.drafts==null||Array.isArray(project.drafts)&&project.drafts.length===0))return fail();
     };
     assertStage();
-    outputDirectory(root,designation.picksDir,project);
     if(!opened.questions.length&&!opened.historical.length)throw new Error(interviewUnavailable);
     const files=new Map<string,string>([['project.json',hash]]);
     const retain=(ref:SetRef)=>{
@@ -95,10 +94,9 @@ export function joinProject(p:ReviewPackage|null,designation:ProjectDesignation,
         assertStage();
         for(const [path,sha256]of files)boundBytes(root,{path,sha256});
         if(readProject(root).hash!==hash)throw new Error('Project changed');
-        outputDirectory(root,designation.picksDir,project);
       }catch{throw new Error(interviewStale+': project or interview inputs changed; reopen the project');}
     };
-    return {interviewOnly:true,opened,designation:{root,picksDir:designation.picksDir},available:true,assertCurrent,
+    return {interviewOnly:true,opened,designation:{root},available:true,assertCurrent,
       sourceHash:digest(JSON.stringify({project:{path:'project.json',sha256:hash},files:[...files].sort(([a],[b])=>a.localeCompare(b))}))};
   }
   if(!p)throw new Error(interviewMismatch+': expected the explicitly designated recorded package');
@@ -152,7 +150,6 @@ export function joinProject(p:ReviewPackage|null,designation:ProjectDesignation,
     for (const [path, sha256] of files) boundBytes(pkg, {path, sha256});
   };
   try {assertInventory();} catch {return fail();}
-  outputDirectory(root, designation.picksDir, project);
 
   // The existing join has already matched the exact recorded package inventory.
   // Derive the project-relative model from the inspected asset, never from a SHA search.
@@ -214,7 +211,7 @@ export function joinProject(p:ReviewPackage|null,designation:ProjectDesignation,
     ...p, direction,
     sourceHash:digest(JSON.stringify({schema:'rig-review-joined-direction/1', direction:direction.file, rigVersion:version, ...direction.joined})),
   }, assertCurrent) : p;
-  return {review, opened, designation:{...designation, root}, assertCurrent,
+  return {review, opened, designation:{root,version,...(postVersion===undefined?{}:{postVersion})}, assertCurrent,
     available:opened.questions.length > 0 || opened.historical.length > 0};
 }
 /** Match the draft writer's explicit parts and rig inventories, independently of a production version. */
@@ -323,7 +320,6 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
       starts:[join(root,configDir),root,p.root,...searchStarts]};
     for(const [path,sha256] of files)boundBytes(root,{path,sha256});
   }catch{return fail();}
-  outputDirectory(root,designation.picksDir,project);
   const assertCurrent=async()=>{
     try{
       await assertReviewUnchanged(p);
@@ -339,7 +335,7 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
     const locate=()=>{
       const portable=(value:string)=>value.normalize('NFC').toLowerCase();
       const overlaps=(a:string,b:string)=>a===b||a.startsWith(b+'/')||b.startsWith(a+'/');
-      if(overlaps(portable(dir),portable(path))||overlaps(portable(dir),portable(designation.picksDir)))
+      if(overlaps(portable(dir),portable(path)))
         throw new Error('PARTS_VERDICT_OUTPUT');
       try{return outputDirectory(root,dir,project);}
       catch{throw new Error('PARTS_VERDICT_OUTPUT');}
@@ -355,7 +351,7 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
     feedbackCatalog:{rig:p.feedbackCatalog.rig,bones:null,slots:null,animations:null,clock:null,clockAnimation:null},
     sourceHash:digest(JSON.stringify({schema:'rig-review-joined-draft/1',draftId,projectHash:hash,packageSourceHash:p.sourceHash})),
   },assertCurrent);
-  return {review,opened,designation:{...designation,root},assertCurrent,draft,verdictDirectory,
+  return {review,opened,designation:{root,draftId,...(dir===undefined?{}:{partsVerdictDir:dir})},assertCurrent,draft,verdictDirectory,
     available:opened.questions.length>0||opened.historical.length>0};
 }
 export type JoinedProject = JoinedSource | JoinedInterview;
