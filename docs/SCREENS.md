@@ -29,8 +29,14 @@ merge (R0). This documentation update adds no UI or public contract.
   [2.13.0](../CHANGELOG.md#2130). The remaining job window and hub were removed in
   [4.0.0](../CHANGELOG.md#400).
 - **Compare is preserved:** header Compare remains two-build A/B comparison with
-  a reference, enabled when a second build is supplied. Its existing host,
-  layouts and controls remain unchanged. Card D is **PARKED**, not planned work.
+  a reference, enabled when a second build is supplied.
+  - Its header moved onto the shared owner shell in #655 slice 4.
+  - Its host and bundle move behind the single entry in #655 S5–S7 with no
+    visible change (0 differing pixels, EN/KO, standalone and owner frame).
+  - Its layout and controls stay unchanged until S8 (status bar, header,
+    toolbars and view controls, inspector, parts explorer on the shared
+    components) is ruled. S8 waits until the rework's steps have all run once.
+  - Card D is **PARKED**, not planned work.
 
 ## 2. Components
 
