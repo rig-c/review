@@ -7,7 +7,7 @@ import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
 import {READINGS_COMPILER_NOT_INSTALLED} from '../src/producer.ts';
-import {ticksOnClip,environmentSchedule,parseReadingsContext,parseReadingsRequest,readingRefusal,readingResult,readingTicks,renderArgs,worstLine,READINGS_SCHEMA,ReadingsError,type ReadingRequest,type ReadingResult} from '../src/readings.ts';
+import {ticksOnClip,environmentSchedule,parseReadingsContext,parseReadingsRequest,readingRefusal,readingResult,readingTicks,renderArgs,worstLine,READINGS_SCHEMA,ReadingsError,type ReadingRequest,type ReadingResult,type ReadingsContext} from '../src/readings.ts';
 import {readoutRows,beforeLine,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {checkSummary} from '../src/applied-context.ts';
 import {validatePackageFeedback} from '../src/session.ts';
@@ -25,7 +25,7 @@ test('#1285 slice 4: readings context carries the first run identity and every r
  const job:readingsPanel.ReadingsJobView={id:'reading-job',status:'done',error:null,
   request:{animation:'bow',readings:[reading],environment},environment:{requested:true,flag:true,passed:true},
   compiler:{package:'@rig-c/rig-c',version:'2.64.1'},runs:[scratch,inspected,{...inspected,modelHash:'later-hash',results:[]}]};
- const context={schema:READINGS_SCHEMA,animation:'bow',requests:[reading],environment,environmentPassed:true,
+ const context:ReadingsContext={schema:READINGS_SCHEMA,animation:'bow',requests:[reading],environment,environmentPassed:true,
   compiler:job.compiler,builds:{inspected:'inspected-hash',scratch:'scratch-id'},ticks:{inspected:3,scratch:0}};
  expect(readingsPanel.readingsContext(null)).toBeNull();
  expect(readingsPanel.readingsContext(job)).toEqual(context);

@@ -89,7 +89,7 @@ test('#1285 slice 4: mesh export binds the serialized delta and reports its op c
  const {host,files,events,useB}=editExportFixture();
  const session=new MeshEditSession({slot:'topwear',skin:'default',attachment:'shirt',hash:'attachment-hash',vertices:[[0,0],[10,0],[0,10]],triangles:[0,1,2],hull:3});
  const doc=meshEditDocument(session);
- doc.ops.push({op:'move',id:0,from:[0,0],to:[1,1]});
+ doc.ops.push({op:'move',v:0,from:[0,0],to:[1,1]});
  const raw=meshEditText(doc);
  const pending=meshExports.exportMesh(doc,{...host,complete:count=>events.push(`complete: ${count}`)});
  expect(events).toEqual([]);

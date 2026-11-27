@@ -33,7 +33,7 @@ test('#1285 slice 4: world stepping updates pending jolts before sorted moves an
  const clock=createWindModel();
  clock.setBase(8);
  const wind={...clock,
-  advance(dt:number){calls.push(`advance:${dt}`);clock.advance(dt);},
+  advance(dt:number){calls.push(`advance:${dt}`);return clock.advance(dt);},
   read(){calls.push('wind:read');return clock.read();},
  };
  const future={at:1,x:4,y:2};
