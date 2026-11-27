@@ -30,8 +30,6 @@ export interface ViewportProvider {
  nativeScale?:boolean;
  /** Provider frames share actual image/world coordinates, rather than relative frame signatures. */
  absoluteSync?:boolean;
- /** Set each synced pane to its own unit scale on 1:1. Other actions retain relative sync. */
- unitScaleSync?:'per-pane';
  /** A second surface may present the same world camera in a different rectangle. */
  cameraAlias?:(target:CameraTarget)=>CameraTarget;
  el:<T extends HTMLElement=HTMLElement>(id:string)=>T;
@@ -111,19 +109,12 @@ function alignPeers(target:CameraTarget):void {
 function renderCameraControls():void {provider.renderControls(api);}
 function setCameraSync(value:boolean):void {if(value&&provider.absoluteSync){state.cameraSync=true;requestFit();}else{if(value)alignCameras();state.cameraSync=value;}fitCamera();renderCameraControls();}
 function cameraAction(action:()=>void):void {try{action();}catch(error){renderCameraControls();message(error instanceof Error?error.message:String(error),true);}}
-function updateCamera(target:CameraTarget,value:CameraSignature,group:readonly CameraTarget[]=[],unitScalePeers=false):void {
+function updateCamera(target:CameraTarget,value:CameraSignature,group:readonly CameraTarget[]=[]):void {
  const frame=paneFrame(target);if(!frame)return;
  target=cameraTarget(target);
  const updates:Partial<Record<CameraTarget,ReturnType<typeof cameraFromSignature>>>={[target]:from(value,frame)};
- for(const other of independentTargets()){
-  if(other===target||!state.cameraSync&&!group.includes(other))continue;
-  const next=paneFrame(other);if(!next)continue;
-  const update=unitScalePeers?{zoom:1/next.baseScale,center:next.center}
-   :provider.absoluteSync?{zoom:updates[target]!.zoom,center:{...updates[target]!.center!}}:from(value,next);
-  assertCameraView(update,next,range(next));updates[other]=update;
- }
+ for(const other of independentTargets()){if(other===target||!state.cameraSync&&!group.includes(other))continue;const next=paneFrame(other);if(next){const update=provider.absoluteSync?{zoom:updates[target]!.zoom,center:{...updates[target]!.center!}}:from(value,next);assertCameraView(update,next,range(next));updates[other]=update;}}
  for(const other of targets()){const update=updates[other];if(update)writeCamera(other,update);}state.activeCamera=target;
- if(unitScalePeers)state.cameraLayout=provider.layoutKey();
  fitCamera();renderCameraControls();
 }
 function zoomCamera(factor:number,target=availableCamera(),point?:CameraPoint|null):void {if(!target)return;const frame=paneFrame(target);if(frame)updateCamera(target,zoomSignature(cameraSignature(paneCamera(target),frame),factor,frame,point,provider.nativeScale?range(frame):undefined));}
@@ -136,7 +127,7 @@ function unitScaleCamera(target=availableCamera()):void {
  // Validate the exact reciprocal, without wheel zoom's clamping. updateCamera
  // prepares every synchronized candidate before assigning any live camera.
  assertCameraView({zoom,center:frame.center},frame,range(frame));
- updateCamera(target,{zoom,pan:{x:0,y:0}},[],state.cameraSync&&provider.unitScaleSync==='per-pane');
+ updateCamera(target,{zoom,pan:{x:0,y:0}});
 }
 function panCamera(target:CameraTarget,dx:number,dy:number):void {const frame=paneFrame(target);if(frame)updateCamera(target,dragSignature(cameraSignature(paneCamera(target),frame),frame,dx,dy));}
 function fitActiveCamera(target=availableCamera()):void {if(!target)return;if(provider.nativeScale){const frame=paneFrame(target);if(frame){const peers=state.cameraSync?targets().flatMap(other=>{const peer=paneFrame(other);return peer?[peer]:[];}):[frame];const fit=provider.absoluteSync&&state.cameraSync?Math.min(...peers.map(peer=>peer.fitScale??1)):frame.fitScale??1;const minimum=Math.max(...peers.map(peer=>range(peer).min));updateCamera(target,{zoom:Math.min(16,Math.max(fit,minimum)),pan:{x:0,y:0}});}return;}const part=provider.selection(target);if(target!=='reference'&&part.selected){const box=part.bounds,frame=paneFrame(target);if(!box||!frame){message('PART_FIT_UNAVAILABLE: selected slot has no positive drawn bounds.',true);return;}const margin=provider.fitMargins??{x:28,y:58};updateCamera(target,boundsFitSignature(box,frame,margin.x,margin.y));message(provider.fitMessage?.(true)??'Selected slot fitted.');}else{if(!paneFrame(target))return;updateCamera(target,{zoom:1,pan:{x:0,y:0}});message(provider.fitMessage?.(false)??'View fitted.');}}
@@ -171,7 +162,7 @@ function renderNumericView():void {const node=document.getElementById('view-coor
  function bindControls(onUnitScale?:(target:CameraTarget)=>void):()=>void {
   button('zoom-in').onclick=()=>cameraAction(()=>zoomCamera(1.25));button('zoom-out').onclick=()=>cameraAction(()=>zoomCamera(1/1.25));button('fit').onclick=()=>cameraAction(()=>fitActiveCamera());
   let nativeOne:HTMLButtonElement|null=null;
-  try{nativeOne=button('native-one')??null;}catch{/* Older hosts may omit the native-scale control. */}
+  try{nativeOne=button('native-one')??null;}catch{/* Compare and older hosts have no native-scale control. */}
   if(nativeOne)nativeOne.onclick=()=>cameraAction(()=>{const target=availableCamera();unitScaleCamera(target);if(target)onUnitScale?.(target);});
   input('camera-sync').onchange=()=>cameraAction(()=>setCameraSync(input('camera-sync').checked));
   const disposers:(()=>void)[]=[];

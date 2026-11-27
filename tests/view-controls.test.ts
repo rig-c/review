@@ -1,4 +1,4 @@
-import {openCompareCamera} from './helpers/compare-camera-687.ts';
+import {CameraNode,openCompareCamera} from './helpers/compare-camera-687.ts';
 import {createRigViewControls} from './helpers/rig-view-controls.ts';
 import {createViewControls} from '../web/view-controls.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
@@ -655,13 +655,15 @@ test('#671 scoped activation reveals already-selected tabs and keyboard destinat
 });
 
 
-test('#671 common group composition retains each finite host tag, class, child order and shared-node identity',()=>{
+test('#671 shared group composition and #1282 Compare 1:1 match Rig controls and camera sync',async()=>{
+ const app=await openCompareCamera();
  const previous=Object.getOwnPropertyDescriptor(globalThis,'document');
- class Element {
+ class Element extends CameraNode {
   id='';className='';textContent='';dataset:Record<string,string>={};children:any[]=[];attrs=new Map<string,string>();
-  constructor(readonly tagName:string){}
+  constructor(readonly tagName:string){super();}
   append(...nodes:any[]){this.children.push(...nodes);}
   setAttribute(key:string,value:string){this.attrs.set(key,value);}removeAttribute(key:string){this.attrs.delete(key);}
+  click(){this.onclick?.();}
  }
  Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Element(tag)}});
  try{
@@ -675,7 +677,26 @@ test('#671 common group composition retains each finite host tag, class, child o
    expect(group.children).toContain(controls.value);for(const button of controls.zoomButtons)expect(group.children).toContain(button);
    expect(controls.nativeOne?.textContent).toBe('1:1');
    expect(group.children).toContain(controls.nativeOne);
-   if(layout==='legacyCompareStep3'){expect(group.children[0]).toBe(controls.syncLabel);expect(controls.viewSwitch).toBeNull();}
+   if(layout==='legacyCompareStep3'){
+    expect(group.children[0]).toBe(controls.syncLabel);expect(controls.viewSwitch).toBeNull();
+    app.nodes.set('native-one',controls.nativeOne as unknown as Element);
+    const dispose=app.viewport.bindControls();
+    try{
+     app.pan('b',30,20);
+     controls.nativeOne.click();
+     expect(app.state().scales.b).toBeCloseTo(1,12);
+     for(const target of ['a','reference'])expect(app.signature(target)).toEqual(app.signature('b'));
+
+     app.sync(false);
+     app.pan('a',20,30);app.zoom(1.25,'reference');
+     app.activate('b');app.zoom(1.25);
+     const a=app.signature('a'),reference=app.signature('reference');
+     controls.nativeOne.click();
+     expect(app.state().scales.b).toBeCloseTo(1,12);
+     expect(app.signature('a')).toEqual(a);
+     expect(app.signature('reference')).toEqual(reference);
+    }finally{dispose();}
+   }
   }
  }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });

@@ -519,7 +519,7 @@ function createCompareViewport(){
   cameraControls:{zoomId:'zoom-label',targetLabel:target=>target==='reference'?'Reference':target?.toUpperCase()??'A',
    coordinatesId:null}
  },state);
- return createViewportController({...provider,unitScaleSync:'per-pane'},state);
+ return createViewportController(provider,state);
 }
 /** The pair is offered only when both sides and the shared video actually loaded; a failed side leaves the survivor as a single pane, named. */
 function renderPairLayout():PairEligibilityState {
