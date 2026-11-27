@@ -1,9 +1,9 @@
 /** #1267 part A: server and contract coverage for the `current` selector. */
 import {afterEach, expect, test} from 'bun:test';
-import {mkdtemp, readFile, rm, unlink, writeFile} from 'node:fs/promises';
+import {cp, mkdir, mkdtemp, readFile, rm, unlink, writeFile} from 'node:fs/promises';
 import {realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname, join} from 'node:path';
 import {canonicalJson} from '../src/canonical-json.ts';
 import * as api from '../src/job-api.ts';
 import * as host from '../src/job-host.ts';
@@ -22,7 +22,8 @@ import {JobSession} from '../src/job-session.ts';
 import {attachmentHashText} from '../src/mesh-edit.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
-import {directionSummary} from '../web/direction-panel.ts';
+import {directionRows, directionSummary} from '../web/direction-panel.ts';
+import {applyDomI18n, setLanguagePreference, t} from '../web/i18n.ts';
 import {createJobRigScreen, jobRigScreenRefusal, jobRigScreenRoute, jobRigScreenSubject} from '../web/job-rig-screen.ts';
 import {jobPublicationRoutes, jobSourceDraftId} from '../web/job-session.ts';
 import type {DisplayPublicationV3, SourceV3} from '../src/job-contract.ts';
@@ -49,7 +50,14 @@ async function createCurrentFixture() {
   return {f, recordHash};
 }
 
-function directionDocument(modelSha: string) {
+const createFixtureDir = 'tests/fixtures/create-example-current';
+const createDirectionSha = '590bcbcba19148cd0bb90fe66a8a7c9d3a3017e76fd4d8f1075499d5e1133259';
+const createModelSha = '69c07b3493f2eff0cba41870b39ed147214590fb4c69740cda55c33c8febfb5c';
+const createAtlasSha = '528f05d78f47751321efa1281fdc74dc9f8248891561ac8be196d918b66cdd3e';
+const createPngSha = '3cbaab9dc4c5dac0dcd5163221070ef7d17e52a905a0bc977bbddf32b3dec776';
+
+/** Synthetic direction@1 for numbered `post` controls and `@1-refused-on-current` checks only; never used as a `current` fixture. */
+function numberedDirectionV1Document(modelSha: string) {
   return {
     schema: 'rig-create/direction@1',
     rig: {version: 1, model: {path: 'skeleton.model.json', sha256: modelSha}},
@@ -72,12 +80,21 @@ async function preparePartsOnlyPackage(f: Awaited<ReturnType<typeof jobFixture>>
 }
 
 async function prepareDirectionPackage(f: Awaited<ReturnType<typeof jobFixture>>, directionRelPath = 'direction.json') {
-  const modelSha = api.jobHash(await readFile(join(f.root, 'out/skeleton.model.json')));
-  const fullDirection = join(f.root, 'out', directionRelPath);
-  await writeFile(fullDirection, JSON.stringify(directionDocument(modelSha)));
-  const manifestPath = join(f.root, 'out/review.json');
+  const pkgRoot = join(f.root, 'out');
+  for (const name of ['skeleton.model.json', 'skeleton.atlas', 'skeleton.png']) {
+    await cp(join(createFixtureDir, name), join(pkgRoot, name));
+  }
+  const fullDirection = join(pkgRoot, directionRelPath);
+  await mkdir(dirname(fullDirection), {recursive: true});
+  await cp(join(createFixtureDir, 'direction.json'), fullDirection);
+  const manifestPath = join(pkgRoot, 'review.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.model = 'skeleton.model.json';
   manifest.direction = directionRelPath;
+  manifest.references = [];
+  manifest.authoring = [];
+  manifest.animations = [{id: 'idle', label: 'Idle', duration: 4}];
+  manifest.checkpoints = [];
   await writeFile(manifestPath, JSON.stringify(manifest));
 }
 
@@ -255,7 +272,7 @@ test('Bar E (#1267 §3, §8): output checks refuse JOB_CURRENT_OUTPUT_MISMATCH, 
     expect(rigWithDirRes.status).toBe(409);
     expect(await rigWithDirRes.json()).toMatchObject({ok: false, error: {code: 'JOB_CURRENT_OUTPUT_MISMATCH'}});
 
-    // Direction with direction file -> accepted, and api/review direction metadata carries no postVersion
+    // Direction with Create direction@4 fixture -> accepted as composed build, no postVersion or rigVersion
     f.setContext({selector: dirSelector, plan: null, parts: null, subjects: [], partIds: [], files: []});
     const dirPub = await f.publish();
     const routes = retainedPublicationRoutes(f.session);
@@ -264,6 +281,15 @@ test('Bar E (#1267 §3, §8): output checks refuse JOB_CURRENT_OUTPUT_MISMATCH, 
     const meta = await metaRes.json() as {direction?: Record<string, unknown>; capabilities: {preRig: boolean}};
     expect(meta.direction).toBeDefined();
     expect('postVersion' in (meta.direction ?? {})).toBe(false);
+    expect('rigVersion' in (meta.direction ?? {})).toBe(false);
+    expect(meta.direction).toEqual({
+      file: {path: 'direction.json', sha256: createDirectionSha},
+      model: {path: 'skeleton.model.json', sha256: createModelSha},
+      composed: true,
+      camera: {space: 'rig-world-y-up', keys: []},
+      take: {duration: 4, loop: true},
+      timing: [],
+    });
     expect(meta.capabilities.preRig).toBe(false);
   }
 
@@ -472,8 +498,8 @@ test('Bar G (#1267 §5): act@10 source echoes current selector and output identi
   expect(rigAct.source.appliedResult).toBeNull();
   expect(rigAct.source.commit).toBe(commit);
 
-  // Also compare same package files except selector: rig vs direction vs parts on same record produce distinct sourceHash
-  await prepareDirectionPackage(f);
+  // Publish Create's real direction@4 fixture at specs/direction/direction.json; rig, direction and parts on same record produce distinct sourceHash
+  await prepareDirectionPackage(f, 'specs/direction/direction.json');
   const dirSelector: JobSelector = {kind: 'current', output: 'direction', record: recordHash};
   f.setContext({selector: dirSelector, plan: null, parts: null, subjects: [], partIds: [], files: []});
   const dirPub = await f.publish();
@@ -483,8 +509,8 @@ test('Bar G (#1267 §5): act@10 source echoes current selector and output identi
   const dirAct = host.parseCommentOnlyAct(dirActRes.value);
   expect(dirAct.source.selector).toEqual(dirSelector);
   expect(dirAct.source.projectHash).toBe(recordHash);
-  expect(dirAct.source.model).toEqual(rigPub.source.model);
-  expect(dirAct.source.direction).toEqual({path: 'out/direction.json', sha256: expect.stringMatching(/^[a-f0-9]{64}$/)});
+  expect(dirAct.source.model).toEqual({path: 'out/skeleton.model.json', sha256: createModelSha});
+  expect(dirAct.source.direction).toEqual({path: 'out/specs/direction/direction.json', sha256: createDirectionSha});
   expect(dirAct.source.parts).toBeNull();
   expect(dirAct.source.plan).toBeNull();
   expect(dirAct.source.optionSet).toBeNull();
@@ -492,7 +518,7 @@ test('Bar G (#1267 §5): act@10 source echoes current selector and output identi
   expect('commit' in dirAct.source).toBe(false);
 
   // Remove direction and model for parts output on the exact same recordHash
-  await unlink(join(f.root, 'out/direction.json'));
+  await unlink(join(f.root, 'out/specs/direction/direction.json'));
   const manifestPath = join(f.root, 'out/review.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   delete manifest.direction;
@@ -860,5 +886,270 @@ test('Part B (#1267 §3, §7): jobRigScreenSubject, jobRigScreenRoute, jobSource
     expect(prepared?.parts?.items.map(item => item.name)).toEqual(['body', 'front']);
   } finally {
     await live.close();
+  }
+});
+
+test('#1280: Create example-current fixture bytes are intact and accepted on a current direction publication without top-level model, rig.version, camera or timing', async () => {
+  expect(api.jobHash(await readFile(join(createFixtureDir, 'direction.json')))).toBe(createDirectionSha);
+  expect(api.jobHash(await readFile(join(createFixtureDir, 'skeleton.model.json')))).toBe(createModelSha);
+  expect(api.jobHash(await readFile(join(createFixtureDir, 'skeleton.atlas')))).toBe(createAtlasSha);
+  expect(api.jobHash(await readFile(join(createFixtureDir, 'skeleton.png')))).toBe(createPngSha);
+  const rawDirection = JSON.parse(await readFile(join(createFixtureDir, 'direction.json'), 'utf8'));
+  expect(rawDirection.schema).toBe('rig-create/direction@4');
+  // Create's direction@4 binds the upstream character rig, not the composed manifest model, and has no rig.version, camera or timing.
+  expect(rawDirection.rig.model.sha256).not.toBe(createModelSha);
+  expect('version' in rawDirection.rig).toBe(false);
+  expect('model' in rawDirection).toBe(false);
+  expect('camera' in rawDirection).toBe(false);
+  expect('timing' in rawDirection).toBe(false);
+
+  const {f, recordHash} = await createCurrentFixture();
+  await prepareDirectionPackage(f);
+  const selector: JobSelector = {kind: 'current', output: 'direction', record: recordHash};
+  f.setContext({selector, plan: null, parts: null, subjects: [], partIds: [], files: []});
+  const publication = await f.publish();
+  expect(publication.source.model).toEqual({path: 'out/skeleton.model.json', sha256: createModelSha});
+  expect(publication.source.direction).toEqual({path: 'out/direction.json', sha256: createDirectionSha});
+  const page = await f.display(publication);
+  const actRes = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({
+    ...page,
+    expectedGeneration: f.session.status().generation,
+    submissionId: '1280-fixture-act',
+    kind: 'comments',
+    value: {comments: [{text: 'direction@4 current check'}]},
+  }));
+  expect(actRes.ok).toBe(true);
+  if (!actRes.ok) throw new Error(actRes.error.code);
+  const act = host.parseCommentOnlyAct(actRes.value);
+  expect(act.source.direction).toEqual({path: 'out/direction.json', sha256: createDirectionSha});
+  expect(act.source.model).toEqual({path: 'out/skeleton.model.json', sha256: createModelSha});
+});
+
+test('#1280 refusal: direction@1 on current is refused with bounded JOB_SOURCE_MISMATCH', async () => {
+  const {f, recordHash} = await createCurrentFixture();
+  await prepareDirectionPackage(f);
+  const modelSha = api.jobHash(await readFile(join(f.root, 'out/skeleton.model.json')));
+  await writeFile(join(f.root, 'out/direction.json'), JSON.stringify(numberedDirectionV1Document(modelSha)));
+  f.setContext({selector: {kind: 'current', output: 'direction', record: recordHash}, plan: null, parts: null, subjects: [], partIds: [], files: []});
+  const res = await f.call(await f.publishRequest('1280-v1-on-current'));
+  expect(res.status).toBe(409);
+  const body = await res.json();
+  expect(body).toMatchObject({ok: false, error: {code: 'JOB_SOURCE_MISMATCH'}});
+  expect(JSON.stringify(body).length).toBeLessThan(1024);
+});
+
+test('#1280 refusal: non-@4 direction schemas (@2, @3, @0, @5) on current are refused with JOB_SOURCE_MISMATCH', async () => {
+  const {f, recordHash} = await createCurrentFixture();
+  await prepareDirectionPackage(f);
+  f.setContext({selector: {kind: 'current', output: 'direction', record: recordHash}, plan: null, parts: null, subjects: [], partIds: [], files: []});
+  for (const [idx, badDoc] of [
+    {
+      ...numberedDirectionV1Document(createModelSha),
+      schema: 'rig-create/direction@2',
+      scene: {n: 1, path: 'scene.json', sha256: 'a'.repeat(64)},
+    },
+    {
+      schema: 'rig-create/direction@3',
+      model: {path: 'skeleton.model.json', sha256: createModelSha},
+      rig: {version: 1},
+      take: {duration: 4, loop: true},
+    },
+    {schema: 'rig-create/direction@0', take: {duration: 4, loop: true}},
+    {schema: 'rig-create/direction@5', take: {duration: 4, loop: true}},
+  ].entries()) {
+    await writeFile(join(f.root, 'out/direction.json'), JSON.stringify(badDoc));
+    const res = await f.call(await f.publishRequest(`1280-bad-schema-${idx}`));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ok: false, error: {code: 'JOB_SOURCE_MISMATCH'}});
+  }
+});
+
+test('#1280 refusal: missing or invalid take on current is refused with JOB_SOURCE_MISMATCH, while boolean take.loop false is accepted', async () => {
+  const {f, recordHash} = await createCurrentFixture();
+  await prepareDirectionPackage(f);
+  f.setContext({selector: {kind: 'current', output: 'direction', record: recordHash}, plan: null, parts: null, subjects: [], partIds: [], files: []});
+  const baseDoc = JSON.parse(await readFile(join(createFixtureDir, 'direction.json'), 'utf8'));
+  const {take: _omitted, ...withoutTake} = baseDoc;
+  for (const [idx, badDoc] of [
+    withoutTake,
+    {...baseDoc, take: null},
+    {...baseDoc, take: {duration: 0, loop: true}},
+    {...baseDoc, take: {duration: -1, loop: true}},
+    {...baseDoc, take: {duration: '4', loop: true}},
+    {...baseDoc, take: {duration: 4}},
+    {...baseDoc, take: {duration: 4, loop: 'true'}},
+    {...baseDoc, take: {duration: 4, loop: 1}},
+  ].entries()) {
+    await writeFile(join(f.root, 'out/direction.json'), JSON.stringify(badDoc));
+    const res = await f.call(await f.publishRequest(`1280-bad-take-${idx}`));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ok: false, error: {code: 'JOB_SOURCE_MISMATCH'}});
+  }
+
+  // Review only checks that take.loop is a boolean and take.duration > 0; rig/scene/citations are not required by Review.
+  await writeFile(join(f.root, 'out/direction.json'), JSON.stringify({schema: 'rig-create/direction@4', take: {duration: 2.5, loop: false}}));
+  const minimalPub = await f.publish();
+  const routes = retainedPublicationRoutes(f.session);
+  const metaRes = await routes(f.session.jobId, minimalPub.publicationId, minimalPub.instanceKey, 'api/review', new Request(f.origin + '/api/review'));
+  expect(metaRes.status).toBe(200);
+  const meta = await metaRes.json() as {direction: {take: {duration: number; loop: boolean}; composed?: boolean}};
+  expect(meta.direction.take).toEqual({duration: 2.5, loop: false});
+  expect(meta.direction.composed).toBe(true);
+});
+
+test('#1280 refusal: manifest declaring scene on current is refused with JOB_SOURCE_MISMATCH', async () => {
+  const {f, recordHash} = await createCurrentFixture();
+  await prepareDirectionPackage(f);
+  await writeFile(join(f.root, 'out/scene.json'), JSON.stringify({schema: 'rig-create/scene@2'}));
+  const manifestPath = join(f.root, 'out/review.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.scene = 'scene.json';
+  await writeFile(manifestPath, JSON.stringify(manifest));
+
+  f.setContext({selector: {kind: 'current', output: 'direction', record: recordHash}, plan: null, parts: null, subjects: [], partIds: [], files: []});
+  const res = await f.call(await f.publishRequest('1280-declared-scene'));
+  expect(res.status).toBe(409);
+  const body = await res.json();
+  expect(body).toMatchObject({ok: false, error: {code: 'JOB_SOURCE_MISMATCH'}});
+  expect(JSON.stringify(body).length).toBeLessThan(1024);
+});
+
+test('#1280 refusal: direction file over 256 KiB on current is refused with JOB_SOURCE_MISMATCH', async () => {
+  const {f, recordHash} = await createCurrentFixture();
+  await prepareDirectionPackage(f);
+  const oversized = JSON.stringify({
+    schema: 'rig-create/direction@4',
+    take: {duration: 4, loop: true},
+    citations: {pad: 'x'.repeat(256 * 1024)},
+  });
+  expect(Buffer.byteLength(oversized)).toBeGreaterThan(256 * 1024);
+  await writeFile(join(f.root, 'out/direction.json'), oversized);
+
+  f.setContext({selector: {kind: 'current', output: 'direction', record: recordHash}, plan: null, parts: null, subjects: [], partIds: [], files: []});
+  const res = await f.call(await f.publishRequest('1280-oversized-direction'));
+  expect(res.status).toBe(409);
+  const body = await res.json();
+  expect(body).toMatchObject({ok: false, error: {code: 'JOB_SOURCE_MISMATCH'}});
+  expect(JSON.stringify(body).length).toBeLessThan(1024);
+});
+
+test('#1280 numbered invariance: direction@4 on a numbered post is refused unchanged, while @1 and @3 keep model match and rig.version', async () => {
+  const {f} = await createCurrentFixture();
+  await prepareDirectionPackage(f);
+  const postSelector: JobSelector = {kind: 'post', version: 3, rigVersion: 2};
+  f.setContext({selector: postSelector, plan: null, parts: null, subjects: [], partIds: [], files: []});
+
+  // Create's direction@4 under numbered post is refused as today
+  const v4OnPostRes = await f.call(await f.publishRequest('1280-v4-on-post'));
+  expect(v4OnPostRes.status).toBe(409);
+  expect(await v4OnPostRes.json()).toMatchObject({ok: false, error: {code: 'JOB_SOURCE_MISMATCH'}});
+
+  // direction@3 with mismatched model sha is still refused on numbered post
+  await writeFile(join(f.root, 'out/direction.json'), JSON.stringify({
+    schema: 'rig-create/direction@3',
+    model: {path: 'skeleton.model.json', sha256: '0'.repeat(64)},
+    rig: {version: 2},
+    take: {duration: 4, loop: true},
+  }));
+  const mismatchRes = await f.call(await f.publishRequest('1280-v3-model-mismatch'));
+  expect(mismatchRes.status).toBe(409);
+  expect(await mismatchRes.json()).toMatchObject({ok: false, error: {code: 'JOB_SOURCE_MISMATCH'}});
+
+  // Valid direction@3 on numbered post succeeds and retains rigVersion and postVersion
+  await writeFile(join(f.root, 'out/direction.json'), JSON.stringify({
+    schema: 'rig-create/direction@3',
+    model: {path: 'skeleton.model.json', sha256: createModelSha},
+    rig: {version: 2},
+    take: {duration: 4, loop: true},
+  }));
+  const postPub = await f.publish();
+  const routes = retainedPublicationRoutes(f.session);
+  const metaRes = await routes(f.session.jobId, postPub.publicationId, postPub.instanceKey, 'api/review', new Request(f.origin + '/api/review'));
+  expect(metaRes.status).toBe(200);
+  const meta = await metaRes.json() as {direction: Record<string, unknown>};
+  expect(meta.direction.rigVersion).toBe(2);
+  expect(meta.direction.postVersion).toBe(3);
+  expect(meta.direction.composed).toBe(true);
+});
+
+test('#1280 HQ ruling B: directionRows renders direction.authored with rig version on numbered views and direction.authored.current without version or undefined on current views', () => {
+  const modelId = {path: 'skeleton.model.json', sha256: createModelSha, inspected: true};
+  const fileId = {path: 'specs/direction/direction.json', sha256: createDirectionSha};
+  const baseView = {
+    model: modelId,
+    revision: '1',
+    sourceHash: '5'.repeat(64),
+    runtime: '1.27.0',
+    dials: [],
+    sets: [],
+  };
+  const numberedRows = directionRows({
+    ...baseView,
+    authored: {
+      file: fileId,
+      model: {path: modelId.path, sha256: modelId.sha256},
+      postVersion: 3,
+      rigVersion: 2,
+      composed: true,
+      camera: {space: 'rig-world-y-up', keys: []},
+      take: {duration: 4, loop: true},
+      timing: [],
+    },
+  });
+  const currentRows = directionRows({
+    ...baseView,
+    authored: {
+      file: fileId,
+      model: {path: modelId.path, sha256: modelId.sha256},
+      composed: true,
+      camera: {space: 'rig-world-y-up', keys: []},
+      take: {duration: 4, loop: true},
+      timing: [],
+    },
+  });
+  expect(numberedRows.find(r => r.key.startsWith('direction.authored'))).toEqual({
+    key: 'direction.authored',
+    values: ['2', fileId.path, fileId.sha256],
+  });
+  expect(currentRows.find(r => r.key.startsWith('direction.authored'))).toEqual({
+    key: 'direction.authored.current',
+    values: [fileId.path, fileId.sha256],
+  });
+  const numberedEn = t('direction.authored', ['2', fileId.path, fileId.sha256], 'en');
+  const numberedKo = t('direction.authored', ['2', fileId.path, fileId.sha256], 'ko');
+  expect(numberedEn).toBe(`Authored direction · rig v2 · ${fileId.path} · SHA-256 ${fileId.sha256}`);
+  expect(numberedKo).toBe(`작성된 연출 · 리그 v2 · ${fileId.path} · SHA-256 ${fileId.sha256}`);
+  const currentEn = t('direction.authored.current', [fileId.path, fileId.sha256], 'en');
+  const currentKo = t('direction.authored.current', [fileId.path, fileId.sha256], 'ko');
+  expect(currentEn).toBe(`Authored direction · ${fileId.path} · SHA-256 ${fileId.sha256}`);
+  expect(currentKo).toBe(`작성된 연출 · ${fileId.path} · SHA-256 ${fileId.sha256}`);
+  for (const rendered of [currentEn, currentKo]) {
+    expect(rendered).not.toContain('undefined');
+    expect(rendered).not.toContain('rig v');
+    expect(rendered).not.toContain('리그 v');
+    expect(rendered).not.toContain('{0}');
+  }
+
+  // Verify KO DOM observer pass preserves interpolated parameters for both numbered and current rows
+  try {
+    setLanguagePreference('ko');
+    const makeLi = (value: string) => {
+      const textNode = {nodeType: 3, nodeValue: value, parentElement: null as unknown};
+      const li = {
+        nodeType: 1, tagName: 'LI', id: '', className: '', parentElement: null,
+        children: [], childNodes: [textNode],
+        getAttribute: () => null, closest: () => null,
+      };
+      textNode.parentElement = li;
+      return {li: li as unknown as Element, textNode};
+    };
+    const a = makeLi(numberedKo);
+    const b = makeLi(currentKo);
+    applyDomI18n(a.li);
+    applyDomI18n(b.li);
+    expect(a.textNode.nodeValue).toBe(numberedKo);
+    expect(b.textNode.nodeValue).toBe(currentKo);
+  } finally {
+    setLanguagePreference('en');
   }
 });

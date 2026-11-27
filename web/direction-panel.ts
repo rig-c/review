@@ -29,7 +29,9 @@ export function directionRows(view: DirectionView): { key: string; values?: stri
     { key: 'direction.depthUnavailable' },
     view.sets.length ? { key: 'direction.sets', values: [view.sets.join(', ')] } : { key: 'direction.setsUnavailable' },
     model?.inspected && view.authored
-      ? { key: 'direction.authored', values: [String(view.authored.rigVersion), view.authored.file.path, view.authored.file.sha256] }
+      ? view.authored.rigVersion !== undefined
+        ? { key: 'direction.authored', values: [String(view.authored.rigVersion), view.authored.file.path, view.authored.file.sha256] }
+        : { key: 'direction.authored.current', values: [view.authored.file.path, view.authored.file.sha256] }
       : { key: 'direction.authoredUnavailable' },
     ...(joined ? [{ key: 'direction.joined', values: [String(joined.postVersion), joined.projectModel.path,
       joined.packageRoot, joined.projectHash, joined.packageSourceHash] }] : []),
