@@ -1,0 +1,91 @@
+{
+  "producerCommit": "837909932bc3406fa0ec87f19091daba4d9d69d3",
+  "producerTest": "tests/job-image-set.test.ts: 522 two-image model-free ask and human verdict roundtrip",
+  "actBytes": "{\"schema\":\"rig-review/act@2\",\"actId\":\"42017cb8-3ca6-46a1-abad-5de41eb31dba\",\"jobId\":\"7f21280f-810e-40a9-9895-070fb93e5d11\",\"askId\":\"d5b91964-88ec-4a48-a2a3-154e6d9bd6bf\",\"publicationId\":\"af6aa8fd-3a71-4e00-a466-6bd66d9b5aa6\",\"authority\":{\"actor\":\"human\",\"channel\":\"review-ui\",\"reviewer\":{\"id\":\"declared-owner\",\"role\":\"owner\"}},\"at\":\"2026-11-27T19:27:55.813Z\",\"kind\":\"review-verdict\",\"source\":{\"sourceHash\":\"fbc3cbd00d142098200005117ec84b45e066aa30486853e0521a83864ab0cfb0\",\"projectHash\":null,\"package\":{\"id\":\"image-set-fixture\",\"revision\":\"one\"},\"direction\":null,\"optionSet\":null,\"appliedResult\":null,\"plan\":null,\"parts\":null,\"subject\":\"image-set\",\"imageSet\":{\"purpose\":\"plate-adoption\",\"images\":[{\"role\":\"source\",\"name\":\"Image 0\",\"path\":\"image-0.png\",\"sha256\":\"ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415\"},{\"role\":\"candidate\",\"name\":\"Image 1\",\"path\":\"image-1.png\",\"sha256\":\"ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415\"}]},\"imageSetDigest\":\"74197fd193c2652ce4fcbded1550471ae13bceb279726787f1f9c50688c463d4\",\"duplicateHashes\":[{\"names\":[\"Image 0\",\"Image 1\"],\"sha256\":\"ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415\"}]},\"value\":{\"stage\":\"image-review\",\"verdict\":\"approved\",\"words\":\"  exact human words  \",\"imageNotes\":[{\"name\":\"Image 1\",\"words\":\"  image note  \"}]}}",
+  "submission": {
+    "publicationId": "af6aa8fd-3a71-4e00-a466-6bd66d9b5aa6",
+    "pageId": "page-one",
+    "displayedNonce": "96e7be9626ee4380ce012740de0bbda1f3b660071a846277212d46a8cec020ac",
+    "askId": "d5b91964-88ec-4a48-a2a3-154e6d9bd6bf",
+    "expectedGeneration": 2,
+    "submissionId": "image-verdict",
+    "kind": "review-verdict",
+    "value": {
+      "stage": "image-review",
+      "verdict": "approved",
+      "words": "  exact human words  ",
+      "imageNotes": [
+        {
+          "name": "Image 1",
+          "words": "  image note  "
+        }
+      ]
+    }
+  },
+  "submissionDigest": "e3dad36ccc5c8b6952aedbfe25bb98949fcde15155f182139e7fd78f93846f14",
+  "askRequest": {
+    "schema": "rig-review/job-api@2",
+    "jobId": "7f21280f-810e-40a9-9895-070fb93e5d11",
+    "verb": "ask",
+    "expectedGeneration": 1,
+    "idempotencyKey": "ask-5",
+    "publicationId": "af6aa8fd-3a71-4e00-a466-6bd66d9b5aa6",
+    "subject": {
+      "kind": "review-verdict",
+      "stage": "image-review"
+    }
+  },
+  "askReceipt": {
+    "digest": "8db4e7e722a27cc09064c189518f42b33072f77f21795b45ab3c51181ced105b",
+    "value": {
+      "askId": "d5b91964-88ec-4a48-a2a3-154e6d9bd6bf",
+      "publicationId": "af6aa8fd-3a71-4e00-a466-6bd66d9b5aa6",
+      "subject": {
+        "kind": "review-verdict",
+        "stage": "image-review"
+      },
+      "source": {
+        "sourceHash": "fbc3cbd00d142098200005117ec84b45e066aa30486853e0521a83864ab0cfb0",
+        "projectHash": null,
+        "package": {
+          "id": "image-set-fixture",
+          "revision": "one"
+        },
+        "direction": null,
+        "optionSet": null,
+        "appliedResult": null,
+        "plan": null,
+        "parts": null,
+        "subject": "image-set",
+        "imageSet": {
+          "purpose": "plate-adoption",
+          "images": [
+            {
+              "role": "source",
+              "name": "Image 0",
+              "path": "image-0.png",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            },
+            {
+              "role": "candidate",
+              "name": "Image 1",
+              "path": "image-1.png",
+              "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+            }
+          ]
+        },
+        "imageSetDigest": "74197fd193c2652ce4fcbded1550471ae13bceb279726787f1f9c50688c463d4",
+        "duplicateHashes": [
+          {
+            "names": [
+              "Image 0",
+              "Image 1"
+            ],
+            "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415"
+          }
+        ]
+      },
+      "status": "pending"
+    }
+  }
+}

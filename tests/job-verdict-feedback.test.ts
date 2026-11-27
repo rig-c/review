@@ -2,7 +2,8 @@ import {afterEach, expect, test} from 'bun:test';
 import {bindJobAsk} from '../src/job-act.ts';
 import {jobHash, parseCommentOnlyAct, parseCommentsAct, parseContextCommentsAct} from '../src/job-api.ts';
 import {feedbackContextComments, feedbackItemComments, parseStageComment, projectComments} from '../src/stage-comment.ts';
-import type {JobContextComment, JobUIActValues} from '../src/job-contract.ts';
+import type {JobContextComment, JobSubject} from '../src/job-contract.ts';
+import type {JobActValues, JobCommentsActValues, JobLegacyAct, JobReviewStage, JobUIActValues} from '../src/job-host.ts';
 import type {JobRetainedSource} from '../src/job-source.ts';
 import type {Feedback} from '../src/session.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
@@ -122,10 +123,20 @@ test('#746 invalid comment values, source evidence and projection overflow refus
 test('#746 the legacy UI type still admits rig feedback only for rig-review', () => {
   // @ts-expect-error Feedback is admitted only on rig-review UI values.
   const direction: JobUIActValues['review-verdict'] = {stage: 'direction-review', verdict: 'approved', words: '', feedback: []};
-  // @ts-expect-error Image submissions retain their existing closed value shape.
-  const image: JobUIActValues['review-verdict'] = {stage: 'image-review', verdict: 'approved', words: '', feedback: []};
   expect(direction.stage).toBe('direction-review');
-  expect(image.stage).toBe('image-review');
+});
+
+test('#1104 image-review belongs to the historical act@2 value only', () => {
+  type AdmitsImage<Stage> = 'image-review' extends Stage ? true : false;
+  type LegacyStage = Extract<JobLegacyAct, {kind: 'review-verdict'}>['value']['stage'];
+  const admitsImage: {
+    stage: AdmitsImage<JobReviewStage>;
+    act: AdmitsImage<JobActValues['review-verdict']['stage']>;
+    ui: AdmitsImage<JobUIActValues['review-verdict']['stage']>;
+    comments: AdmitsImage<JobCommentsActValues['review-verdict']['stage']>;
+    legacy: AdmitsImage<LegacyStage>;
+  } = {stage: false, act: false, ui: false, comments: false, legacy: true};
+  expect(admitsImage.legacy).toBe(true);
 });
 
 test('#1011 a bound draft publication keeps its identity and round-trips a rig comment', async () => {
@@ -161,7 +172,8 @@ test('#1011 refuses unsupported stages and invalid rig draft bindings', () => {
   const subject = {kind: 'review-verdict', stage: 'rig-review'} as const;
   const retained = {source, subjects: [subject]} as unknown as JobRetainedSource;
   for (const stage of ['direction-review', 'image-review'] as const) {
-    const ask = {...subject, stage};
+    // A raw caller can still present a historical stage at runtime.
+    const ask = {...subject, stage} as Extract<JobSubject, {kind: 'review-verdict'}>;
     expect(() => bindJobAsk(ask, {...retained, subjects: [ask]})).toThrow(expect.objectContaining({
       code: 'JOB_ASK_INVALID', message: stage,
     }));

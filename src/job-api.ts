@@ -127,7 +127,8 @@ export function parseJobSubject(value: unknown): JobSubject {
     case 'review-verdict':
       jobObject(item, ['kind', 'stage']);
       if (item.stage !== 'rig-review' && item.stage !== 'direction-review' && item.stage !== 'image-review') throw new JobError('JOB_ASK_INVALID');
-      return { kind: item.kind, stage: item.stage };
+      // Historical wire subjects must reach the receipt lookup before fresh asks are refused.
+      return { kind: item.kind, stage: item.stage } as JobSubject;
     case 'signoff':
       jobObject(item, ['kind', 'stage']);
       return { kind: item.kind, stage: jobId(item.stage) };
