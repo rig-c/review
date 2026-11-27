@@ -1946,7 +1946,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       checked: job => {
         const inspected = () => inspectedCheckView(side);
         const rows = environmentCheckReadout(job, build, { baseline: state.rebuildStatus?.baseline, inspected, before,
-          scratchLabel: "the scratch build's Apply check", noDefaultSuffix: '' });
+          scratchLabel: "the scratch build's Apply check", missingDefault: (name, line) => `${name}: no default-world check — ${line}` });
         const draw = () => outcome(rows());
         draw();
         // The follow-up updates the origin's saved readout; jobOutcome alone gates display.

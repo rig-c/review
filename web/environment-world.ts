@@ -92,16 +92,16 @@ export function renderEnvironmentCheckRows(out:HTMLElement,rows:readonly Environ
 }
 
 export function environmentCheckReadout(job:EnvironmentCheckView,build:EnvironmentCheckView['build'],{
- baseline,inspected,before,scratchLabel,noDefaultSuffix,
+ baseline,inspected,before,scratchLabel,missingDefault,
 }:{
  baseline:BaselineView|null|undefined;inspected:()=>InspectedCheckView|null;
  before:{lines:readonly string[];check:CheckSummary|null}|null;
- scratchLabel:string;noDefaultSuffix:string;
+ scratchLabel:string;missingDefault:(name:string,line:string)=>string;
 }):()=>EnvironmentRow[] {
  const label=build==='inspected'?'default world (the inspected build\'s own check)':scratchLabel;
  // No inspected check exists when the baseline did not reproduce the inspected rig; say why, verbatim (a schedule of wind [1, 0], gravity [0, 1] reads the default world).
  const noDefault=build==='inspected'&&!inspected()&&baseline&&baseline.status!=='running'&&baseline.status!=='reproduced';
- return ()=>environmentCheckRows(job,name=>noDefault?`${name}: no default-world check — ${baseline.line}${noDefaultSuffix}`
+ return ()=>environmentCheckRows(job,name=>noDefault?missingDefault(name,baseline.line)
   :build==='inspected'?beforeLine(name,null,inspected()):barLine(name,before?.lines??null,before?.check??null),label);
 }
 

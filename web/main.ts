@@ -2764,7 +2764,7 @@ async function runEnvironmentCheck():Promise<EnvironmentCheckView|{status:'refus
   checked:job=>{
    const scratchLabel=`the scratch build's Apply check${appliedOnStage&&'environment' in appliedOnStage&&appliedOnStage.environment?` (under schedule sha256 ${appliedOnStage.environment.sha256.slice(0,16)})`:' (default world)'}`;
    const rows=environmentCheckReadout(job,build,{baseline:rebuildStatus?.baseline,inspected:inspectedCheckView,before,
-    scratchLabel,noDefaultSuffix:" (check a schedule of wind 1, gravity 1 for the runtime's world)"});
+     scratchLabel,missingDefault:(name,line)=>`${name}: no default-world check — ${line} (check a schedule of wind 1, gravity 1 for the runtime's world)`});
    const draw=()=>directJobUiSink.render(()=>show(rows()));
    draw();if(build==='inspected'&&inspectedCheckView()?.status!=='checked')void followInspectedCheck(draw);
   },
