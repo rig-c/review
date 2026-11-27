@@ -423,6 +423,7 @@ export type UndoView=
 export async function runRebuildUndo(from:string,{path,api,onLine,showLines=()=>true,sleep=wait}:JobApi&{onLine:(line:string)=>void;showLines?:()=>boolean}):Promise<Exclude<UndoView,{status:'running'}>> {
  const result=await api<UndoView>(`${path}/undo`,jsonPost({from}));
  if(result.status!=='running')return result;
+ // An evicted predecessor re-runs its recorded step; its lines stream like an Apply's.
  // Replay starts streaming at its first poll. Hidden Compare lines stay pending.
  const job=await followRebuild(result.job,{get:id=>api<AnyJobView>(`${path}/${id}`),sleep,onLine:line=>onLine(line.trim()||'…')},showLines);
  if(job.status!=='built')return {status:'refused',error:refusedText(job),producerLine:job.producerLine};

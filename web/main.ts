@@ -3120,7 +3120,11 @@ function renderApplied():void {
  undo.textContent=control.label;undo.disabled=!control.enabled;undo.title=control.title;
 }
 function appliedStatus(text:string,error=false):void {const node=el('applied-status');node.textContent=text;node.classList.toggle('error',error);}
-/** #166: Restore the predecessor or inspected build under the same world and write its record to feedback. */
+/**
+ * #166: Undo last Apply — the last record leaves the server's stack and the stage returns to its predecessor's build
+ * (kept on disk, or re-run from its record when evicted) or to the inspected build, under the same world. The feedback
+ * context then carries the post-undo record (or null), never the reverted one. A refusal leaves the stage as it was.
+ */
 async function undoApply():Promise<UndoView|null> {
  const from=appliedOnStage?.buildId;
  if(rebuildBusy||readOnly||!from||!canManageApplied())return null;
@@ -3373,7 +3377,11 @@ async function followInspectedCheck(show:()=>void):Promise<void> {
   await new Promise(resolve=>setTimeout(resolve,3000));
  }
 }
-/** #108: Render the selected readings on the inspected and scratch builds, then show their ticks and worst frames. */
+/**
+ * Readings (#108): the pickers' readings of the drawn animation go to `POST /api/readings`, which runs `rigc render`
+ * once per reading on the inspected build and on the latest scratch build; the finished job's frames become ticks and
+ * its worst frames lines. The Environment block's wind and gravity go along only while its controls are applied.
+ */
 async function runReadings(override?:{readings:import('../src/readings.ts').ReadingRequest[]}):Promise<ReadingsJobView|ReadingsRefusal|null> {
  if(!readingsPanel||readingsBusy)return null;
  const chosen=override??readingsPanel.requests();
