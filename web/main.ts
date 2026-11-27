@@ -3441,7 +3441,16 @@ function restoreCommentInspection(value:unknown,timeOnly?:boolean,row?:CommentRo
 function setupComments():void {
  if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.filter(row=>!(typeof isSentAlone==='function'&&isSentAlone(row))).length;if(host?.direction)dirty=dirty||recordComments.length>0;}
  const notes=host?.verdictComments??(typeof localCommentSource!=='undefined'&&localCommentSource?localCommentNotes:null);
- if(notes){restoreRecordComments();if(notes.rows.length)markDirty();}
+ if(notes){
+  restoreRecordComments();
+  if(localCommentSource){
+   // The persisted draft can predate a successful send. Recheck its comments against the sent-row cache.
+   const recoveredReviewChanges=dirty&&submittedBaseline!==null&&
+    (session.status!==submittedBaseline.status||JSON.stringify(session.checkpoints)!==JSON.stringify(submittedBaseline.checkpoints));
+   dirty=hasUnsentComments()||recoveredReviewChanges;
+   updateSavedState();
+  }else if(notes.rows.length)markDirty();
+ }
  comments=bindStageComments<CommentRow,CommentPose>({answeredDirectionFeedback:host?.direction?.answeredDirectionFeedback,general:host?.record||host?.direction||notes?{
   create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row),
   ...(notes?{...notes,refusal:()=>readOnly}:{}),
