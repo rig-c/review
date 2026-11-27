@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+* Output from a build on one side no longer appears while the other side is selected, and its result is shown when you return.
+
+### Fixed
+
+* Compare's view controls read Zoom in · Zoom out · Fit · 1:1 like Rig's, and 1:1 works as it does on Rig: the active pane goes to native scale and synced panes keep their relative view (#1282). The View switch follows with the Compare toolbar migration.
+
 ## 4.24.0
 
 The turn pad now leaves the animation alone until you use it. While you have not touched the pad, the clip drives the dials. When the pointer leaves the viewport, an unheld pad eases back to the clip. Hold still keeps the angle you steered to. A `current` direction publication now takes Create's `rig-create/direction@4`. Compare in the owner workspace uses the same shell as the other owner screens.

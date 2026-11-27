@@ -522,6 +522,101 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
     // Verify comparison session in browser
     await session.goto(opened.url);
+    const slice5Witness = process.env.SLICE5_PAGE_WITNESS;
+    if (slice5Witness === 'base' || slice5Witness === 'head') {
+      type Snapshot = { message: string; panel: string; busy: boolean };
+      type Capture = { startingA: Snapshot; duringB: Snapshot; settledB: Snapshot; returnA: Snapshot };
+      const receipt = await session.evaluate<{
+        apply: Capture; reset: Capture; refusal: Capture; error: Capture;
+      }>(`(async () => {
+        const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+        const wait = async (ready, label) => {
+          for (let i = 0; i < 400; i++) { if (ready()) return; await sleep(25); }
+          throw Error('SLICE5_WITNESS_WAIT ' + label);
+        };
+        await wait(() => window.rigReviewEditor?.stage('a').inspectedHash && window.rigReviewEditor.stage('b').inspectedHash, 'both inspected builds');
+        document.querySelector('.mode-switch [data-mode="rig"]').click();
+        const editor = window.rigReviewEditor;
+        const pick = side => document.querySelector('#mode-build-picker [data-build-side="' + side + '"]').click();
+        const snapshot = () => ({
+          message: document.getElementById('message').textContent ?? '',
+          panel: document.getElementById('bones-status').textContent ?? '',
+          busy: document.getElementById('bones-reset-build').disabled,
+        });
+        pick('a');
+        await wait(() => editor.bones.anchors().length, 'public fixture bone anchors');
+        const anchor = editor.bones.anchors()[0];
+        editor.bones.set(anchor.path, [anchor.value[0] + 1, anchor.value[1]]);
+        const originalFetch = window.fetch;
+        const capture = async (run, matches, respond) => {
+          let hit = false, release;
+          const gate = new Promise(resolve => { release = resolve; });
+          window.fetch = async (resource, init) => {
+            const pathname = new URL(resource instanceof Request ? resource.url : resource, location.href).pathname;
+            if (!hit && matches(pathname, init)) {
+              hit = true;
+              await gate;
+              if (respond) return respond();
+            }
+            return originalFetch(resource, init);
+          };
+          try {
+            const beforeB = (() => { pick('b'); const view = snapshot(); pick('a'); return view; })();
+            const done = run();
+            await wait(() => hit, 'held network step');
+            const startingA = snapshot();
+            pick('b');
+            const duringB = snapshot();
+            release();
+            const result = await done;
+            await sleep(30);
+            const settledB = snapshot();
+            pick('a');
+            await sleep(30);
+            return { beforeB, startingA, duringB, settledB, returnA: snapshot(), result: result?.status ?? null,
+              aApplied: !!editor.stage('a').applied, bApplied: !!editor.stage('b').applied };
+          } finally { release(); window.fetch = originalFetch; }
+        };
+        const isApply = (path, init) => path.endsWith('/api/compare/a/rebuild') && init?.method === 'POST';
+        const apply = await capture(() => editor.bones.apply(), isApply);
+        if (apply.result !== 'built' || !apply.aApplied || apply.bApplied) throw Error('SLICE5_WITNESS_APPLY ' + JSON.stringify(apply));
+        const reset = await capture(() => editor.bones.reset(), path => path.endsWith('/skeleton.model.json') && !path.includes('compare-rebuild'));
+        if (reset.aApplied || reset.bApplied) throw Error('SLICE5_WITNESS_RESET ' + JSON.stringify(reset));
+        editor.bones.set(anchor.path, [anchor.value[0] + 1, anchor.value[1]]);
+        const refusal = await capture(() => editor.bones.apply(), isApply, () => new Response(
+          JSON.stringify({ status: 'refused', error: 'REBUILD_CONFIG_STALE', producerLine: null }),
+          { headers: { 'Content-Type': 'application/json' } },
+        ));
+        const error = await capture(() => editor.bones.apply(), isApply, () => { throw Error('SLICE5_WITNESS_NETWORK'); });
+        for (const outcome of [refusal, error]) {
+          if (outcome.result !== 'refused' || outcome.aApplied || outcome.bApplied) {
+            throw Error('SLICE5_WITNESS_FAILED_APPLY ' + JSON.stringify(outcome));
+          }
+        }
+        return { apply, reset, refusal, error };
+      })()`);
+      console.log('SLICE5_PAGE_WITNESS ' + JSON.stringify({ pin: slice5Witness, ...receipt }));
+      if (slice5Witness === 'head') {
+        if (receipt.apply.duringB.busy || receipt.reset.duringB.busy ||
+            /Build A/.test(receipt.apply.duringB.panel) || /Build A/.test(receipt.reset.duringB.panel) ||
+            /Applied|Reset Build A/.test(receipt.apply.settledB.message) || /Reset Build A/.test(receipt.reset.settledB.message) ||
+            !receipt.apply.returnA.message.includes('Applied') || !receipt.reset.returnA.message.includes('Reset Build A') ||
+            !receipt.reset.returnA.panel.includes('Reset:')) {
+          throw new Error('SLICE5_PAGE_OUTPUT_SCOPE');
+        }
+        const visible = (view: Snapshot) => view.message + '\n' + view.panel;
+        for (const [outcome, token] of [[receipt.refusal, 'REBUILD_CONFIG_STALE'], [receipt.error, 'SLICE5_WITNESS_NETWORK']] as const) {
+          if (outcome.duringB.busy || visible(outcome.settledB).includes(token) ||
+              !outcome.returnA.message.includes(token) || !outcome.returnA.panel.includes(token)) {
+            throw new Error('SLICE5_PAGE_FAILURE_SCOPE ' + token);
+          }
+        }
+        if (visible(receipt.error.startingA).includes('REBUILD_CONFIG_STALE')) {
+          throw new Error('SLICE5_PAGE_FAILURE_CLEAR');
+        }
+      }
+      return;
+    }
     const compareCheck = await session.evaluate<any>(`(async () => {
       const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       // Wait for comparison session and both players + side tools to finish loading
@@ -1666,6 +1761,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
 if (import.meta.main) {
   const result = await runCompareModeBrowserVerification();
+  if (!result) process.exit(0);
   console.log(JSON.stringify(result, null, 2));
   if (result.failures.length > 0) {
     console.error(`Compare mode browser checks failed (${result.failures.length}):\n` + result.failures.join('\n'));
