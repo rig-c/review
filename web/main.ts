@@ -50,7 +50,7 @@ import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {animationAppliedRecord,animationOutcomeLine,retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type AnimationJobView,type AnimationRequestBody,type AnimationSourceOp,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuildApply,seedFields,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuildApply,runRebuildUndo,runReadingsRequest,seedFields,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {mountWorkspaceShell,mountStatusBar,bindWorkspaceUI,bindHeaderModeAvailability,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -3120,25 +3120,14 @@ function renderApplied():void {
  undo.textContent=control.label;undo.disabled=!control.enabled;undo.title=control.title;
 }
 function appliedStatus(text:string,error=false):void {const node=el('applied-status');node.textContent=text;node.classList.toggle('error',error);}
-/**
- * #166: Undo last Apply — the last record leaves the server's stack and the stage returns to its predecessor's build
- * (kept on disk, or re-run from its record when evicted) or to the inspected build, under the same world. The feedback
- * context then carries the post-undo record (or null), never the reverted one. A refusal leaves the stage as it was.
- */
+/** #166: Restore the predecessor or inspected build under the same world and write its record to feedback. */
 async function undoApply():Promise<UndoView|null> {
  const from=appliedOnStage?.buildId;
  if(rebuildBusy||readOnly||!from||!canManageApplied())return null;
  const world=stageWorld(),priorBuildId=from,priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
  rebuildBusy=true;rebuildState();appliedStatus('Undoing the last Apply…');
  try{
-  let result=await api<UndoView>('/api/rebuild/undo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from})});
-  if(result.status==='running'){
-   // An evicted predecessor re-runs its recorded step; its lines stream like an Apply's.
-   let job=result.job as AnyJobView;const undone=result.undone;let seen=0;
-   while(job.status==='running'){await new Promise(resolve=>setTimeout(resolve,700));job=await api<AnyJobView>(`/api/rebuild/${job.id}`);for(;seen<job.lines.length;seen++)appliedStatus(job.lines[seen]!.trim()||'…');}
-   if(job.status!=='built'){const text=refusedText(job);appliedStatus(text,true);message(text,true);return {status:'refused',error:text,producerLine:job.producerLine};}
-   result={status:'built',undone,job,history:await api<AppliedHistoryView>('/api/rebuild/history')};
-  }
+  const result=await runRebuildUndo(from,{api,path:'/api/rebuild',onLine:appliedStatus});
   if(result.status==='refused'){appliedStatus(result.error,true);message(result.error,true);return result;}
   if(result.status==='inspected'){
    if(inspectedModel)await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);
@@ -3384,11 +3373,7 @@ async function followInspectedCheck(show:()=>void):Promise<void> {
   await new Promise(resolve=>setTimeout(resolve,3000));
  }
 }
-/**
- * Readings (#108): the pickers' readings of the drawn animation go to `POST /api/readings`, which runs `rigc render`
- * once per reading on the inspected build and on the latest scratch build; the finished job's frames become ticks and
- * its worst frames lines. The Environment block's wind and gravity go along only while its controls are applied.
- */
+/** #108: Render the selected readings on the inspected and scratch builds, then show their ticks and worst frames. */
 async function runReadings(override?:{readings:import('../src/readings.ts').ReadingRequest[]}):Promise<ReadingsJobView|ReadingsRefusal|null> {
  if(!readingsPanel||readingsBusy)return null;
  const chosen=override??readingsPanel.requests();
@@ -3401,15 +3386,11 @@ async function runReadings(override?:{readings:import('../src/readings.ts').Read
  readingsBusy=true;readingsPanel.busy(true);readingsPanel.status(`Running ${chosen.readings.length} reading(s) of ${animation} with rigc render…`,false);
  const started=performance.now();
  try{
-  let job=await api<ReadingsJobView|ReadingsRefusal>('/api/readings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).catch(error=>({status:'refused' as const,error:errorText(error).replace(/^\d+: /,'')}));
-  if(!('id' in job)){const text=(()=>{try{return (JSON.parse(job.error) as {error?:string}).error??job.error;}catch{return job.error;}})();readingsPanel.status(text,true);return {status:'refused',error:text};}
-  while(job.status==='running'){
+  const job=await runReadingsRequest(body,{api,path:'/api/readings',onError:text=>readingsPanel?.status(text,true),onProgress:job=>{
    const done=job.runs.reduce((n,r)=>n+r.results.length,0),total=job.runs.length*job.request.readings.length;
-   readingsPanel.status(`Running readings of ${animation}: ${done} of ${total} done…`,false);
-   await new Promise(resolve=>setTimeout(resolve,800));
-   job=await api<ReadingsJobView>(`/api/readings/${job.id}`);
-  }
-  if(job.status==='failed'){readingsPanel.status(job.error??'READINGS_FAILED',true);return job;}
+   readingsPanel?.status(`Running readings of ${animation}: ${done} of ${total} done…`,false);
+  }});
+  if(job.status!=='done')return job;
   readingsJob=job;readingsPanel.lines(job);renderReadingTicks(true);
   const ticks=job.runs.map(r=>`${r.build} ${r.results.reduce((n,x)=>n+x.frames.length,0)} tick(s)`).join(' · ');
   const refused=job.runs.flatMap(r=>r.results).find(r=>r.status!=='read');

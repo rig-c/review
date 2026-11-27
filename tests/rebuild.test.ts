@@ -9,12 +9,70 @@ import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
 import {compileArgs,firstRefusal,MODELING_PRODUCER_NOT_INSTALLED,remeshArgs,resolveProducer,REMESH_SINCE,versionAtLeast} from '../src/producer.ts';
 import {buildPlan,createRebuilds,designationId,producerInputs,rebuildDir,meshEntryText,parseRebuildRequest,RebuildError} from '../src/rebuild.ts';
-import {appliedRecord,patchAppliedRecord,type PatchJobView,designatedRegions,outcomeLine,patchOutcomeLine,pickPart,runRebuild,runRebuildApply,seedFields,type AnyJobView,type PatchRequestBody,type RebuildJobView,type RebuildRefusal} from '../web/rebuild-client.ts';
+import {appliedRecord,patchAppliedRecord,type PatchJobView,designatedRegions,outcomeLine,patchOutcomeLine,pickPart,runRebuild,runRebuildApply,runRebuildUndo,runReadingsRequest,seedFields,type AnyJobView,type AppliedHistoryView,type PatchRequestBody,type RebuildJobView,type RebuildRefusal} from '../web/rebuild-client.ts';
+import type {ReadingsJobView} from '../web/readings-panel.ts';
 import {chestRowId,type ChestFieldValue} from '../web/chest-regions-tool.ts';
 
 const bust={name:'bust',shape:'circle' as const,cx:414,cy:342,r:50,bone:'chest_jiggle',spacing:13,band:30};
 const config={key:'k',meshes:{topwear:{contour:{tolerance:2,margin:2,spacing:28,maxEdge:45,stray:300,bridges:true,regions:[bust]},r:15,segments:[['chest',[416,230],[416,600]]]},neck:{grid:10}}};
 const REFUSAL='  FAIL  REMESH_TARGET_MESH: refuse — a linked mesh is bound to it (see rig-parts guide REMESH_TARGET_MESH)';
+
+test('#1285 slice 2: Undo polls, streams visible lines and fetches history only after a build',async()=>{
+ const path='/api/compare/b/rebuild',from='applied',id='predecessor';
+ const history:AppliedHistoryView={schema:'rig-review-applied-history/1',depth:0,records:[]};
+ const built={status:'built',id,lines:['started',' ', ' finished '],producerLine:null} as const;
+ const failed={...built,status:'refused',producerLine:'replay refused'};
+ const events:unknown[]=[];
+ let terminal:typeof built|typeof failed=built;
+ let polls=0;
+ const api=async<T>(url:string,init?:RequestInit):Promise<T>=>{
+  events.push(init?[url,init]:url);
+  if(init)return {status:'running',undone:from,job:{id,status:'running',lines:['started']}} as T;
+  if(url===path+'/history')return history as T;
+  return (++polls===1?{id,status:'running',lines:['started',' ']}:terminal) as T;
+ };
+ const options={
+  api,path,onLine:(line:string)=>{events.push(line);},showLines:()=>polls>1,
+  sleep:async(ms:number)=>{events.push(ms);},
+ };
+ const post=[path+'/undo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from})}];
+ const polled=[post,700,path+'/'+id,700,path+'/'+id,'started','…','finished'];
+ expect(await runRebuildUndo(from,options)).toEqual({status:'built',undone:from,job:built,history});
+ expect(events).toEqual([...polled,path+'/history']);
+ events.length=0;polls=0;terminal=failed;
+ expect(await runRebuildUndo(from,options)).toEqual({status:'refused',error:'replay refused',producerLine:'replay refused'});
+ expect(events).toEqual(polled);
+});
+
+test('#1285 slice 2: Readings posts, reports running jobs and unwraps refusals',async()=>{
+ const path='/api/readings';
+ const body={animation:'idle',readings:[],environment:null};
+ const running:ReadingsJobView={
+  id:'sample',status:'running',error:null,request:body,runs:[],
+  environment:{requested:false,flag:false,passed:false},compiler:{package:'rig-c',version:'2.64.1'},
+ };
+ const done:ReadingsJobView={...running,status:'done'};
+ const events:unknown[]=[];
+ let refuse=false,terminal=done;
+ const api=async<T>(url:string,init?:RequestInit):Promise<T>=>{
+  events.push(init?[url,init]:url);
+  if(init&&refuse)throw new Error('422: {"error":"READINGS_REFUSED"}');
+  return (init?running:terminal) as T;
+ };
+ const options={
+  api,path,onProgress:(job:ReadingsJobView)=>{events.push(job);},onError:(text:string)=>{events.push(text);},
+  sleep:async(ms:number)=>{events.push(ms);},
+ };
+ const post=[path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}];
+ expect(await runReadingsRequest(body,options)).toBe(done);
+ expect(events).toEqual([post,running,800,path+'/'+done.id]);
+ events.length=0;refuse=true;
+ expect(await runReadingsRequest(body,options)).toEqual({status:'refused',error:'READINGS_REFUSED'});
+ expect(events).toEqual([post,'READINGS_REFUSED']);
+ events.length=0;refuse=false;terminal={...done,status:'failed'};
+ expect(await runReadingsRequest(body,options)).toBe(terminal);
+ expect(events).toEqual([post,running,800,path+'/'+done.id,'READINGS_FAILED']);
+});
 
 test('#1285: rebuild Apply posts, polls and reports regions and patch outcomes',async()=>{
  const configHash='f'.repeat(64),regions={part:'topwear',regions:[bust],configHash};

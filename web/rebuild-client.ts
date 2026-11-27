@@ -17,6 +17,8 @@ export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,AppliedRetarget,Appli
 import {chestContourFields,chestRegionFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
 import type {InspectedCheckView} from '../src/physics-tuning.ts';
 import {samplesClock,type StageClock} from '../src/frame-clock.ts';
+import type {ReadingsRequest} from '../src/readings.ts';
+import type {ReadingsJobView,ReadingsRefusal} from './readings-panel.ts';
 
 export type RegionEntry=
  |{name:string;shape:'circle';cx:number;cy:number;r:number;bone:string;spacing:number;band:number}
@@ -260,24 +262,31 @@ export const isPatchJob=(job:AnyJobView):job is PatchJobView=>(job as PatchJobVi
 export interface RebuildDeps<B=RebuildRequestBody|PatchRequestBody,J extends AnyJobView=AnyJobView> {post:(body:B)=>Promise<J|RebuildRefusal>;get:(id:string)=>Promise<J>;onLine:(line:string,index:number)=>void;sleep:(ms:number)=>Promise<void>;intervalMs?:number}
 /** One Apply: post, then poll until the job leaves `running`, handing every new line over once, in order. */
 export async function runRebuild<B,J extends AnyJobView>(body:B,deps:RebuildDeps<B,J>):Promise<J|RebuildRefusal> {
- let job=await deps.post(body);if(job.status==='refused'&&!('id' in job))return job;
+ const job=await deps.post(body);
+ return 'id' in job?followRebuild(job,deps):job;
+}
+async function followRebuild<J extends AnyJobView>(job:J,deps:Omit<RebuildDeps<unknown,J>,'post'>,showLines?:()=>boolean):Promise<J> {
  let seen=0;const deliver=(lines:string[])=>{for(;seen<lines.length;seen++)deps.onLine(lines[seen]!,seen);};
- deliver((job as J).lines);
- while(job.status==='running'){await deps.sleep(deps.intervalMs??700);job=await deps.get((job as J).id);deliver(job.lines);}
+ if(!showLines)deliver(job.lines);
+ while(job.status==='running'){
+  await deps.sleep(deps.intervalMs??700);
+  job=await deps.get(job.id);
+  if(!showLines||showLines())deliver(job.lines);
+ }
  return job;
 }
 
+interface JobApi {path:string;api:<T>(path:string,init?:RequestInit)=>Promise<T>;sleep?:(ms:number)=>Promise<void>}
+const wait=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
+const jsonPost=(body:unknown):RequestInit=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 /** Run an Apply against the selected rebuild endpoint and resolve its outcome before the caller updates the stage. */
-export async function runRebuildApply<B,J extends AnyJobView>(body:B,options:{
- path:string;
- api:<T>(path:string,init?:RequestInit)=>Promise<T>;
+export async function runRebuildApply<B,J extends AnyJobView>(body:B,options:JobApi&{
  onLine:RebuildDeps<B,J>['onLine'];
  formatOutcome:(result:J|RebuildRefusal)=>{text:string;error:boolean};
- sleep?:RebuildDeps<B,J>['sleep'];
 }) {
- const {path,api,onLine,formatOutcome,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}=options;
+ const {path,api,onLine,formatOutcome,sleep=wait}=options;
  const result=await runRebuild<B,J>(body,{
-  post:value=>api<J|RebuildRefusal>(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),
+  post:value=>api<J|RebuildRefusal>(path,jsonPost(value)),
   get:id=>api<J>(`${path}/${id}`),
   onLine,sleep,
  });
@@ -411,6 +420,36 @@ export type UndoView=
  |{status:'built';undone:string;job:AnyJobView;history:AppliedHistoryView}
  |{status:'running';undone:string;job:AnyJobView}
  |RebuildRefusal;
+export async function runRebuildUndo(from:string,{path,api,onLine,showLines=()=>true,sleep=wait}:JobApi&{onLine:(line:string)=>void;showLines?:()=>boolean}):Promise<Exclude<UndoView,{status:'running'}>> {
+ const result=await api<UndoView>(`${path}/undo`,jsonPost({from}));
+ if(result.status!=='running')return result;
+ // Replay starts streaming at its first poll. Hidden Compare lines stay pending.
+ const job=await followRebuild(result.job,{get:id=>api<AnyJobView>(`${path}/${id}`),sleep,onLine:line=>onLine(line.trim()||'…')},showLines);
+ if(job.status!=='built')return {status:'refused',error:refusedText(job),producerLine:job.producerLine};
+ return {status:'built',undone:result.undone,job,history:await api<AppliedHistoryView>(`${path}/history`)};
+}
+
+type ReadingsActions={onProgress?:(job:ReadingsJobView)=>void;onError?:(text:string)=>void};
+export async function runReadingsRequest(body:ReadingsRequest,{path,api,onProgress,onError,sleep=wait}:JobApi&ReadingsActions):Promise<ReadingsJobView|ReadingsRefusal> {
+ let job=await api<ReadingsJobView|ReadingsRefusal>(path,jsonPost(body)).catch(error=>{
+  const text=error instanceof Error?error.message:String(error);
+  return {status:'refused' as const,error:text.replace(/^\d+: /,'')};
+ });
+ if(!('id' in job)){
+  let {error}=job;
+  try{error=(JSON.parse(error) as {error?:string}).error??error;}catch{/* The response may be plain text. */}
+  onError?.(error);
+  return {status:'refused',error};
+ }
+ while(job.status==='running'){
+  onProgress?.(job);
+  await sleep(800);
+  job=await api<ReadingsJobView>(`${path}/${job.id}`);
+ }
+ if(job.status==='failed')onError?.(job.error??'READINGS_FAILED');
+ return job;
+}
+
 /** #166: the applied record a job carries into `context.applied` (the same shapes each Apply records). */
 export function recordFor(job:AnyJobView):AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation {
  const kind=(job as {kind?:string}).kind;
