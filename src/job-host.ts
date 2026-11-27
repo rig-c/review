@@ -41,7 +41,6 @@ export type {
   JobChestLandmarkValue, JobPublishedChestLandmark, JobChestLandmarkEdit, JobChestLandmarksAct, JobCommentOnlyAct,
   JobCommentContext, JobContextComment, JobContextCommentsAct, CompareCommentsSession, PartsCommentsVerdict,
 } from './job-contract.ts';
-export {prepareJobRecordAct} from './job-act.ts';
 export {
   JOB_CAPABILITIES,
   JOB_API_SCHEMA,
@@ -94,7 +93,6 @@ export type {
   JobPartOutcome,
   JobReviewStage,
   JobActValues,
-  JobUIActValues,
   JobActSources,
   JobAct,
   JobActV3,
@@ -106,7 +104,6 @@ export type {
   JobPanelComposition,
   PanelComponent,
   JobRigStill,
-  JobRigCapture,
   JobSubject,
   JobPendingAsk,
   JobPendingAskV3,
@@ -169,15 +166,11 @@ export type {
   JobRecordSource,
   JobRecordSourceBase,
   JobRecordSubject,
-  JobRecordUIActValues,
-  JobRecordUISubmission,
   JobResponseValues,
   JobResponseValuesV3,
   JobApiResponse,
   JobApiResponseV3,
   JobSourceV3,
-  JobUISubmission,
-  JobUISubmissionV3,
   JobDisplayAcknowledgment,
   JobDisplayReceipt,
   JobDisplayPublication,
@@ -219,12 +212,14 @@ export type {
   RecordSource,
   RecordSourceBase,
   RecordSubject,
-  RecordUIActValues,
-  RecordUISubmission,
   ResponseValuesV3,
   SourceV3,
   StatusV3,
-  UISubmissionV3,
+} from './job-contract.ts';
+
+export type {
+  JobCommentUISubmission as JobUISubmissionV3,
+  JobCommentUISubmission as UISubmissionV3,
 } from './job-contract.ts';
 
 export type {JobCapabilities, JobModelSourceBinding, JobModelReviewValue} from './job-contract.ts';

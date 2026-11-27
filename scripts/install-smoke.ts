@@ -73,18 +73,18 @@ import {
  type JobPartsManifestPath, type JobPartImagePath, type JobPartsIdentity,
  type JobPartsRole, type JobPartsFileReference, type JobPartsEnumerator, type JobPreviousDraft, type JobSelector,
  type JobSourceBinding, type JobReviewerBinding, type JobHumanAuthority, type JobVerdict,
- type JobPartOutcome, type JobReviewStage, type JobActValues, type JobUIActValues,
+ type JobPartOutcome, type JobReviewStage, type JobActValues,
  type JobActSources, type JobAct, type JobSubject, type JobPendingAsk,
  type JobInterviewJson, type JobInterviewRecord, type JobInterviewDiagnostic, type JobInterviewDiagnostics,
  type JobPublication,
  type JobStatus, type JobPublishRequest, type JobNextRequest,
  type JobCloseRequest, type JobAgentRequest, type JobFetchActRequest, type JobErrorCode,
  type JobFailure, type JobResult, type JobEvent, type JobNextValue, type JobResponseValues,
- type JobApiResponse, type JobUISubmission, type JobDisplayAcknowledgment, type JobDisplayReceipt,
+ type JobApiResponse, type JobDisplayAcknowledgment, type JobDisplayReceipt,
  type JobDisplayPublication, type JobHostPorts, type JobConsumerGrant,
  type JobRecordAct, type JobActV3, type JobPlanSource, type JobFetchActRequestV3, type JobRecordHostHooks,
  type JobCapabilitiesV3,
- type JobRecordReopenSubject, type JobRecordReopenValue, type JobUISubmissionV3,
+ type JobRecordReopenSubject, type JobRecordReopenValue, type JobUISubmissionV3, type UISubmissionV3,
  type RecordSignoffStage, type JobRecordSignoffSubject, type JobRecordSignoffValue,
  type JobComment, type JobCommentAnchor, type JobCommentFeedbackAnchor, type JobCommentPartsAnchor, type JobCommentImageAnchor,
  type JobCommentsAct, type JobCommentsActValues, type ReviewCommentsSession, type CompareCommentsSession, type PartsCommentsVerdict,
@@ -104,16 +104,16 @@ export type PublicTypes = [
  JobAskId, JobActId, JobCursor, JobFileIdentity, JobPlanStepIdentity, JobPlanIdentity,
  JobPartsManifestPath, JobPartImagePath, JobPartsIdentity, JobPartsRole, JobPartsFileReference, JobPartsEnumerator, JobPreviousDraft, JobSelector, JobSourceBinding,
  JobReviewerBinding, JobHumanAuthority, JobVerdict, JobPartOutcome, JobReviewStage,
- JobActValues, JobUIActValues, JobActSources, JobAct, JobSubject, JobPendingAsk,
+ JobActValues, JobActSources, JobAct, JobSubject, JobPendingAsk,
  JobInterviewJson, JobInterviewRecord, JobInterviewDiagnostic, JobInterviewDiagnostics,
  JobPublication, JobStatus, JobPublishRequest, JobNextRequest,
  JobCloseRequest, JobAgentRequest, JobFetchActRequest, JobErrorCode, JobFailure,
  JobResult<JobStatus>, JobEvent, JobNextValue, JobResponseValues, JobApiResponse,
- JobUISubmission, JobDisplayAcknowledgment, JobDisplayReceipt, JobDisplayPublication,
+ JobDisplayAcknowledgment, JobDisplayReceipt, JobDisplayPublication,
  JobHostPorts, JobConsumerGrant,
  JobRecordAct, JobActV3, JobPlanSource, JobFetchActRequestV3, JobRecordHostHooks,
  JobCapabilitiesV3,
- JobRecordReopenSubject, JobRecordReopenValue, JobUISubmissionV3,
+ JobRecordReopenSubject, JobRecordReopenValue, JobUISubmissionV3, UISubmissionV3,
  JobComment, JobCommentAnchor, JobCommentFeedbackAnchor, JobCommentPartsAnchor, JobCommentImageAnchor,
  JobCommentsAct, JobCommentsActValues, ReviewCommentsSession, CompareCommentsSession, PartsCommentsVerdict,
  JobCommentContext, JobContextComment, JobContextCommentsAct,
@@ -124,6 +124,9 @@ export type PublicTypes = [
 // Review #713: JobAct admits fresh act@6 comments acts from the UI writers.
 export type JobActAdmitsComments = JobCommentsAct extends JobAct ? true : never;
 const jobActAdmitsComments: JobActAdmitsComments = true;
+// Verify that both installed V3 submission names admit only comments.
+type PublicSubmissionKind = JobUISubmissionV3['kind'] | UISubmissionV3['kind'];
+const publicSubmissionIsCommentOnly: PublicSubmissionKind extends 'comments' ? true : never = true;
 // Review 5.0.0 removes the ask-batch capability from the published contract.
 export type CapabilitiesOmitAskBatch = 'askBatch' extends keyof JobCapabilitiesV3 ? never : true;
 const capabilitiesOmitAskBatch: CapabilitiesOmitAskBatch = true;
@@ -131,10 +134,11 @@ function assert(ok: unknown, name: string): asserts ok {
  if (!ok) throw new Error('SMOKE_PUBLIC_HOST_' + name);
 }
 assert(jobActAdmitsComments, 'JOB_ACT_ADMITS_COMMENTS');
+assert(publicSubmissionIsCommentOnly, 'UI_SUBMISSION_IS_COMMENT_ONLY');
 assert(capabilitiesOmitAskBatch, 'CAPABILITIES_OMIT_ASK_BATCH');
 const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID', 'JOB_PARTS_ENUMERATOR_RANGE',
  'JOB_PREVIOUS_DRAFT_SCHEMA', 'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
- 'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordAct', 'prepareJobRecordSource',
+ 'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordSource',
  'JOB_COMMENTS_ACT_SCHEMA', 'REVIEW_COMMENTS_SESSION_SCHEMA', 'REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA',
  'PARTS_COMMENTS_VERDICT_SCHEMA', 'parseCommentsAct', 'projectComments', 'parseCommentsSession',
  'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'projectSelectedCommentsFeedback',
