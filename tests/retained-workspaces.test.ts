@@ -1,4 +1,7 @@
 import {expect, test} from 'bun:test';
+import {readFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {entryHtml, playBuildConditions} from '../src/build.ts';
 import {mountOwnerWorkspace} from '../web/owner-workspace.ts';
 import {WORKSPACE_READY_SCHEMA, WORKSPACE_SCHEMA, WORKSPACE_VISIBILITY_SCHEMA, WORKSPACE_TARGET_DOMAIN} from '../src/open-workspace-contract.ts';
 import {getLanguagePreference, getLinkLanguage, setLanguagePreference, setLinkLanguage, t} from '../web/i18n.ts';
@@ -179,3 +182,75 @@ for (const kind of ['owner'] as const) {
     } finally {refused.close();}
   });
 }
+
+test('#655 slice 2: main boot mounts owner workspace only with data-review-screen="workspace" and never double mounts', async () => {
+  const mainPath = fileURLToPath(new URL('../web/main.ts', import.meta.url));
+  const anchor = 'export function mountRigScreen():{dispose():void} {';
+  const mainSource = await readFile(mainPath, 'utf8');
+  expect(mainSource.split(anchor)).toHaveLength(2);
+  const conditions = playBuildConditions();
+  const built = await Bun.build({
+    entrypoints: [mainPath], target: 'browser', format: 'esm', ...(conditions.length ? {conditions} : {}),
+    plugins: [{name: 'boot-rig-probe', setup(build) {
+      build.onLoad({filter: /[/\\]web[/\\]main\.ts$/}, () => ({
+        loader: 'ts',
+        contents: mainSource.replace(anchor, anchor + '\nif ((globalThis as any).__rigMountProbe) return (globalThis as any).__rigMountProbe();'),
+      }));
+    }}],
+  });
+  expect(built.success).toBe(true);
+  const bundleCode = await built.outputs[0]!.text();
+  let run = 0;
+
+  // With the workspace marker on #app at /, main's boot mounts the owner workspace once and does not mount the rig screen.
+  const markedHtml = await entryHtml('workspace');
+  expect(markedHtml).toContain('<div id="app" data-review-screen="workspace"></div>');
+  {
+    const h = await host('owner');
+    let rigMounts = 0;
+    const prevProbe = Object.getOwnPropertyDescriptor(globalThis, '__rigMountProbe');
+    Object.defineProperty(globalThis, '__rigMountProbe', {configurable: true, writable: true, value: () => {rigMounts++; return {dispose() {}};}});
+    try {
+      const app = (globalThis as any).document.createElement('div');
+      app.id = 'app'; app.dataset.reviewScreen = 'workspace'; app.setAttribute('data-review-screen', 'workspace');
+      h.root.append(app);
+      await import('data:text/javascript;base64,' + Buffer.from(`${bundleCode}\n// boot=${++run}`).toString('base64'));
+      await h.waitForFrame();
+      expect(rigMounts).toBe(0);
+      expect(app.children.map((node: any) => [node.tagName, node.className])).toEqual([
+        ['HEADER', 'owner-header'], ['NAV', 'owner-list'], ['MAIN', 'owner-stage'],
+      ]);
+      expect(h.frames).toHaveLength(1);
+      h.events.dispatchEvent(new Event('pagehide'));
+    } finally {
+      if (prevProbe) Object.defineProperty(globalThis, '__rigMountProbe', prevProbe);
+      else Reflect.deleteProperty(globalThis, '__rigMountProbe');
+      h.close();
+    }
+  }
+
+  // Without the marker at /, neither owner-workspace import nor main's boot mounts the owner workspace.
+  const unmarkedHtml = await entryHtml('rig');
+  expect(unmarkedHtml).toContain('<div id="app"></div>');
+  {
+    const h = await host('owner');
+    let rigMounts = 0;
+    const prevProbe = Object.getOwnPropertyDescriptor(globalThis, '__rigMountProbe');
+    Object.defineProperty(globalThis, '__rigMountProbe', {configurable: true, writable: true, value: () => {rigMounts++; return {dispose() {}};}});
+    try {
+      const app = (globalThis as any).document.createElement('div');
+      app.id = 'app';
+      h.root.append(app);
+      await import('data:text/javascript;base64,' + Buffer.from(`${bundleCode}\n// boot=${++run}`).toString('base64'));
+      await h.settle();
+      expect(app.children).toHaveLength(0);
+      expect(h.requests).toHaveLength(0);
+      expect(h.sockets).toHaveLength(0);
+      expect(rigMounts).toBe(1);
+    } finally {
+      if (prevProbe) Object.defineProperty(globalThis, '__rigMountProbe', prevProbe);
+      else Reflect.deleteProperty(globalThis, '__rigMountProbe');
+      h.close();
+    }
+  }
+});
