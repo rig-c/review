@@ -179,7 +179,10 @@ test('the page records its evaluated environment; physics preview is explicit an
  expect(panel).toContain('Clear resumes authored values without resetting integrated history');
  const preview=await readFile(new URL('../web/preview.ts',import.meta.url),'utf8');
  for(const method of ['setPhysicsParameters','readPhysicsParameters','clearPhysicsParameters'])expect(preview).toContain(`.${method}(`);
- expect(main).toContain("makePatch(status,ops,{cmd:'rig'})");
- expect(main).toContain('const result=await applyPatch(patch,world);');
- expect(main).toContain('physicsPanel?.clearPreview();');
+ const rebuild=await readFile(new URL('../web/rebuild-client.ts',import.meta.url),'utf8');
+ const apply=main.slice(main.indexOf('async function applyPhysics('),main.indexOf('\nfunction inspectedCheckView('));
+ expect(apply).toContain("preparePanelPatch(status, ops, 'PHYSICS_NOTHING_PENDING:");
+ expect(rebuild).toContain("makePatch(status,ops,{cmd:'rig',args})");
+ expect(apply).toContain('()=>applyPatch(patch,world)');
+ expect(apply).toContain('physicsPanel?.clearPreview();');
 });
