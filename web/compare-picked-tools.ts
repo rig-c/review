@@ -42,10 +42,10 @@ import { bindRequirementsPanel, type RequirementsCatalogView, type RequirementsJ
 import { bindRetargetPanel, type PoseMap, type RetargetPanel } from './retarget-panel.ts';
 import type { RetargetFlags } from '../src/retarget.ts';
 import {
-  appliedCheckState, renderAppliedHistory, isPatchJob, recordFor, refusedText, restoredOutcomeForJob, retargetStage, undoControl,
+  appliedCheckState, renderAppliedHistory, isPatchJob, recordFor, restoredOutcomeForJob, retargetStage, undoControl,
   animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, chestSeed, designatedRegions, handoffText,
   landmarksRequest, noContourReason, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
-  pickBustPart, pickPart, runRebuildApply, seedFields, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
+  pickBustPart, pickPart, runRebuildApply, runRebuildUndo, runReadingsRequest, seedFields, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
   type AnimationJobView, type AnimationRequestBody, type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
   type AppliedRecord, type AppliedRetarget, type DeltaRequestBody, type ConfigPatch,
   type PatchJobView, type RebuildRefusal, type RebuildRequestBody, type RebuildStatusView,
@@ -1453,24 +1453,9 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     if (rebuildBusy || host.readOnly() || !from || !state.inspectedModel) return null;
     rebuildBusy = true; rebuildState(); appliedStatus('Undoing the last Apply…');
     try {
-      let result = await host.api<UndoView>(`${sideApiPrefix(side)}/rebuild/undo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from }) });
-      if (result.status === 'running') {
-        let job = result.job as AnyJobView; const undone = result.undone; let seen = 0;
-        while (job.status === 'running') {
-          await new Promise(resolve => setTimeout(resolve, 700));
-          job = await host.api<AnyJobView>(`${sideApiPrefix(side)}/rebuild/${job.id}`);
-          if (pickedSide === side) {
-            for (; seen < job.lines.length; seen++) appliedStatus(job.lines[seen]!.trim() || '…');
-          }
-        }
-        if (job.status !== 'built') {
-          const textMsg = refusedText(job);
-          if (pickedSide === side) appliedStatus(textMsg, true);
-          host.message(textMsg, true);
-          return { status: 'refused', error: textMsg, producerLine: job.producerLine };
-        }
-        result = { status: 'built', undone, job, history: await host.api<AppliedHistoryView>(`${sideApiPrefix(side)}/rebuild/history`) };
-      }
+      const result = await runRebuildUndo(from, { api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`,
+        onLine: appliedStatus, showLines: () => pickedSide === side,
+      });
       if (result.status === 'refused') {
         if (pickedSide === side) appliedStatus(result.error, true);
         host.message(result.error, true);
@@ -1972,20 +1957,10 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     readingsBusy = true; readingsPanel.busy(true); readingsPanel.status(`Running ${chosen.readings.length} reading(s) of ${animation} on Build ${side.toUpperCase()}…`, false);
     const started = performance.now();
     try {
-      let job = await host.api<ReadingsJobView | ReadingsRefusal>(`${sideApiPrefix(side)}/readings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(error => ({ status: 'refused' as const, error: errorText(error).replace(/^\d+: /, '') }));
-      if (!('id' in job)) {
-        const textMsg = (() => { try { return (JSON.parse(job.error) as { error?: string }).error ?? job.error; } catch { return job.error; } })();
-        if (pickedSide === side) readingsPanel.status(textMsg, true);
-        return { status: 'refused', error: textMsg };
-      }
-      while (job.status === 'running') {
-        await new Promise(resolve => setTimeout(resolve, 800));
-        job = await host.api<ReadingsJobView>(`${sideApiPrefix(side)}/readings/${job.id}`);
-      }
-      if (job.status === 'failed') {
-        if (pickedSide === side) readingsPanel.status(job.error ?? 'READINGS_FAILED', true);
-        return job;
-      }
+      const job = await runReadingsRequest(body, { api: host.api.bind(host), path: `${sideApiPrefix(side)}/readings`,
+        onError: text => { if (pickedSide === side) readingsPanel?.status(text, true); },
+      });
+      if (job.status !== 'done') return job;
       sides[side].readingsJob = job;
       if (pickedSide === side) {
         readingsPanel.lines(job);
