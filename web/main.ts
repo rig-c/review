@@ -33,14 +33,14 @@ import {mountViewportPair} from './viewport-pair.ts';
 import {createPreviousBuildView} from './previous-build-view.ts';
 import {rendererStatus} from './renderer-status.ts';
 import {panelMake,createRigLayerControls,createViewControls,inspectionViewSwitch,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,idlePreviewOnOpen,bookmarkCameraKept,bindLayerShortcuts,describeLayerToggles,type ViewPoint,type ViewSwitchGroup} from './view-controls.ts';
-import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
+import {RigOverlays,type OverlayCircle,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
 import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
 import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
 import {densityField,densityPath} from '../src/density-strip.ts';
 import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,setEntryValue,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
 import {worstLine} from '../src/readings.ts';
 import {chestOverlayPolygons,chestInputIds,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
-import {bindChestEditor,canvasToCrop,bustLabel,bustSides,chestField,chestPoseOffset,LANDMARKS,landmarkInputId,posedChestMapping,rowShape,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
+import {bindChestEditor,canvasToCrop,bustLabel,bustSides,chestField,chestMarkers as readChestMarkers,chestPoseOffset,LANDMARKS,posedChestMapping,rowShape,type ChestEditor} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
 import {readSetupPose,modelBoneNames} from './setup-pose.ts';
@@ -74,11 +74,11 @@ import { frameAtTime, lastFrame as lastProducerFrame, rigPaneLabel, timeAtFrame,
 import { feedbackLastFrame, feedbackTargetNames, type FeedbackCatalog } from '../src/feedback-validation.ts';
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, targetLabel } from './report-view.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
-import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPacket,dueJolts,dragImpulse,loadModelDocument,environmentContext,environmentJson,type JoltStep,type WindSnapshot,type WindState} from '../src/environment.ts';
+import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPacket,dueJolts,dragImpulse,loadModelDocument,environmentContext,environmentJson,type JoltStep,type WindSnapshot} from '../src/environment.ts';
 import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {bindReadingsPanel,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
 import {READINGS_SCHEMA,readingSeekTime,type ReadingsContext} from '../src/readings.ts';
-import {windClockOnMove,type ClipMove,environmentCheckRows,scheduleContext,worldExport,type EnvironmentCheckView,type WorldExport} from './environment-world.ts';
+import {bindEnvironmentInputs,windClockOnMove,type ClipMove,environmentCheckRows,scheduleContext,worldExport,type EnvironmentCheckView,type StageWorld,type WorldExport} from './environment-world.ts';
 import {barLine,beforeLine} from '../src/physics-tuning.ts';
 import {bindRequirementsPanel,type RequirementsCatalogView,type RequirementsJobView,type RequirementsPanel,type RequirementsRefusal} from './requirements-panel.ts';
 import {patchRoute} from '../src/retune-route.ts';
@@ -309,6 +309,7 @@ let selectedReportTarget: number | undefined;
 // Animate's Environment block: the wind clock advances only with the steps the player takes.
 const wind=createWindModel();
 let joltQueue:JoltStep[]=[],environmentNote='';
+const {environmentApplied,gravityValue,useWorld,stageWorld,syncEnvironmentInputs}=bindEnvironmentInputs(input,wind,()=>joltQueue,renderEnvironment);
 /** Animate · Physics tuning (#103): the panel, the inspected model document it maps against, and the check lines of the build on the stage (null: the inspected build, which review has not checked). */
 /** Animate · Idle tracks (#104): the panel; its preview drives `player.adjust`. */
 let idlePanel:IdlePanel|null=null;
@@ -323,8 +324,6 @@ let physicsPanel:PhysicsPanel|null=null,inspectedDocument:unknown=null,inspected
 /** Animate · Readings (#108): the block, the last finished job (its ticks and worst lines), and the run in flight. */
 let requirementsPanel:RequirementsPanel|null=null,retargetPanel:RetargetPanel|null=null;
 let readingsPanel:ReadingsPanel|null=null,readingsJob:ReadingsJobView|null=null,readingsBusy=false,readingsTickKey='';
-/** The world an Apply's reload resumes: wind (clock and active pulse), pending jolts, whether the controls are engaged, gravity. */
-interface StageWorld {wind:WindState;jolts:JoltStep[];applied:boolean;gravity:number}
 
 function message(value: string, error = false, footerOnly = false, diagnostic?: string): void {
   if (!error) text('message', value);
@@ -2695,15 +2694,7 @@ function chestCircles():OverlayCircle[]{
  const overlap=!!r&&!!l&&r.r+l.r>Math.hypot(l.cx-r.cx,l.cy-r.cy);
  return rows.flatMap(({side,row,circle})=>circle?[{center:mapping.toWorld(circle.cx,circle.cy),r:circle.r,...(circle.ry===undefined?{}:{ry:circle.ry}),...(circle.clip===undefined?{}:{clipX:mapping.toWorld(circle.clip,circle.cy).x}),band:circle.band,label:bustLabel(side,circle),labelRow:row,handles:true,flash:chestEditor!.flashing(side),colors:colors(row,overlap)}]:[]);
 }
-/** Landmark markers (#105) in Landmarks mode: apexes in the R / L colours, the cleavage with guides to both apexes. */
-function chestMarkers():OverlayMarker[]{
- const mapping=activeChestMapping();if(!mapping.available||!chestEditor?.active()||chestEditor.mode()!=='landmarks')return [];
- const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim(),armed=chestEditor.armed();
- const at=(key:LandmarkKey)=>{const x=Number(input(landmarkInputId(key,'x')).value.trim()||NaN),y=Number(input(landmarkInputId(key,'y')).value.trim()||NaN);return Number.isFinite(x)&&Number.isFinite(y)?mapping.toWorld(x,y):null;};
- const apexes=[at('apex_r'),at('apex_l')].filter((p):p is {x:number;y:number}=>!!p);
- return LANDMARKS.flatMap(({key,tag})=>{const p=at(key);if(!p)return [];const stroke=token(key==='apex_r'?'--rv-bust-r':key==='apex_l'?'--rv-bust-l':'--rv-landmark');
-  return [{at:p,tag,active:armed===key,colors:{stroke,fill:stroke,ink:token('--rv-landmark-ink'),labelBg:token('--rv-bust-label-bg')},...(key==='cleavage'?{guideTo:apexes}:{})}];});
-}
+function chestMarkers(){return readChestMarkers(activeChestMapping(),chestEditor,input);}
 function populateChestBones():void {
  const bones=activeSetupBones();
  const list=document.getElementById('lm-bones');if(list){list.replaceChildren();for(const name of bones??[])list.append(option(name,name));}
@@ -2741,8 +2732,6 @@ async function exportChest():Promise<void> {
 }
 /** Animate · Environment. Inspection only: the player is the solver, nothing is written to the model or motion. */
 const environmentInputs=['wind-base','wind-breeze','wind-gust','wind-repeat','wind-gust-peak','wind-gust-duration','gravity','jolt','physics-reset','environment-use','environment-export','environment-check'];
-function environmentApplied():boolean{return input('environment-applied').checked;}
-function gravityValue():number{return Number(input('gravity').value);}
 /** Called from `tick` right before the fixed playback steps (#346): the gust clock is the stepped time, so a paused player freezes it. */
 function stepEnvironment(dt:number):void {
  if(!player)return;
@@ -2761,12 +2750,6 @@ function renderEnvironment():void {
  text('wind-base-label',input('wind-base').value);text('gravity-label',gravityValue().toFixed(2));
  renderSchedule();
 }
-/**
- * #112 · Use for readings: the controls as the exported `rigc-environment/1` schedule (src/environment-schedule.ts). While
- * on, readings send the drawn clip's schedule, Apply's check reads the checked clip's (`idle` when the rig has one, as
- * `rig-parts check` renders it), and the wind clock restarts with the clip so the person watches the world rigc reads.
- */
-function useWorld():boolean{return input('environment-use').checked&&environmentApplied();}
 function clipDuration(name:string):number{return assets?.animations.find(item=>item.name===name)?.duration??data.manifest.animations.find(item=>item.id===name)?.duration??0;}
 /** The clip `rig-parts check` poses its idle readings over: `idle` when the rig has one, else the drawn clip. */
 function checkAnimation():string{return assets?.animations.some(item=>item.name==='idle')?'idle':animation;}
@@ -2815,9 +2798,6 @@ async function runEnvironmentCheck():Promise<EnvironmentCheckView|{status:'refus
 function engage(change:()=>void):void {
  try{change();input('environment-applied').checked=true;environmentNote='';applyEnvironment();persistence?.save();}
  catch(error){message(`Environment unchanged: ${errorText(error)}`,true);syncEnvironmentInputs();}
-}
-function syncEnvironmentInputs():void {
- const s=wind.snapshot();input('wind-base').value=String(s.base);input('wind-breeze').checked=s.breeze;input('wind-repeat').checked=s.repeat;input('wind-gust-peak').value=String(s.gustPeak);input('wind-gust-duration').value=String(s.gustDuration);renderEnvironment();
 }
 function bindEnvironment():void {
  input('wind-base').oninput=()=>engage(()=>wind.setBase(Number(input('wind-base').value)));
@@ -3338,8 +3318,6 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  },
  stage:()=>({modelHash:stageModelHash,inspectedHash:inspectedModel?.sha256??null,applied:appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,animation,time:player?.time??time,playing,busy:rebuildBusy}),
 };
-/** The world as it stands now: what a physics Apply's reload resumes. */
-function stageWorld():StageWorld {return {wind:wind.state(),jolts:joltQueue.map(step=>({...step})),applied:environmentApplied(),gravity:gravityValue()};}
 /**
  * Physics Apply (#103): the pending ops become one config patch (`rig`, then check) against the handoff config; the
  * scratch build reloads under the world Apply was pressed in, and the readout shows the two check lines before (the

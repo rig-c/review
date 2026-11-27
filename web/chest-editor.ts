@@ -9,7 +9,7 @@ import {BUST_DEFAULTS,deriveBust,parseBustSpec,type BustDerivation,type BustLand
 import type {JobChestLandmarkValue,JobPublishedChestLandmark} from '../src/job-contract.ts';
 import {canonicalJson} from '../src/canonical-json.ts';
 import {chestRowId,type ChestFieldReader,type ChestFieldValue} from './chest-regions-tool.ts';
-import {projectCircle,type OverlayPoint,type OverlayProject} from './rig-overlays.ts';
+import {projectCircle,type OverlayMarker,type OverlayPoint,type OverlayProject} from './rig-overlays.ts';
 import {textEntryFocused} from './view-controls.ts';
 import {onLanguageChange,setSourceAttribute,setSourceText,t,tr} from './i18n.ts';
 
@@ -144,6 +144,21 @@ export type ChestMode='circles'|'landmarks';
 export const LANDMARKS=[{key:'apex_r',tag:"Right apex (character's right, image left)"},{key:'apex_l',tag:"Left apex (character's left, image right)"},{key:'cleavage',tag:'Cleavage'}] as const;
 export type LandmarkKey=typeof LANDMARKS[number]['key'];
 export const landmarkInputId=(key:LandmarkKey,axis:'x'|'y')=>`lm-${key}-${axis}`;
+/** Landmark markers (#105) in Landmarks mode: apexes in the R / L colours, the cleavage with guides to both apexes. */
+export function chestMarkers(mapping:CropWorldMapping,chestEditor:Pick<ChestEditor,'active'|'mode'|'armed'>|null,input:(id:string)=>Pick<HTMLInputElement,'value'>):OverlayMarker[]{
+ if(!mapping.available||!chestEditor?.active()||chestEditor.mode()!=='landmarks')return [];
+ const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim(),armed=chestEditor.armed();
+ const at=(key:LandmarkKey)=>{
+  const x=Number(input(landmarkInputId(key,'x')).value.trim()||NaN),y=Number(input(landmarkInputId(key,'y')).value.trim()||NaN);
+  return Number.isFinite(x)&&Number.isFinite(y)?mapping.toWorld(x,y):null;
+ };
+ const apexes=[at('apex_r'),at('apex_l')].filter((p):p is {x:number;y:number}=>!!p);
+ return LANDMARKS.flatMap(({key,tag})=>{
+  const p=at(key);if(!p)return [];
+  const stroke=token(key==='apex_r'?'--rv-bust-r':key==='apex_l'?'--rv-bust-l':'--rv-landmark');
+  return [{at:p,tag,active:armed===key,colors:{stroke,fill:stroke,ink:token('--rv-landmark-ink'),labelBg:token('--rv-bust-label-bg')},...(key==='cleavage'?{guideTo:apexes}:{})}];
+ });
+}
 /** Slider ranges; the producer's defaults sit inside them. */
 export const LANDMARK_SLIDERS={alpha:{min:0.05,max:0.95,step:0.01},clearance:{min:0,max:40,step:0.1}} as const;
 export type LandmarkRead={spec:BustSpec;derived:BustDerivation}|{missing:LandmarkKey[]}|{error:string};

@@ -13,7 +13,48 @@ import {freshSession} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
 import {environmentCheckArgs,type EnvironmentCheckJob} from '../src/environment-check.ts';
 import {parseAppliedContext} from '../src/applied-context.ts';
-import {environmentCheckRows,restartsWindClock,windClockOnMove,scheduleContext,worldExport,ENVIRONMENT_NOT_APPLIED} from '../web/environment-world.ts';
+import {bindEnvironmentInputs,environmentCheckRows,restartsWindClock,windClockOnMove,scheduleContext,worldExport,ENVIRONMENT_NOT_APPLIED} from '../web/environment-world.ts';
+
+test('#1285 slice 3: world controls use the caller’s lookup, wind and current jolt queue',()=>{
+ const fields=new Map<string,{value:string;checked:boolean}>();
+ for(const id of ['environment-use','environment-applied','gravity','wind-base','wind-breeze','wind-repeat','wind-gust-peak','wind-gust-duration']){
+  fields.set(id,{value:'',checked:false});
+ }
+ const missing=new Error('missing control from this screen');
+ const reads:string[]=[];
+ const wind=createWindModel();
+ wind.restore({version:1,base:6,breeze:true,repeat:true,gustPeak:12,gustDuration:.6});
+ let jolts=[{at:1,x:2,y:3}];
+ const get=(id:string)=>{
+  reads.push(id);
+  const field=fields.get(id);
+  if(!field)throw missing;
+  return field;
+ };
+ const controls=bindEnvironmentInputs(get,wind,()=>jolts,()=>reads.push('render'));
+ expect(controls.useWorld()).toBe(false);
+ expect(reads).toEqual(['environment-use']);
+ get('environment-use').checked=true;
+ get('environment-applied').checked=true;
+ get('gravity').value='.75';
+ expect(controls.useWorld()).toBe(true);
+ expect(controls.environmentApplied()).toBe(true);
+ expect(controls.gravityValue()).toBe(.75);
+ const saved=controls.stageWorld();
+ expect(saved).toEqual({wind:wind.state(),jolts,applied:true,gravity:.75});
+ expect(saved.jolts[0]).not.toBe(jolts[0]);
+ jolts=[];
+ expect(controls.stageWorld().jolts).toEqual([]);
+ reads.length=0;
+ controls.syncEnvironmentInputs();
+ expect(reads).toEqual(['wind-base','wind-breeze','wind-repeat','wind-gust-peak','wind-gust-duration','render']);
+ expect([...fields.values()].slice(3)).toEqual([
+  {value:'6',checked:false},{value:'',checked:true},{value:'',checked:true},
+  {value:'12',checked:false},{value:'0.6',checked:false},
+ ]);
+ fields.delete('environment-applied');
+ expect(controls.environmentApplied).toThrow(missing);
+});
 
 /**
  * #112. Bar 1: the exported schedule, read the way rigc reads it (each step set before the physics step that ends on

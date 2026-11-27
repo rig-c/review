@@ -298,7 +298,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
  const {bindInspectorTabs}=await import('../web/view-controls.ts');
  const {modelBoneNames,readSetupPose}=await import('../web/setup-pose.ts');
  const {chestInputIds,chestRegionRows,chestRowId,evaluateChestForm}=await import('../web/chest-regions-tool.ts');
- const {LANDMARKS,chestField}=await import('../web/chest-editor.ts');
+ const {LANDMARKS,chestField,chestMarkers:readChestMarkers}=await import('../web/chest-editor.ts');
  const {cropWorldMapping}=await import('../src/chest-regions.ts');
  const {meshEditSource}=await import('../web/mesh-editor.ts');
  const {
@@ -913,6 +913,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    evaluateChestForm,
    chestInputIds,
    chestField,
+   readChestMarkers,
    chestRegionRows,
    chestRowId,
    LANDMARKS,
