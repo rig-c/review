@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {parseCommentsAct} from '../../src/job-api.ts';
+import {parseCommentsAct,requestDigest} from '../../src/job-api.ts';
 import type {JobCommentsAct,JobEventV3,JobPendingAsk} from '../../src/job-contract.ts';
 import type {JobSession} from '../../src/job-session.ts';
 import type {JobStore} from '../../src/job-store.ts';
@@ -10,11 +10,12 @@ type DecisionRows = {
   asks:Record<string,JobPendingAsk>;
   acts:Record<string,JobCommentsAct>;
   events:JobEventV3[];
+  replays:Record<string,{digest:string;value:Verdict}>;
 };
 
 /** Place a base-writer act on the disposable publication used by an inspection test. */
 export function seedHistoricalDecisionAct(session:JobSession, ask:JobPendingAsk, template:unknown,
-  value?:Verdict['value']):Verdict {
+  value?:Verdict['value'], request?:{pageId:string;submissionId:string}):Verdict {
   const recorded = parseCommentsAct(template);
   if(recorded.kind!=='review-verdict'&&recorded.kind!=='parts-verdict')throw new Error('Expected a historical verdict fixture');
   const act = parseCommentsAct({...recorded,actId:randomUUID(),jobId:session.jobId,askId:ask.askId,
@@ -23,6 +24,7 @@ export function seedHistoricalDecisionAct(session:JobSession, ask:JobPendingAsk,
   store.update(session.jobId,null,({data})=>{
     data.acts[act.actId]=act;
     data.asks[ask.askId]={...ask,status:'answered'};
+    if(request)data.replays['ui:'+request.pageId+':'+request.submissionId]={digest:requestDigest(request),value:act};
     data.events.push({type:'act',cursor:randomUUID(),jobId:session.jobId,generation:++data.generation,act});
     return {data};
   });
