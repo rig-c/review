@@ -20,16 +20,21 @@ const REFUSAL='  FAIL  REMESH_TARGET_MESH: refuse — a linked mesh is bound to 
 test('#1285 slice 2: Undo polls, streams visible lines and fetches history only after a build',async()=>{
  const path='/api/compare/b/rebuild',from='applied',id='predecessor';
  const history:AppliedHistoryView={schema:'rig-review-applied-history/1',depth:0,records:[]};
- const built={status:'built',id,lines:['started',' ', ' finished '],producerLine:null} as const;
- const failed={...built,status:'refused',producerLine:'replay refused'};
+ const built:RebuildJobView={
+  status:'built',id,lines:['started',' ',' finished '],producerLine:null,reused:false,exitCode:0,
+  wallMs:{remesh:10,compile:20},build:{modelUrl:'/m',modelHash:'e'.repeat(64),files:{}},
+  request:{part:'topwear',regions:[bust],configHash:'f'.repeat(64),entrySha256:'0'.repeat(64)},
+  producer:{package:'@rig-c/parts',version:'1.42.0'},compiler:{package:'rig-c',version:'2.64.1'},
+ };
+ const failed:RebuildJobView={...built,status:'refused',producerLine:'replay refused',build:null,exitCode:1};
  const events:unknown[]=[];
  let terminal:typeof built|typeof failed=built;
  let polls=0;
  const api=async<T>(url:string,init?:RequestInit):Promise<T>=>{
   events.push(init?[url,init]:url);
-  if(init)return {status:'running',undone:from,job:{id,status:'running',lines:['started']}} as T;
+  if(init)return {status:'running',undone:from,job:{...built,status:'running',lines:['started'],build:null,exitCode:null}} as T;
   if(url===path+'/history')return history as T;
-  return (++polls===1?{id,status:'running',lines:['started',' ']}:terminal) as T;
+  return (++polls===1?{...built,status:'running',lines:['started',' '],build:null,exitCode:null}:terminal) as T;
  };
  const options={
   api,path,onLine:(line:string)=>{events.push(line);},showLines:()=>polls>1,
