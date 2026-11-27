@@ -1,10 +1,9 @@
 import {afterEach, expect, test} from 'bun:test';
-import {bindJobAsk} from '../src/job-act.ts';
-import {jobHash, parseCommentOnlyAct, parseCommentsAct, parseContextCommentsAct} from '../src/job-api.ts';
+import {isRigDraftVerdictSource, jobHash, parseCommentOnlyAct, parseCommentsAct, parseContextCommentsAct, parseJobSelector} from '../src/job-api.ts';
 import {feedbackContextComments, feedbackItemComments, parseStageComment, projectComments} from '../src/stage-comment.ts';
 import type {JobContextComment, JobSubject, JobUIActValues} from '../src/job-contract.ts';
 import type {JobActValues, JobCommentsActValues, JobLegacyAct, JobReviewStage} from '../src/job-host.ts';
-import type {JobRetainedSource} from '../src/job-source.ts';
+import {retainedRigDraftVerdict, type JobRetainedSource} from '../src/job-source.ts';
 import type {Feedback} from '../src/session.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
 import {jobFixture, syntheticJobParts} from './helpers/job-api-fixture.ts';
@@ -29,10 +28,6 @@ function feedbackFor(source: typeof baseline.source): Feedback[] {
 }
 
 test('#746 the four historical envelopes retain exact act@6 bytes, including identity, time and still', () => {
-  const source = baseline.source as unknown as JobRetainedSource['source'];
-  const subject = {kind: 'review-verdict', stage: 'rig-review'} as const;
-  const retained = {source, subjects: []} as unknown as JobRetainedSource;
-  expect(JSON.stringify(bindJobAsk(subject, retained))).toBe(JSON.stringify(baseline.source));
   for (const item of baseline.cases) {
     expect(jobHash(item.raw)).toBe(item.sha256);
     const act = parseCommentsAct(JSON.parse(item.raw));
@@ -149,7 +144,8 @@ test('#1011 a bound draft publication keeps its identity and round-trips a rig c
   f.setContext({...f.getContext(), selector, subjects: [subject]});
   const publication = await f.publish(), page = await f.display(publication);
   const retained = f.session.retainedSource(publication.publicationId);
-  expect(bindJobAsk(subject, retained)).toEqual(publication.source);
+  expect(retained.source).toEqual(publication.source);
+  expect(retainedRigDraftVerdict(retained)).toBe(true);
   expect(f.session.displayPublication(publication.publicationId).rigDraftVerdict).toBe(true);
   const comments = feedbackContextComments(feedbackFor(publication.source as unknown as typeof baseline.source).slice(0, 1));
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page,
@@ -171,19 +167,28 @@ test('#1011 refuses unsupported stages and invalid rig draft bindings', () => {
     selector: {kind: 'draft', id: 'chain'}} as unknown as JobRetainedSource['source'];
   const subject = {kind: 'review-verdict', stage: 'rig-review'} as const;
   const retained = {source, subjects: [subject]} as unknown as JobRetainedSource;
+  const draftAct = {...JSON.parse(baseline.cases[0]!.raw), source};
+  expect(parseCommentsAct(draftAct).source).toEqual(source);
+  expect(retainedRigDraftVerdict(retained)).toBe(true);
   for (const stage of ['direction-review', 'image-review'] as const) {
     // A raw caller can still present a historical stage at runtime.
     const ask = {...subject, stage} as Extract<JobSubject, {kind: 'review-verdict'}>;
-    expect(() => bindJobAsk(ask, {...retained, subjects: [ask]})).toThrow(expect.objectContaining({
-      code: 'JOB_ASK_INVALID', message: stage,
-    }));
+    expect(retainedRigDraftVerdict({...retained, subjects: [ask]})).toBe(false);
+    expect(() => parseCommentsAct({...draftAct, value: {...draftAct.value, stage}}))
+      .toThrow(expect.objectContaining({code: 'JOB_ACT_INVALID'}));
   }
-  for (const patch of [{selector: {kind: 'draft' as const, id: '../chain'}},
-    {selector: {...source.selector, kind: 'draft' as const, id: 'chain', version: 1}},
-    {model: null}, {projectHash: null}, {direction: source.model}]) {
-    expect(() => bindJobAsk(subject, {...retained, source: {...source, ...patch}}))
-      .toThrow(expect.objectContaining({code: 'JOB_ASK_INVALID'}));
+  for (const selector of [{kind: 'draft' as const, id: '../chain'},
+    {...source.selector, kind: 'draft' as const, id: 'chain', version: 1}]) {
+    expect(() => parseJobSelector(selector)).toThrow(expect.objectContaining({code: 'JOB_REQUEST_INVALID'}));
+    expect(() => parseCommentsAct({...draftAct, source: {...source, selector}}))
+      .toThrow(expect.objectContaining({code: 'JOB_ACT_INVALID'}));
   }
-  expect(() => bindJobAsk(subject, {...retained, subjects: []}))
-    .toThrow(expect.objectContaining({code: 'JOB_ASK_INVALID'}));
+  for (const patch of [{model: null}, {projectHash: null}, {direction: source.model}]) {
+    const candidate = {...source, ...patch} as unknown as JobRetainedSource['source'];
+    expect(isRigDraftVerdictSource(candidate)).toBe(false);
+    expect(retainedRigDraftVerdict({...retained, source: candidate})).toBe(false);
+    expect(() => parseCommentsAct({...draftAct, source: candidate}))
+      .toThrow(expect.objectContaining({code: 'JOB_ACT_INVALID'}));
+  }
+  expect(retainedRigDraftVerdict({...retained, subjects: []})).toBe(false);
 });

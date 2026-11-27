@@ -2,13 +2,13 @@ import { randomUUID } from 'node:crypto';
 import {
   JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS,
   type JobApiSchema, type JobPublicationMode, type JobReviewerBinding,
-  type JobSourceBinding, type JobSubject, type JobUISubmission,
+  type JobUISubmission,
   type JobMeshEdit, type PendingAskV3, type RecordUIAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
   type JobChestLandmarkEdit, type JobCommentCarrier, type JobCommentOnlyAct, type JobCommentUISubmission,
   JOB_COMMENT_ONLY_ACT_SCHEMA,
 } from './job-contract.ts';
 import {
-  isRecordSource, isRigDraftVerdictSource, parseJobSelector, commentsObject, jobId, jobInteger, jobObject,
+  isRecordSource, commentsObject, jobId, jobInteger, jobObject,
   parseMeshEdits, parseRecordSource, requestDigest, validateRecordAskSubject,
   chestLandmarkIdentity, parseChestLandmarkEdits, parseCommentOnlyAct,
 } from './job-api.ts';
@@ -67,41 +67,6 @@ export function bindJobRecordAsk(subject: unknown, retained: JobRetainedRecordSo
     throw new JobError('JOB_ASK_INVALID');
   }
   throw new JobError('JOB_ASK_INVALID');
-}
-
-export function bindJobAsk(subject: JobSubject, retained: JobRetainedSource): JobSourceBinding;
-export function bindJobAsk(subject: RecordSubject | JobSubject, retained: JobRetainedRecordSource): RecordSource;
-export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRetainedSourceV3): SourceV3;
-export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRetainedSourceV3): SourceV3 {
-  if (isRetainedRecordSource(retained)) {
-    return bindJobRecordAsk(subject, retained);
-  }
-  const source = structuredClone(retained.source);
-  if (source.selector?.kind === 'current') throw new JobError('JOB_ASK_INVALID');
-  const declared = retained.subjects.some(candidate => requestDigest(candidate) === requestDigest(subject));
-  switch (subject.kind) {
-    case 'parts-verdict':
-      if (!declared || !source.projectHash || !source.parts || source.selector?.kind !== 'draft' ||
-          source.selector.id !== subject.draftId || !retained.partIds.length) throw new JobError('JOB_ASK_INVALID');
-      return source;
-    case 'review-verdict':
-      if (source.selector?.kind === 'draft') {
-        try { parseJobSelector(source.selector); }
-        catch { throw new JobError('JOB_ASK_INVALID', subject.stage); }
-        if (subject.stage !== 'rig-review' || !declared || !isRigDraftVerdictSource(source)) {
-          throw new JobError('JOB_ASK_INVALID', subject.stage);
-        }
-        return source;
-      }
-      if (!source.model || (subject.stage === 'rig-review' ? source.selector?.kind !== 'rig' :
-        subject.stage !== 'direction-review' || source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ASK_INVALID');
-      return source;
-    case 'interview-picks':
-    case 'checkpoint':
-    case 'signoff':
-    case 'reopen':
-      throw new JobError('JOB_ASK_INVALID');
-  }
 }
 
 export function parseUISubmission(
