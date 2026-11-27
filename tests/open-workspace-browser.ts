@@ -487,8 +487,9 @@ try {
   assert.ok(compareLoader);
   assert.ok(await page.evaluate(`window.__comparePriorDocument===undefined`));
   await wait(`document.querySelectorAll('.owner-list button').length===1 && !!document.querySelector('.owner-stage>iframe')`, 'compare owner');
+  // The iframe can be mounted before its navigating document has a root.
   await wait(frameExpression(0, `(()=>{
-    if(document.documentElement.lang!==${JSON.stringify(language)})return false;
+    if(document?.documentElement?.lang!==${JSON.stringify(language)})return false;
     try{
       const video=document.querySelector('#reference-video'),trace=JSON.parse(document.querySelector('#trace').textContent);
       return video.readyState>=2 && video.videoWidth>0 && video.videoHeight>0 && !video.seeking &&
