@@ -72,7 +72,7 @@ function runSubprocessBuild(root: string, enableSourceCondition: boolean) {
     import { buildWeb, playBuildConditions } from ${JSON.stringify(buildModuleUrl)};
     const root = process.argv[1];
     const conditions = playBuildConditions(root);
-    const blob = await buildWeb('single', root);
+    const blob = await buildWeb(root);
     const text = await blob.text();
     console.log(JSON.stringify({ conditions, text }));
   `;
@@ -160,7 +160,7 @@ test('installed dist-only package retains default dist bundling and never enable
   try {
     expect(existsSync(join(fixture.playDir, 'src'))).toBe(false);
     expect(playBuildConditions(fixture.root)).toEqual([]);
-    const blob = await buildWeb('single', fixture.root);
+    const blob = await buildWeb(fixture.root);
     const text = await blob.text();
     expect(text).toContain('DIST_ONLY_INSTALLED_MARKER');
 
@@ -309,7 +309,7 @@ test('symlinked peer target lane.ws/peers/rig-play with no dist resolves manifes
       const pkgPath = playPackagePath(root);
       const versions = await toolVersions(root);
       const conditions = playBuildConditions(root);
-      const text = await (await buildWeb('single', root)).text();
+      const text = await (await buildWeb(root)).text();
       console.log(JSON.stringify({ execArgv: process.execArgv, pkgPath, versions, conditions, text }));
       `,
     );

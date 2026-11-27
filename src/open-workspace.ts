@@ -54,7 +54,7 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
   let rawStop: ((close?: boolean) => void | Promise<void>) | undefined;
   let record: WorkspaceRecord;
   let stopPromise: Promise<void> | undefined;
-  const bundles = new Map<'single' | 'compare', Promise<Blob>>();
+  let bundle: Promise<Blob> | undefined;
   const busy = () => registrations > 0 || activeStreams > 0 || [...targets.values()].some(target => target.context?.busy());
   const live = createLiveLifecycle({label: 'review workspace', graceMs: options.graceMs,
     unopenedTimeoutMs: options.idleMs, busy, stopServer: () => stop(), log: line => console.error(line)});
@@ -69,9 +69,7 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
     }, options.fingerprint);
     const loaded = prepared.package;
     if (prepared.key !== designation.key || loaded.contentHash !== designation.contentHash) throw workspaceError('WORKSPACE_SOURCE_CHANGED');
-    const bundleMode=loaded.mode==='interview'?'single':loaded.mode;
-    let bundle = bundles.get(bundleMode);
-    if (!bundle) {bundle = buildWeb(bundleMode); bundles.set(bundleMode, bundle);}
+    bundle ??= buildWeb();
     const controlToken = loaded.inputs.control ? randomUUID() : undefined;
     const contextOptions = {stateDir: options.stateDir, cwd: designation.cwd, lifecycle: live, bundle: await bundle,
       capability: targetCapability(ownerCapability, incarnation, designation.key),
@@ -198,9 +196,7 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
       } else if (url.search && !['?lang=en', '?lang=ko'].includes(url.search)) {
         return refused('WORKSPACE_REQUEST_INVALID', 400);
       }
-      let single = bundles.get('single');
-      if (url.pathname === '/main.js' && !single) {single = buildWeb(); bundles.set('single', single);}
-      const body = url.pathname === '/main.js' ? await single!
+      const body = url.pathname === '/main.js' ? await (bundle ??= buildWeb())
         : url.pathname === '/' ? await entryHtml('workspace') : await readFile(appRoot + 'web/styles.css');
       return new Response(request.method === 'HEAD' ? null : body, {headers: {...securityHeaders,
         'Content-Type': url.pathname.endsWith('.js') ? 'text/javascript' : url.pathname.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8'}});

@@ -34,6 +34,9 @@ import {ComparePresentation,type PresentationState} from '../src/compare-present
 import {nextReferenceInterval,ReferenceSelectionUnavailable,inspectionReferenceFrame,lastSupportedReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,type ReferenceFrameIndex,type VideoInfo,type VideoFrame} from '../src/reference-frames.ts';
 import {mountComparePickedTools,type ComparePickedTools} from './compare-picked-tools.ts';
 import {appliedCheckRefusal} from '../src/applied-context.ts';
+
+/** Mount the existing Compare composition only on its own page. */
+export function mountCompareScreen(): void {
 // Take the capability into memory/session storage and strip it before composing the frame.
 const access=pageInstanceAccess();
 const ownerStage=access.base!=='/'&&new URLSearchParams(location.search).has('workspace')&&
@@ -637,3 +640,4 @@ function setupComments():void {
 function hostHidden(node:HTMLElement):boolean{return node.clientWidth<=0||node.clientHeight<=0;}
 
 void start();
+}

@@ -68,7 +68,7 @@ export interface CompareRequestContextOptions extends CompareServerOptions {
 /** Comparison-scoped routes without a listener. An injected lifecycle belongs to its caller. */
 export async function createCompareRequestContext(p: ComparePackage, options: CompareRequestContextOptions = {}) {
   const stageParts=stagePartsRoutes({a:p.a,b:p.b});
-  const bundle=options.bundle??await buildWeb('compare');
+  const bundle=options.bundle??await buildWeb();
   const frames=referenceFrameIndex(p.referencePath,p.response.binding.reference.sha256,p.response.sourceHash);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review');
   const makeSideTools=(side:'a'|'b',pkg:ReviewPackage)=>{
