@@ -11,6 +11,13 @@ export function composeAdjust(a:BoneAdjust|null,b:BoneAdjust|null):BoneAdjust|nu
  return a&&b?(bones,ctx)=>{a(bones,ctx);b(bones,ctx);}:a??b;
 }
 
+/** Keep the stage's idle, dial, turn and animation previews in evaluation order. */
+export function composeStageAdjust(
+ idle:BoneAdjust|null,dial:BoneAdjust|null,turn:BoneAdjust|null,animation:BoneAdjust|null,
+):BoneAdjust|null {
+ return composeAdjust(composeAdjust(composeAdjust(idle,dial),turn),animation);
+}
+
 /**
  * #235: live pending-op preview for keyed animations via `player.adjust`.
  * Evaluates `overlaidInspection` (`overlayDraftOnInspection`) through the single

@@ -267,10 +267,21 @@ function fit(): void {viewport.fitCamera();}
 
 function configureTurnPad():void {
  const a=data.a.feedbackCatalog.turnDials??[],b=data.b.feedbackCatalog.turnDials??[],dials=sharedTurnDials(a,b);
- if(!dials.length)return;
+ const tools=pickedTools;
+ if(!dials.length||!tools)return;
  const host=document.createElement('div');host.id='turn-pad-host';el('stage-layout').before(host);
  turnPad=bindTurnPad({host,stages:[el('a-viewport'),el('b-viewport')],dials,blocked:()=>seeking||video.seeking||!!persistence?.restoring()||!ready,
-  draw:state=>{if(!players.a||!players.b)return;try{for(const side of ['a','b'] as const){const source=side==='a'?a:b;players[side]!.adjust=state.adjust(source.filter(d=>dials.some(shared=>shared.axis===d.axis)));if(typeof turnAdjusts!=='undefined')turnAdjusts[side]=players[side]!.adjust;}players.a.draw();parts?.present('a');players.b.draw();parts?.present('b');redrawOverlays(true);}catch(error){failPair(error);throw error;}},save:()=>persistence?.save(),error:value=>message(value,true)});
+  draw:state=>{
+   if(!players.a||!players.b)return;
+   try {
+    for(const side of ['a','b'] as const){
+     const source=side==='a'?a:b;
+     turnAdjusts[side]=state.adjust(source.filter(d=>dials.some(shared=>shared.axis===d.axis)));
+     tools.updateAdjust(side);
+    }
+    players.a.draw();parts?.present('a');players.b.draw();parts?.present('b');redrawOverlays(true);
+   } catch(error){failPair(error);throw error;}
+  },save:()=>persistence?.save(),error:value=>message(value,true)});
  const note=document.createElement('p');note.className='hint';note.textContent='Both panes share the same values over the intersection of their declared ranges. Axes absent on either side are not offered.';host.append(note);
 }
 async function loadSide(side: Side, value: CompareSide): Promise<number> {
