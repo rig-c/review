@@ -41,13 +41,14 @@ test.each([
  ['wrong digest before invalid JSON', 'malformed', '{}', 'SCENE_SOURCE_MISMATCH'],
  ['malformed JSON', 'malformed', 'malformed', 'SCENE_CAMERA_REPORT_INVALID'],
  ['unknown spec', '{"spec":"spine-parts-scene-report/3"}', '{"spec":"spine-parts-scene-report/3"}', 'SCENE_CAMERA_REPORT_INVALID'],
- ['keyed /2', '{"spec":"spine-parts-scene-report/2","camera":{}}', '{"spec":"spine-parts-scene-report/2","camera":{}}', 'SCENE_CAMERA_UNAVAILABLE'],
+ ['malformed /2', '{"spec":"spine-parts-scene-report/2","camera":{}}', '{"spec":"spine-parts-scene-report/2","camera":{}}', 'SCENE_CAMERA_REPORT_INVALID'],
 ] as const)('#1316 refuses sceneReport with %s', async (kind, bytes, declaredBytes, code) => {
  const f = await fixture();
  const model = 'skeleton.model.json';
  const path = 'scene.json';
  const scene = join(f.root, path);
- await writeFile(join(f.root, model), '{"spec":"rigc-compiled/3","pages":[]}');
+ for (const file of [model, 'rigid.png', 'mesh.png'])
+   await cp(join('tests/fixtures/viewport-387/package', file), join(f.root, file));
  const sha256 = createHash('sha256').update(declaredBytes).digest('hex');
  await writeFile(f.path, JSON.stringify({...f.input, model, sceneReport: {path, sha256}}));
  if (bytes !== null) await writeFile(scene, bytes);
@@ -56,6 +57,52 @@ test.each([
    await symlink(join(outside.root, 'source.svg'), scene);
  }
  await expect(loadReview(f.path)).rejects.toThrow(code);
+});
+
+test.each([
+ ['matching @3', 3, 'idle', 0.8, 0.75, true, ''],
+ ['matching current @4', 4, 'idle', 0.8, 0.75, true, ''],
+ ['unkeyed idle', 3, 'inspect', 1, 1, false, ''],
+ ['raw model digest', 3, 'idle', 0.8, 0.75, true, 'SCENE_CAMERA_MODEL_MISMATCH'],
+ ['unknown clip', 3, 'unknown', 0.8, 0.75, true, 'SCENE_CAMERA_CLIP_MISMATCH'],
+ ['wrong compiled duration', 3, 'idle', 0.75, 0.75, true, 'SCENE_CAMERA_CLIP_MISMATCH'],
+ ['@3 duration', 3, 'idle', 0.8, 0.7500000000000001, true, 'DIRECTION_TAKE_MISMATCH'],
+ ['@4 loop', 4, 'idle', 0.8, 0.75, false, 'DIRECTION_TAKE_MISMATCH'],
+] as const)('#1316 Play binds exact model bytes and checks the composed take for %s', async (kind, version, clip, compiled, duration, loop, refusal) => {
+ const f = await fixture();
+ const model = 'skeleton.model.json';
+ const source = 'tests/fixtures/viewport-387/package';
+ const packed = JSON.parse(await readFile(join(source, model), 'utf8'));
+ const idle = packed.animations.find((animation: {name: string}) => animation.name === 'short');
+ idle.name = 'idle';
+ // Play reads the f32 last key (0.8), even if the packed JSON declares a different duration.
+ idle.duration = 3;
+ packed.editorOrder.animations[packed.editorOrder.animations.indexOf('short')] = 'idle';
+ for (const page of packed.pages) await cp(join(source, page.name), join(f.root, page.name));
+ const serialized = JSON.stringify(packed);
+ const modelBytes = serialized + '\n';
+ const sha = (bytes: string) => createHash('sha256').update(bytes).digest('hex');
+ await writeFile(join(f.root, model), modelBytes);
+ const {width, height} = packed.stage;
+ const bytes = JSON.stringify({spec: 'spine-parts-scene-report/2', canvas: {width, height}, camera: {
+   backdrop: 'synthetic', fps: 12, model_sha256: sha(kind === 'raw model digest' ? serialized : modelBytes),
+   coverage: {status: 'PASS', max_edge_overrun_px: 0, nonopaque_source_texels: 0, nonopaque_output_pixels: 0},
+   tracks: {[clip]: {duration: 0.75, compiled_duration: Math.fround(compiled), loop: true,
+     keys: [{t: 0, pan: [0, 0], zoom: 1}, {t: 0.75, pan: [0, 0], zoom: 1}], frames: []}},
+ }});
+ const sceneReport = {path: 'camera.json', sha256: sha(bytes)};
+ await writeFile(join(f.root, sceneReport.path), bytes);
+ const direction = 'direction.json';
+ await writeFile(join(f.root, direction), JSON.stringify({schema: `rig-create/direction@${version}`,
+   model: {path: model, sha256: sha(modelBytes)}, rig: {version: 1}, take: {duration, loop}}));
+ await writeFile(f.path, JSON.stringify({...f.input, model, direction, sceneReport}));
+ const selector = version === 4 ? {kind: 'current', output: 'direction', record: '0'.repeat(64)} as const : undefined;
+ if (refusal) await expect(loadReview(f.path, {selector})).rejects.toMatchObject({code: refusal});
+ else {
+   const p = await loadReview(f.path, {selector});
+   expect(p.direction?.take).toEqual({duration, loop});
+   expect(p.manifest.sceneReport).toEqual(sceneReport);
+ }
 });
 
 test('#1316 a declared /1 changes source identity without changing inspection metadata', async () => {

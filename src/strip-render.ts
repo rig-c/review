@@ -96,8 +96,9 @@ async function openRig(input:StripRenderInput['rigs'][number],images:Map<string,
     return {id:input.id,assets,player,renderer,clock:input.clock};
   }catch(error){assets.dispose();throw error;}
 }
-/** Verify that a package's compiled model and its page images load and pose in headless `@rig-c/play` (#305). */
-export async function verifyCompiledModel(root:string,modelRelPath:string|undefined,animation?:string,setsPath?:string):Promise<void>{
+/** Use Play's decoded model in the serialized native host. Admission supplies its already-hashed model bytes. */
+export async function withCompiledModel<T>(root:string,modelRelPath:string|undefined,use:(assets:ModelAssets)=>T,
+  options:{setsPath?:string;modelBytes?:Buffer;readAsset?:(path:string)=>Promise<string>}={}):Promise<T>{
   if(!modelRelPath)throw new Error('package has no compiled model (manifest.model is absent)');
   const previous=hostQueue;let release=()=>{};hostQueue=new Promise<void>(done=>{release=done;});await previous;
   let restore=()=>{};
@@ -105,37 +106,43 @@ export async function verifyCompiledModel(root:string,modelRelPath:string|undefi
     let native:NativeCanvas;
     try{native=await import('@napi-rs/canvas');}catch(error){throw new Error(`@napi-rs/canvas unavailable: ${error instanceof Error?error.message:String(error)}`);}
     const images=new Map<string,Buffer>();restore=installHost(native,images);
-    const model=await safeFile(root,packagePath(modelRelPath));
+    const readAsset=options.readAsset??((path:string)=>safeFile(root,packagePath(path)));
+    const model=options.modelBytes?resolve(root,packagePath(modelRelPath)):await readAsset(modelRelPath);
     if(!model.endsWith('.model.json'))throw new Error('compiled .model.json required');
-    const bytes=await readFile(model),metadata=JSON.parse(bytes.toString('utf8')) as {pages?:{name:string}[]};
+    const bytes=options.modelBytes??await readFile(model),metadata=JSON.parse(bytes.toString('utf8')) as {pages?:{name:string}[]};
     if(!Array.isArray(metadata.pages))throw new Error('declared model pages required');
     const urls=new Map<string,string>();
     for(const [index,page] of metadata.pages.entries()){
       if(typeof page.name!=='string'||/[\\%?#:\x00-\x1f]/.test(page.name))throw new Error('literal relative page path required');
       const name=packagePath(relative(root,resolve(dirname(model),page.name)).split('\\').join('/'));
-      const path=await safeFile(root,name),url=`https://strip.invalid/open/page-${index}/${encodeURIComponent(page.name)}`;
+      const path=await readAsset(name),url=`https://strip.invalid/open/page-${index}/${encodeURIComponent(page.name)}`;
       urls.set(page.name,url);images.set(url,await readFile(path));
     }
     const modelUrl=`https://strip.invalid/open/${encodeURIComponent(modelRelPath)}`;
-    const setsUrl=setsPath?'https://strip.invalid/open/sets.json':null;
-    const setBytes=setsPath?await readFile(await safeFile(root,setsPath)):null;
+    const setsUrl=options.setsPath?'https://strip.invalid/open/sets.json':null;
+    const setBytes=options.setsPath?await readFile(await readAsset(options.setsPath)):null;
     const fileFetch=new Proxy(fetch,{apply:(_target,_this,args:Parameters<typeof fetch>)=>{
       if(setsUrl&&String(args[0])===setsUrl&&setBytes)return Promise.resolve(new Response(new Uint8Array(setBytes)));
       if(String(args[0])!==modelUrl)return Promise.reject(new Error('undeclared model URL'));
       return Promise.resolve(new Response(new Uint8Array(bytes)));
     }});
     const assets=await loadModel({modelUrl,fetch:fileFetch,setsUrl,regions:'none',resolvePage:name=>{const url=urls.get(name);if(!url)throw new Error(`undeclared page ${name}`);return url;}});
-    try{
-      const clip=animation??assets.animations[0]?.name;
-      if(clip!==undefined&&!assets.animations.some(a=>a.name===clip))throw new Error(`missing animation ${JSON.stringify(clip)}`);
-      const host={style:{clipPath:''},appendChild(node:unknown){return node;}} as unknown as HTMLElement;
-      const player=new RigPlayer(host,assets,{mode:'canvas',seekStep:compareSeekStep});
-      const renderer=player.renderer;if(!(renderer instanceof CanvasRenderer))throw new Error('published canvas renderer required');
-      renderer.backend='canvas2d';renderer.pixelRatio=1;player.environment(null);
-      if(clip!==undefined){player.play(clip,{loop:false});player.pause();}
-      player.posedFrame();
-    }finally{assets.dispose();}
+    try{return await use(assets);}finally{assets.dispose();}
   }finally{try{restore();}finally{release();}}
+}
+
+/** Verify that a package's compiled model and its page images load and pose in headless `@rig-c/play` (#305). */
+export async function verifyCompiledModel(root:string,modelRelPath:string|undefined,animation?:string,setsPath?:string):Promise<void>{
+  await withCompiledModel(root,modelRelPath,assets=>{
+    const clip=animation??assets.animations[0]?.name;
+    if(clip!==undefined&&!assets.animations.some(a=>a.name===clip))throw new Error(`missing animation ${JSON.stringify(clip)}`);
+    const host={style:{clipPath:''},appendChild(node:unknown){return node;}} as unknown as HTMLElement;
+    const player=new RigPlayer(host,assets,{mode:'canvas',seekStep:compareSeekStep});
+    const renderer=player.renderer;if(!(renderer instanceof CanvasRenderer))throw new Error('published canvas renderer required');
+    renderer.backend='canvas2d';renderer.pixelRatio=1;player.environment(null);
+    if(clip!==undefined){player.play(clip,{loop:false});player.pause();}
+    player.posedFrame();
+  },{setsPath});
 }
 function seek(rigs:OpenRig[],time:number):void {
   for(const rig of rigs){

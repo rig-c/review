@@ -17,6 +17,7 @@ import { JOB_PREVIOUS_BUILD_SCHEMA, parsePanelComposition, type JobFileIdentity,
 import { exactObject, jobHash, parseFileRow } from './job-api.ts';
 import { readCheckpointEvidenceBytes } from './job-checkpoint-evidence.ts';
 import { JobError, jobPath, jobPathTextLimit, jobSha } from './job-validation.ts';
+import type { BoundSceneCamera } from '@rig-c/play/composed-take';
 import { checkedPath } from './interview-project.ts';
 export { isPanelComponent, parsePanelComposition } from './job-contract.ts';
 
@@ -39,7 +40,7 @@ export interface ReviewManifest {
 export interface ReviewFrameSet { animation: string; fps: number; written: number; stride: number; duration: number }
 export interface ReviewFrames { path: string; sha256: string; sets: ReviewFrameSet[] }
 export interface ReviewedSource { readonly packageRevision:string; readonly viewerVersion:string; readonly runtimeVersion:string; readonly rig:{readonly path:string;readonly sha256:string}|null; readonly motion:{readonly path:string;readonly sha256:string}|null; readonly handoff?:HandoffRecord }
-export interface ReviewPackage { scene?:SceneInspection; direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; frames:ReviewFrames|null; feedbackCatalog:FeedbackCatalog;
+export interface ReviewPackage { scene?:SceneInspection; sceneCamera?:BoundSceneCamera; direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; frames:ReviewFrames|null; feedbackCatalog:FeedbackCatalog;
   /** The resolved producer handoff (#101) and, when there is none, the refusal line naming where it was looked for. */
   handoff: Handoff|null; handoffReason: string|null; handoffInputs?: HandoffFlags;
   /** #187: the rig-parts build root ({@link isBuildRoot}) whose `check/` this package is, however it was opened; review state stays outside it. */
@@ -226,15 +227,34 @@ function parseSceneReportPointer(value: unknown, parsePath: typeof packagePath):
   }
 }
 
-function admitSceneReportSpec(bytes: Buffer, path: string): void {
-  const invalid = new JobError('SCENE_CAMERA_REPORT_INVALID', `SCENE_CAMERA_REPORT_INVALID: ${path}`);
-  let spec: unknown;
-  try { spec = object(JSON.parse(bytes.toString('utf8')), 'sceneReport').spec; }
-  catch { throw invalid; }
-  // Slice A only recognizes the version. Play owns camera schema, byte limit and clock validation.
-  if (spec === 'spine-parts-scene-report/2')
-    throw new JobError('SCENE_CAMERA_UNAVAILABLE', `SCENE_CAMERA_UNAVAILABLE: ${path}`);
-  if (spec !== 'spine-parts-scene-report/1') throw invalid;
+async function admitSceneReport(input: unknown, path: string, root: string, model: JobFileIdentity, modelBytes: Buffer,
+  readAsset: (path: string) => Promise<string>, direction: DirectionInspection | undefined): Promise<BoundSceneCamera | null> {
+  const {bindSceneCamera, ComposedTakeError} = await import('@rig-c/play/composed-take');
+  try {
+    // Route by version so /1 can be admitted by Play without decoding the model or opening its images.
+    if (input === null || typeof input !== 'object' || !('spec' in input) || input.spec !== 'spine-parts-scene-report/2') {
+      return bindSceneCamera(input, {sha256: model.sha256, stage: null, animations: []});
+    }
+    const {withCompiledModel} = await import('./strip-render.ts');
+    const bound = await withCompiledModel(root, model.path, ({stage, animations}) =>
+      bindSceneCamera(input, {sha256: model.sha256, stage, animations}), {modelBytes, readAsset});
+    if (!direction?.composed || !bound) return bound;
+    const idle = bound.sample('idle', {endpoint: 'terminal'});
+    if (!idle) return bound;
+    const field = direction.take.duration !== idle.authoredSeconds ? 'take.duration' :
+      direction.take.loop !== idle.loop ? 'take.loop' : undefined;
+    if (field) throw new JobError('DIRECTION_TAKE_MISMATCH',
+      `DIRECTION_TAKE_MISMATCH: ${direction.file.path} ${field} differs from idle in ${path}`);
+    return bound;
+  } catch (error) {
+    if (error instanceof ComposedTakeError && (error.code === 'SCENE_CAMERA_REPORT_INVALID' ||
+      error.code === 'SCENE_CAMERA_MODEL_MISMATCH' || error.code === 'SCENE_CAMERA_CLIP_MISMATCH' ||
+      error.code === 'SCENE_CAMERA_CLOCK_INVALID' || error.code === 'SCENE_CAMERA_VIEW_INVALID')) {
+      const detail = error.message.slice(error.code.length + 2, error.code.length + 514);
+      throw new JobError(error.code, `${error.code}: ${path}: ${detail}`);
+    }
+    throw error;
+  }
 }
 
 function parseReviewManifest(input: unknown, parsePath: typeof packagePath): ReviewManifest {
@@ -266,7 +286,7 @@ function parseReviewManifest(input: unknown, parsePath: typeof packagePath): Rev
   };
   if(manifest.model&&!manifest.model.endsWith('.model.json'))fail('model','compiled model path ending .model.json (the play runtime input)');
   if (manifest.sceneReport && !manifest.model)
-    throw new JobError('SCENE_CAMERA_MODEL_MISMATCH', 'SCENE_CAMERA_MODEL_MISMATCH: sceneReport requires model');
+    throw new JobError('SCENE_CAMERA_MODEL_MISMATCH', `SCENE_CAMERA_MODEL_MISMATCH: ${manifest.sceneReport.path} requires model`);
   if (manifest.previousBuild && !manifest.model) throw new JobError(previousBuildInvalid);
   if(manifest.sets&&!manifest.model)fail('sets','compiled model declaration');
   if(manifest.scene&&!manifest.direction)throw new Error('SCENE_REQUIRED: scene requires direction');
@@ -363,6 +383,8 @@ interface ReviewLoadOptions {
   originalProducerRoot?: string;
   /** Live-job publication selector, forwarded to direction and scene admission. */
   selector?: JobSelector | null;
+  /** Apply the live-job literal-file check to the declared report before admission. */
+  strictSceneReport?: true;
   /** Load only the adapter's build model and its sealed page images. */
   sealedPlayback?: ReadonlyMap<string, string>;
   /** Standalone pairing retains the loader's exact closure and the original manifest fields. */
@@ -405,7 +427,8 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   if(previousOpen&&!manifest.model)throw new Error(`OPEN_PREVIOUS_MODEL_MISSING ${previousOpen.side}: ${root}`);
   const assetFile=async(path:string):Promise<string>=>{
     if(sealedPlayback&&!sealedPlayback.has(path))fail(path,'sealed playback file');
-    const literal=previousOpen?previousOpenFile(root,path):sealedPlayback?checkedPath(root,path):undefined;
+    const strictFile=sealedPlayback || (options.strictSceneReport && path===manifest.sceneReport?.path);
+    const literal=previousOpen?previousOpenFile(root,path):strictFile?checkedPath(root,path):undefined;
     let full:string;
     try{full=await safeFile(root,path);}
     catch(e){if(path===manifest.frames&&['ENOENT','ENOTDIR'].includes((e as NodeJS.ErrnoException).code??''))throw new Error(`FRAMES_MISSING: ${path}: ${(e as Error).message}`);throw e;}
@@ -462,6 +485,8 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     for(const j of joints) if(j.parent&&!joints.some(v=>v.id===j.parent&&v.id!==j.id)) fail(`pose ${r.id} joint ${j.id}.parent`,'another declared joint id');
   }
   const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let frames:ReviewFrames|null=null;let modelMetadata:Record<string,unknown>|null=null;let directionInput:unknown;
+  let sceneReportInput: unknown;
+  let sceneModelBytes: Buffer | undefined;
   if (manifest.sceneReport) files.add(manifest.sceneReport.path);
   // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
   const {handoff,reason:handoffReason}=options.handoff===false?{handoff:null,reason:null}:
@@ -504,6 +529,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
         hash.update(chunk);
         fileHash.update(chunk);
         if (isDirection && (bytesRead += chunk.length) > DIRECTION_MAX_BYTES) throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');
+        // TODO: Apply Play's forthcoming public scene-report byte-cap export before collecting report chunks.
         if (p === reportPath || p === manifest.model || isDirection || p === manifest.frames || sceneReport) metadataChunks.push(chunk);
       }
       const after = await stat(full);
@@ -522,8 +548,16 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
       throw new JobError('SCENE_SOURCE_MISMATCH', `SCENE_SOURCE_MISMATCH: ${p}`);
     if(sealedPlayback&&fileHashes.get(p)!==sealedPlayback.get(p))fail(p,'sealed playback hash');
     // The parser and package hash consume the same bytes, never two file reads.
-    if (sceneReport) admitSceneReportSpec(Buffer.concat(metadataChunks), p);
-    if(p===manifest.model){if(fileHashes.get(p)!==modelBytesHash)throw new Error(`Model ${p} changed while hashing; retry with stable package inputs`);modelMetadata=object(JSON.parse(Buffer.concat(metadataChunks).toString('utf8')),'model');}
+    if (sceneReport) {
+      try { sceneReportInput = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(Buffer.concat(metadataChunks))); }
+      catch { throw new JobError('SCENE_CAMERA_REPORT_INVALID', `SCENE_CAMERA_REPORT_INVALID: ${p}`); }
+    }
+    if (p === manifest.model) {
+      if (fileHashes.get(p) !== modelBytesHash) throw new Error(`Model ${p} changed while hashing; retry with stable package inputs`);
+      const bytes = Buffer.concat(metadataChunks);
+      modelMetadata = object(JSON.parse(bytes.toString('utf8')), 'model');
+      if (manifest.sceneReport) sceneModelBytes = bytes;
+    }
     if(isDirection)directionInput=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));
     if(p===reportPath){let value:unknown;try{value=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));}catch(e){throw new Error(`${p}: ${e instanceof Error?e.message:String(e)}`);}report=parseReport(value,p);}
     if(p===manifest.frames)frames=parseFrames(Buffer.concat(metadataChunks).toString('utf8'),p,fileHashes.get(p)!);
@@ -533,6 +567,8 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   const buildRoot=!sealedPlayback&&basename(root)==='check'&&await isBuildRoot(dirname(root))?dirname(root):undefined;
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
   const direction=manifest.direction?readDirectionInspection(directionInput,{path:manifest.direction,sha256:fileHashes.get(manifest.direction)!},reviewedSource.rig,current?{current:true}:undefined):undefined;
+  const sceneCamera=manifest.sceneReport?await admitSceneReport(sceneReportInput,manifest.sceneReport.path,root,
+    reviewedSource.rig!,sceneModelBytes!,assetFile,direction):null;
   const animations=modelAnimations(modelMetadata);
   if(previousOpen&&playback){
     if(manifestBytes&&fileHashes.get(relative(root,manifestPath))!==jobHash(manifestBytes))
@@ -547,7 +583,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     previousOpen.capture({rawManifest:adapterManifest??rawManifest,files:fileHashes,playback});
   }
   const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations,clock:report?.clock??null,clockAnimation:report?.animation??null,...(frames&&animations?{frameClocks:declaredFrameClocks(frames,animations,report)}:{}),...(discoverTurnDials(modelMetadata).length?{turnDials:discoverTurnDials(modelMetadata)}:{})};
-  return {...(scene?{scene}:{}),...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,frames,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{}),...(options.cwd?{cwd:options.cwd}:{}),...(options.handoffStarts?{handoffStarts:options.handoffStarts}:{}),...(options.originalProducerRoot?{originalProducerRoot:options.originalProducerRoot}:{}),...(options.selector!==undefined?{selector:options.selector}:{})};
+  return {...(scene?{scene}:{}),...(sceneCamera?{sceneCamera}:{}),...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,frames,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{}),...(options.cwd?{cwd:options.cwd}:{}),...(options.handoffStarts?{handoffStarts:options.handoffStarts}:{}),...(options.originalProducerRoot?{originalProducerRoot:options.originalProducerRoot}:{}),...(options.selector!==undefined?{selector:options.selector}:{})};
 }
 
 /** #329: the reference id and served path of the handoff's source painting; the path is a name, never a package file. */
@@ -570,7 +606,8 @@ function sourcePainting(manifest:ReviewManifest,handoff:Handoff|null,folder:bool
 }
 /** Job lookup is fixed to its designation and this Review install, never the operator's shell. */
 export function loadJobReview(input: string, root: string, selector?: JobSelector | null): Promise<ReviewPackage> {
-  return loadReview(input, {cwd: root, handoffStarts: [root, fileURLToPath(new URL('..', import.meta.url))], ...(selector !== undefined ? {selector} : {})});
+  return loadReview(input, {cwd: root, handoffStarts: [root, fileURLToPath(new URL('..', import.meta.url))], strictSceneReport: true,
+    ...(selector !== undefined ? {selector} : {})});
 }
 
 /**

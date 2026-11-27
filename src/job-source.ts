@@ -1641,7 +1641,7 @@ export async function prepareJobSource(options: {
     review = await loadJobReview(target, root.path, context.selector);
   } catch (error) {
     if (error instanceof JobError && error.code === 'JOB_PREVIOUS_BUILD_INVALID' && context.selector?.kind !== 'current') throw error;
-    if (error instanceof JobError && error.code.startsWith('SCENE_')) throw error;
+    if (error instanceof JobError && (error.code.startsWith('SCENE_') || error.code === 'DIRECTION_TAKE_MISMATCH')) throw error;
     throw new JobError('JOB_SOURCE_MISMATCH', error instanceof HandoffError ? error.message : undefined);
   }
   if (review.manifest.previousBuild && context.selector?.kind === 'current') throw new JobError('JOB_SOURCE_MISMATCH');

@@ -54,19 +54,52 @@ const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
 async function fixture(options?: Parameters<typeof jobFixture>[0]) { const f = await jobFixture(options); fixtures.push(f); return f; }
 
-test('#1316 a report must be admitted before publication and is served from the retained seal', async () => {
+test.each([1, 2])('#1316 a /%i report must be admitted before publication and is served from the retained seal', async (version) => {
   const f = await fixture();
   const manifestPath = join(f.root, 'out/review.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   const path = 'producer-scene.json';
-  const bytes = '{"spec":"spine-parts-scene-report/1"}\n';
+  const report: Record<string, unknown> = {spec: `spine-parts-scene-report/${version}`};
+  let writeTake: ((loop: boolean) => Promise<void>) | undefined;
+  if (version === 2) {
+    const modelPath = join(f.root, 'out', manifest.model);
+    const model = JSON.parse(await readFile(modelPath, 'utf8'));
+    model.animations[0].name = 'idle';
+    model.editorOrder.animations[model.editorOrder.animations.indexOf('inspect')] = 'idle';
+    const modelBytes = JSON.stringify(model) + '\n';
+    const sha256 = jobHash(modelBytes);
+    await writeFile(modelPath, modelBytes);
+    const {width, height} = model.stage;
+    report.canvas = {width, height};
+    report.camera = {backdrop: 'synthetic', fps: 12, model_sha256: sha256,
+      coverage: {status: 'PASS', max_edge_overrun_px: 0, nonopaque_source_texels: 0, nonopaque_output_pixels: 0},
+      tracks: {idle: {duration: 1, compiled_duration: 1, loop: true,
+        keys: [{t: 0, pan: [0, 0], zoom: 1}, {t: 1, pan: [0, 0], zoom: 1}], frames: []}}};
+    manifest.direction = 'direction.json';
+    writeTake = loop => writeFile(join(f.root, 'out', manifest.direction), JSON.stringify({
+      schema: 'rig-create/direction@3', rig: {version: 1}, model: {path: manifest.model, sha256}, take: {duration: 1, loop},
+    }));
+    await writeTake(false);
+  }
+  const bytes = JSON.stringify(report) + '\n';
   const sceneReport = {path, sha256: jobHash(bytes)};
   await writeFile(manifestPath, JSON.stringify({...manifest, sceneReport}));
   const missing = await (await f.call(await f.publishRequest())).json();
   expect(missing).toMatchObject({ok: false, generation: 0, error: {code: 'SCENE_REQUIRED'}});
 
   const liveReport = join(f.root, 'out', path);
+  const alternate = 'alternate-scene.json';
+  await writeFile(join(f.root, 'out', alternate), bytes);
+  await symlink(alternate, liveReport);
+  const linked = await (await f.call(await f.publishRequest())).json();
+  expect(linked).toMatchObject({ok: false, generation: 0, error: {code: 'SCENE_SOURCE_MISMATCH'}});
+  await unlink(liveReport);
   await writeFile(liveReport, bytes);
+  if (writeTake) {
+    const mismatch = await (await f.call(await f.publishRequest())).json();
+    expect(mismatch).toMatchObject({ok: false, generation: 0, error: {code: 'DIRECTION_TAKE_MISMATCH'}});
+    await writeTake(true);
+  }
   const publication = await f.publish();
   const retained = f.session.retainedSource(publication.publicationId);
   expect(retained.seals).toContainEqual({path: 'out/' + path, sha256: sceneReport.sha256});
@@ -77,9 +110,9 @@ test('#1316 a report must be admitted before publication and is served from the 
     asset, new Request(f.origin + '/' + asset));
   const metadata = await fetch('api/review');
   expect((await metadata.json()).manifest.sceneReport).toEqual(sceneReport);
-  const report = await fetch('assets/' + path);
-  expect(report.status).toBe(200);
-  expect(await report.text()).toBe(bytes);
+  const reportResponse = await fetch('assets/' + path);
+  expect(reportResponse.status).toBe(200);
+  expect(await reportResponse.text()).toBe(bytes);
   expect((await fetch('assets/undeclared-scene.json')).status).toBe(404);
 });
 
