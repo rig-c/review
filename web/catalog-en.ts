@@ -1971,8 +1971,6 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Worst frame per reading": "Worst frame per reading",
   "Write review": "Write review",
   "Wrong-way bends": "Wrong-way bends",
-  "Zoom active view in": "Zoom active view in",
-  "Zoom active view out": "Zoom active view out",
   "Zoom in": "Zoom in",
   "Zoom out": "Zoom out",
   "[first,last] times in seconds": "[first,last] times in seconds",

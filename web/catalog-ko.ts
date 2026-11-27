@@ -1971,8 +1971,6 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Worst frame per reading": "판독별 최악 프레임",
   "Write review": "리뷰 작성",
   "Wrong-way bends": "역방향 꺾임(Wrong-way bends)",
-  "Zoom active view in": "활성 뷰 확대",
-  "Zoom active view out": "활성 뷰 축소",
   "Zoom in": "확대",
   "Zoom out": "축소",
   "[first,last] times in seconds": "초 단위의 [시작,끝] 시간",
