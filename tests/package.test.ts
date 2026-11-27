@@ -3,6 +3,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { cp, mkdtemp, writeFile, readFile, rm, symlink, mkdir, readdir, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SCENE_CAMERA_REPORT_MAX_BYTES } from '@rig-c/play/composed-take';
 import { FRAMES_DURATION_TOLERANCE, loadReview, packagePath, parseManifest } from '../src/manifest.ts';
 import { feedbackLastFrame } from '../src/feedback-validation.ts';
 import { freshSession, readSession, saveSession, sessionFile } from '../src/session.ts';
@@ -35,11 +36,34 @@ test('#1316 sceneReport pointer requires a model and a closed literal path/diges
  }
 });
 
+test('#1316 admits the exact Play report cap and refuses one extra byte by name', async () => {
+ const f = await fixture();
+ const model = 'skeleton.model.json';
+ const path = 'camera.json';
+ for (const file of [model, 'rigid.png', 'mesh.png'])
+   await cp(join('tests/fixtures/viewport-387/package', file), join(f.root, file));
+ const report = Buffer.alloc(SCENE_CAMERA_REPORT_MAX_BYTES + 1, ' ');
+ report.write('{"spec":"spine-parts-scene-report/1"}');
+ const install = async (bytes: Buffer) => {
+   await writeFile(join(f.root, path), bytes);
+   const sha256 = createHash('sha256').update(bytes).digest('hex');
+   await writeFile(f.path, JSON.stringify({...f.input, model, sceneReport: {path, sha256}}));
+ };
+ await install(report.subarray(0, SCENE_CAMERA_REPORT_MAX_BYTES));
+ expect((await loadReview(f.path)).sceneCamera).toBeUndefined();
+ await install(report);
+ await expect(loadReview(f.path)).rejects.toMatchObject({
+   code: 'SCENE_CAMERA_REPORT_TOO_LARGE',
+   message: expect.stringContaining(path),
+ });
+});
+
 test.each([
  ['missing', null, '{}', 'SCENE_REQUIRED'],
  ['escaping', null, '{}', 'SCENE_SOURCE_MISMATCH'],
  ['wrong digest before invalid JSON', 'malformed', '{}', 'SCENE_SOURCE_MISMATCH'],
  ['malformed JSON', 'malformed', 'malformed', 'SCENE_CAMERA_REPORT_INVALID'],
+ ['invalid UTF-8', Buffer.from([0xff]), Buffer.from([0xff]), 'SCENE_CAMERA_REPORT_INVALID'],
  ['unknown spec', '{"spec":"spine-parts-scene-report/3"}', '{"spec":"spine-parts-scene-report/3"}', 'SCENE_CAMERA_REPORT_INVALID'],
  ['malformed /2', '{"spec":"spine-parts-scene-report/2","camera":{}}', '{"spec":"spine-parts-scene-report/2","camera":{}}', 'SCENE_CAMERA_REPORT_INVALID'],
 ] as const)('#1316 refuses sceneReport with %s', async (kind, bytes, declaredBytes, code) => {

@@ -27,7 +27,7 @@ import {AnimationInspectionPanel} from './animation-inspection.ts';
 import {formatSeconds} from './format-seconds.ts';
 import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
 import { CanvasRenderer, loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBounds, type PosedFrame } from '@rig-c/play';
-import {bindSceneCamera,renderSceneCameraFrame,sceneCameraProjection,ComposedTakeError,type BoundSceneCamera,type SceneCameraFrame} from '@rig-c/play/composed-take';
+import {bindSceneCamera,renderSceneCameraFrame,sceneCameraProjection,ComposedTakeError,SCENE_CAMERA_REPORT_MAX_BYTES,type BoundSceneCamera,type SceneCameraFrame} from '@rig-c/play/composed-take';
 import {createViewportController,createViewportState,type CameraTarget} from './viewport-controller.ts';
 import {authoredPaneProjection,createRigViewportProvider,rigPanCarry} from './rig-viewport-provider.ts';
 import {cameraFromSignature,cameraSignature} from './camera-view.ts';
@@ -898,7 +898,8 @@ function drawRig(action:()=>void,previousFrame?:'seek'|((view:NonNullable<typeof
    const frame=boundSceneCamera()!.sample(track.animation,!entry.loop&&entry.animationTime===track.compiledSeconds
     ?{endpoint:'terminal'}:{basis:'compiled',seconds:entry.animationTime})!;
    const renderer=player.renderer;
-   if(!(renderer instanceof CanvasRenderer))throw new ComposedTakeError('SCENE_CAMERA_VIEW_INVALID',t('authored output needs the rig canvas'));
+   if(!(renderer instanceof CanvasRenderer))throw new ComposedTakeError('SCENE_CAMERA_VIEW_INVALID',
+    t('camera.rendererRequired',[t('DOM renderer')]));
    const drawn={player,frame,projection:sceneCameraProjection(frame),canvas:renderer.canvas,pose:player.posedFrame()};
    paintAuthoredRig(drawn,drawn.pose);
    drawnSceneCamera=drawn;
@@ -1225,7 +1226,7 @@ async function playbackDigest(bytes:ArrayBuffer):Promise<string> {
 function sceneCameraError(error:unknown):string {
  const value=errorText(error);
  return error instanceof ComposedTakeError&&data.manifest.sceneReport
-  ?`${error.code}: ${data.manifest.sceneReport.path} · ${value.slice(error.code.length+2)}`:value;
+  ?`${error.code}: ${data.manifest.sceneReport.path} · ${t(value.slice(error.code.length+2))}`:value;
 }
 
 async function loadSceneCamera(loaded:ModelAssets,modelDigest:string|undefined):Promise<typeof sceneCameraBinding> {
@@ -1238,13 +1239,22 @@ async function loadSceneCamera(loaded:ModelAssets,modelDigest:string|undefined):
  if(!/^[a-f0-9]{64}$/.test(report.sha256))throw mismatch();
  const response=await fetch(url,{signal:lifecycle.signal,redirect:'error'}).catch(()=>{throw required();});
  if(!response.ok)throw required();
- const bytes=await response.arrayBuffer().catch(()=>{throw required();});
+ let size=0;
+ const body=response.body?.pipeThrough(new TransformStream<Uint8Array,Uint8Array>({
+  transform(chunk,controller){
+   size+=chunk.byteLength;
+   if(size>SCENE_CAMERA_REPORT_MAX_BYTES)throw new ComposedTakeError('SCENE_CAMERA_REPORT_TOO_LARGE',
+    t('camera.reportSize',[size,SCENE_CAMERA_REPORT_MAX_BYTES]));
+   controller.enqueue(chunk);
+  },
+ }));
+ const bytes=await new Response(body).arrayBuffer().catch(error=>{
+  if(error instanceof ComposedTakeError)throw error;
+  throw required();
+ });
  const observed=await playbackDigest(bytes);
  if(observed!==report.sha256)throw mismatch();
- let reportDocument:unknown;
- try{reportDocument=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}
- catch(error){throw new ComposedTakeError('SCENE_CAMERA_REPORT_INVALID',t('invalid UTF-8 JSON'),error);}
- const bound=bindSceneCamera(reportDocument,{sha256:modelDigest??'',stage:loaded.stage,animations:loaded.animations});
+ const bound=bindSceneCamera(new Uint8Array(bytes),{sha256:modelDigest??'',stage:loaded.stage,animations:loaded.animations});
  return bound?{bound,assets:loaded}:null;
 }
 
@@ -3563,8 +3573,13 @@ function commentCaptureRefusal():string|null {
  if(player?.renderer){
   if(sceneCameraRefusal)return sceneCameraRefusal;
   const authored=currentAuthoredProjection();
-  if(authored&&el('rig-viewport').clientWidth>0&&el('rig-viewport').clientHeight>0&&!authored.camera)
-   return sceneCameraError(new ComposedTakeError('SCENE_CAMERA_VIEW_INVALID',t('the displayed camera exceeds the comment geometry limits')));
+  if(authored?.violation&&el('rig-viewport').clientWidth>0&&el('rig-viewport').clientHeight>0){
+   const {field,value,min,max,exclusiveMin}=authored.violation;
+   const required=max===undefined?t('camera.limit.positive',[min]):
+    t(exclusiveMin?'camera.limit.positiveRange':'camera.limit.range',[min,max]);
+   const detail=t('camera.commentRange',[t(field),String(value),required]);
+   return sceneCameraError(new ComposedTakeError('SCENE_CAMERA_VIEW_INVALID',detail));
+  }
  }
  if(rigDifference)return 'RIG_DIFFERENCE_COMMENT_UNAVAILABLE: return to Rig or Reference before adding a comment.';
  if(appliedOnStage)return 'COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build';

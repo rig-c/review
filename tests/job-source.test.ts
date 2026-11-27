@@ -3,6 +3,7 @@ import { cp, mkdir, readFile, rename, symlink, truncate, unlink, writeFile } fro
 import {readFileSync, writeFileSync} from 'node:fs';
 import { dirname, join } from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {SCENE_CAMERA_REPORT_MAX_BYTES} from '@rig-c/play/composed-take';
 import { JobSession } from '../src/job-session.ts';
 import { jobFixture, jobInputHashes, syntheticJobParts } from './helpers/job-api-fixture.ts';
 import { joinedVerdictFixture } from './helpers/joined-verdict-fixture.ts';
@@ -94,6 +95,15 @@ test.each([1, 2])('#1316 a /%i report must be admitted before publication and is
   const linked = await (await f.call(await f.publishRequest())).json();
   expect(linked).toMatchObject({ok: false, generation: 0, error: {code: 'SCENE_SOURCE_MISMATCH'}});
   await unlink(liveReport);
+  if (version === 1) {
+    const oversized = Buffer.alloc(SCENE_CAMERA_REPORT_MAX_BYTES + 1, ' ');
+    oversized.write(bytes);
+    await writeFile(liveReport, oversized);
+    await writeFile(manifestPath, JSON.stringify({...manifest, sceneReport: {path, sha256: jobHash(oversized)}}));
+    const refusal = await (await f.call(await f.publishRequest())).json();
+    expect(refusal).toMatchObject({ok: false, generation: 0, error: {code: 'SCENE_CAMERA_REPORT_TOO_LARGE'}});
+    await writeFile(manifestPath, JSON.stringify({...manifest, sceneReport}));
+  }
   await writeFile(liveReport, bytes);
   if (writeTake) {
     const mismatch = await (await f.call(await f.publishRequest())).json();

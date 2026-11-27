@@ -17,7 +17,7 @@ import { JOB_PREVIOUS_BUILD_SCHEMA, parsePanelComposition, type JobFileIdentity,
 import { exactObject, jobHash, parseFileRow } from './job-api.ts';
 import { readCheckpointEvidenceBytes } from './job-checkpoint-evidence.ts';
 import { JobError, jobPath, jobPathTextLimit, jobSha } from './job-validation.ts';
-import type { BoundSceneCamera } from '@rig-c/play/composed-take';
+import { SCENE_CAMERA_REPORT_MAX_BYTES, type BoundSceneCamera } from '@rig-c/play/composed-take';
 import { checkedPath } from './interview-project.ts';
 export { isPanelComponent, parsePanelComposition } from './job-contract.ts';
 
@@ -227,17 +227,19 @@ function parseSceneReportPointer(value: unknown, parsePath: typeof packagePath):
   }
 }
 
-async function admitSceneReport(input: unknown, path: string, root: string, model: JobFileIdentity, modelBytes: Buffer,
+async function admitSceneReport(bytes: Uint8Array, path: string, root: string, model: JobFileIdentity, modelBytes: Buffer,
   readAsset: (path: string) => Promise<string>, direction: DirectionInspection | undefined): Promise<BoundSceneCamera | null> {
   const {bindSceneCamera, ComposedTakeError} = await import('@rig-c/play/composed-take');
   try {
-    // Route by version so /1 can be admitted by Play without decoding the model or opening its images.
-    if (input === null || typeof input !== 'object' || !('spec' in input) || input.spec !== 'spine-parts-scene-report/2') {
-      return bindSceneCamera(input, {sha256: model.sha256, stage: null, animations: []});
+    // Play admits /1 before checking stage metadata. Retry /2 with the actual decoded stage and clips.
+    try {
+      return bindSceneCamera(bytes, {sha256: model.sha256, stage: null, animations: []});
+    } catch (error) {
+      if (!(error instanceof ComposedTakeError) || error.code !== 'SCENE_CAMERA_VIEW_INVALID') throw error;
     }
     const {withCompiledModel} = await import('./strip-render.ts');
     const bound = await withCompiledModel(root, model.path, ({stage, animations}) =>
-      bindSceneCamera(input, {sha256: model.sha256, stage, animations}), {modelBytes, readAsset});
+      bindSceneCamera(bytes, {sha256: model.sha256, stage, animations}), {modelBytes, readAsset});
     if (!direction?.composed || !bound) return bound;
     const idle = bound.sample('idle', {endpoint: 'terminal'});
     if (!idle) return bound;
@@ -247,7 +249,7 @@ async function admitSceneReport(input: unknown, path: string, root: string, mode
       `DIRECTION_TAKE_MISMATCH: ${direction.file.path} ${field} differs from idle in ${path}`);
     return bound;
   } catch (error) {
-    if (error instanceof ComposedTakeError && (error.code === 'SCENE_CAMERA_REPORT_INVALID' ||
+    if (error instanceof ComposedTakeError && (error.code === 'SCENE_CAMERA_REPORT_INVALID' || error.code === 'SCENE_CAMERA_REPORT_TOO_LARGE' ||
       error.code === 'SCENE_CAMERA_MODEL_MISMATCH' || error.code === 'SCENE_CAMERA_CLIP_MISMATCH' ||
       error.code === 'SCENE_CAMERA_CLOCK_INVALID' || error.code === 'SCENE_CAMERA_VIEW_INVALID')) {
       const detail = error.message.slice(error.code.length + 2, error.code.length + 514);
@@ -485,7 +487,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     for(const j of joints) if(j.parent&&!joints.some(v=>v.id===j.parent&&v.id!==j.id)) fail(`pose ${r.id} joint ${j.id}.parent`,'another declared joint id');
   }
   const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let frames:ReviewFrames|null=null;let modelMetadata:Record<string,unknown>|null=null;let directionInput:unknown;
-  let sceneReportInput: unknown;
+  let sceneReportBytes: Buffer | undefined;
   let sceneModelBytes: Buffer | undefined;
   if (manifest.sceneReport) files.add(manifest.sceneReport.path);
   // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
@@ -519,24 +521,31 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     const fileHash = createHash('sha256');
     const metadataChunks: Buffer[] = [];
     const isDirection = p === manifest.direction;
+    const requireReportSize = (size: number) => {
+      if (sceneReport && size > SCENE_CAMERA_REPORT_MAX_BYTES)
+        throw new JobError('SCENE_CAMERA_REPORT_TOO_LARGE',
+          `SCENE_CAMERA_REPORT_TOO_LARGE: ${p}: observed ${size} raw report bytes with a cap of ${SCENE_CAMERA_REPORT_MAX_BYTES} bytes`);
+    };
     let bytesRead = 0;
     try {
       const full = await assetFile(p);
       const before = await stat(full);
+      requireReportSize(before.size);
       hash.update(p).update('\0').update(String(before.size)).update('\0');
       if (isDirection && before.size > DIRECTION_MAX_BYTES) throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');
       for await (const chunk of createReadStream(full)) {
+        bytesRead += chunk.length;
+        requireReportSize(bytesRead);
+        if (isDirection && bytesRead > DIRECTION_MAX_BYTES) throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');
         hash.update(chunk);
         fileHash.update(chunk);
-        if (isDirection && (bytesRead += chunk.length) > DIRECTION_MAX_BYTES) throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');
-        // TODO: Apply Play's forthcoming public scene-report byte-cap export before collecting report chunks.
         if (p === reportPath || p === manifest.model || isDirection || p === manifest.frames || sceneReport) metadataChunks.push(chunk);
       }
       const after = await stat(full);
       if (before.size !== after.size || before.mtimeMs !== after.mtimeMs)
         throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`);
     } catch (error) {
-      if (!sceneReport) throw error;
+      if (!sceneReport || (error instanceof JobError && error.code === 'SCENE_CAMERA_REPORT_TOO_LARGE')) throw error;
       const missing = ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '');
       const code = missing ? 'SCENE_REQUIRED' : 'SCENE_SOURCE_MISMATCH';
       throw new JobError(code, `${code}: ${p}`);
@@ -548,10 +557,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
       throw new JobError('SCENE_SOURCE_MISMATCH', `SCENE_SOURCE_MISMATCH: ${p}`);
     if(sealedPlayback&&fileHashes.get(p)!==sealedPlayback.get(p))fail(p,'sealed playback hash');
     // The parser and package hash consume the same bytes, never two file reads.
-    if (sceneReport) {
-      try { sceneReportInput = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(Buffer.concat(metadataChunks))); }
-      catch { throw new JobError('SCENE_CAMERA_REPORT_INVALID', `SCENE_CAMERA_REPORT_INVALID: ${p}`); }
-    }
+    if (sceneReport) sceneReportBytes = Buffer.concat(metadataChunks);
     if (p === manifest.model) {
       if (fileHashes.get(p) !== modelBytesHash) throw new Error(`Model ${p} changed while hashing; retry with stable package inputs`);
       const bytes = Buffer.concat(metadataChunks);
@@ -567,7 +573,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   const buildRoot=!sealedPlayback&&basename(root)==='check'&&await isBuildRoot(dirname(root))?dirname(root):undefined;
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
   const direction=manifest.direction?readDirectionInspection(directionInput,{path:manifest.direction,sha256:fileHashes.get(manifest.direction)!},reviewedSource.rig,current?{current:true}:undefined):undefined;
-  const sceneCamera=manifest.sceneReport?await admitSceneReport(sceneReportInput,manifest.sceneReport.path,root,
+  const sceneCamera=manifest.sceneReport?await admitSceneReport(sceneReportBytes!,manifest.sceneReport.path,root,
     reviewedSource.rig!,sceneModelBytes!,assetFile,direction):null;
   const animations=modelAnimations(modelMetadata);
   if(previousOpen&&playback){

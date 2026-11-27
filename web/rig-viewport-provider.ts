@@ -1,7 +1,7 @@
 /** Existing compiled rig/reference rendering for the shared inspection viewport. */
 import type {ModelAssets,RigPlayer,PoseBounds,PosedFrame} from '@rig-c/play';
 import {formatZoomReadout,type CameraTarget,type ViewportProvider,type ViewportState,type ViewportController} from './viewport-controller.ts';
-import {assertCameraView,cameraSignature} from './camera-view.ts';
+import {cameraSignature,cameraViewViolation} from './camera-view.ts';
 import {dragImpulse} from '../src/environment.ts';
 import {CLICK_SLOP_PX} from './stage-pick.ts';
 import {createPartsViewportProvider,type PartsViewportHost} from './parts-viewport-provider.ts';
@@ -179,12 +179,16 @@ export function authoredPaneProjection(pane:HTMLElement,canvas:HTMLCanvasElement
  const paneToWorld=(p:MarkPoint)=>projection.outputToWorld({x:(p.x-x)/scale,y:(p.y-y)/scale});
  const center=paneToWorld({x:pane.clientWidth/2,y:pane.clientHeight/2});
  const effectiveScale=scale*frame.zoom;
- let camera=numericCamera('world',center,inspectionZoom,effectiveScale,pane.clientWidth,pane.clientHeight);
+ const viewport={width:pane.clientWidth,height:pane.clientHeight};
+ let violation=cameraViewViolation({zoom:inspectionZoom,center},{space:'world',center,baseScale:effectiveScale/inspectionZoom,...viewport});
+ let camera=violation?null:numericCamera('world',center,inspectionZoom,effectiveScale,viewport.width,viewport.height);
  if(camera){
-  try{assertCameraView({zoom:inspectionZoom,center},{space:'world',center,baseScale:effectiveScale/inspectionZoom,...camera.viewport});}
-  catch{camera=null;}
-  if(camera&&(camera.visible.x+camera.visible.width<=camera.visible.x||camera.visible.y+camera.visible.height<=camera.visible.y))camera=null;
+  const {x,y,width,height}=camera.visible;
+  const collapse=[x+width-x,y+height-y].find(span=>span<=0);
+  if(collapse!==undefined){
+   violation={field:'camera.limit.extent',value:collapse,min:0,exclusiveMin:true};camera=null;
+  }
  }
  const clip={x,y,width:width*scale,height:height*scale};
- return {worldToPane,paneToWorld,clip,camera};
+ return {worldToPane,paneToWorld,clip,camera,violation};
 }
