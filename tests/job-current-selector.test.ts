@@ -23,7 +23,7 @@ import {attachmentHashText} from '../src/mesh-edit.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {directionRows, directionSummary} from '../web/direction-panel.ts';
-import {t} from '../web/i18n.ts';
+import {applyDomI18n, setLanguagePreference, t} from '../web/i18n.ts';
 import {createJobRigScreen, jobRigScreenRefusal, jobRigScreenRoute, jobRigScreenSubject} from '../web/job-rig-screen.ts';
 import {jobPublicationRoutes, jobSourceDraftId} from '../web/job-session.ts';
 import type {DisplayPublicationV3, SourceV3} from '../src/job-contract.ts';
@@ -1072,7 +1072,7 @@ test('#1280 numbered invariance: direction@4 on a numbered post is refused uncha
   expect(meta.direction.composed).toBe(true);
 });
 
-test('#1280 HQ ruling B: directionRows renders direction.authored with rig version on numbered views and direction.authoredCurrent without version or undefined on current views', () => {
+test('#1280 HQ ruling B: directionRows renders direction.authored with rig version on numbered views and direction.authored.current without version or undefined on current views', () => {
   const modelId = {path: 'skeleton.model.json', sha256: createModelSha, inspected: true};
   const fileId = {path: 'specs/direction/direction.json', sha256: createDirectionSha};
   const baseView = {
@@ -1112,20 +1112,44 @@ test('#1280 HQ ruling B: directionRows renders direction.authored with rig versi
     values: ['2', fileId.path, fileId.sha256],
   });
   expect(currentRows.find(r => r.key.startsWith('direction.authored'))).toEqual({
-    key: 'direction.authoredCurrent',
+    key: 'direction.authored.current',
     values: [fileId.path, fileId.sha256],
   });
-  expect(t('direction.authored', ['2', fileId.path, fileId.sha256], 'en'))
-    .toBe(`Authored direction · rig v2 · ${fileId.path} · SHA-256 ${fileId.sha256}`);
-  expect(t('direction.authored', ['2', fileId.path, fileId.sha256], 'ko'))
-    .toBe(`작성된 연출 · 리그 v2 · ${fileId.path} · SHA-256 ${fileId.sha256}`);
-  const currentEn = t('direction.authoredCurrent', [fileId.path, fileId.sha256], 'en');
-  const currentKo = t('direction.authoredCurrent', [fileId.path, fileId.sha256], 'ko');
+  const numberedEn = t('direction.authored', ['2', fileId.path, fileId.sha256], 'en');
+  const numberedKo = t('direction.authored', ['2', fileId.path, fileId.sha256], 'ko');
+  expect(numberedEn).toBe(`Authored direction · rig v2 · ${fileId.path} · SHA-256 ${fileId.sha256}`);
+  expect(numberedKo).toBe(`작성된 연출 · 리그 v2 · ${fileId.path} · SHA-256 ${fileId.sha256}`);
+  const currentEn = t('direction.authored.current', [fileId.path, fileId.sha256], 'en');
+  const currentKo = t('direction.authored.current', [fileId.path, fileId.sha256], 'ko');
   expect(currentEn).toBe(`Authored direction · ${fileId.path} · SHA-256 ${fileId.sha256}`);
   expect(currentKo).toBe(`작성된 연출 · ${fileId.path} · SHA-256 ${fileId.sha256}`);
   for (const rendered of [currentEn, currentKo]) {
     expect(rendered).not.toContain('undefined');
     expect(rendered).not.toContain('rig v');
     expect(rendered).not.toContain('리그 v');
+    expect(rendered).not.toContain('{0}');
+  }
+
+  // Verify KO DOM observer pass preserves interpolated parameters for both numbered and current rows
+  try {
+    setLanguagePreference('ko');
+    const makeLi = (value: string) => {
+      const textNode = {nodeType: 3, nodeValue: value, parentElement: null as unknown};
+      const li = {
+        nodeType: 1, tagName: 'LI', id: '', className: '', parentElement: null,
+        children: [], childNodes: [textNode],
+        getAttribute: () => null, closest: () => null,
+      };
+      textNode.parentElement = li;
+      return {li: li as unknown as Element, textNode};
+    };
+    const a = makeLi(numberedKo);
+    const b = makeLi(currentKo);
+    applyDomI18n(a.li);
+    applyDomI18n(b.li);
+    expect(a.textNode.nodeValue).toBe(numberedKo);
+    expect(b.textNode.nodeValue).toBe(currentKo);
+  } finally {
+    setLanguagePreference('en');
   }
 });

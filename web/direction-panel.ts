@@ -31,7 +31,7 @@ export function directionRows(view: DirectionView): { key: string; values?: stri
     model?.inspected && view.authored
       ? view.authored.rigVersion !== undefined
         ? { key: 'direction.authored', values: [String(view.authored.rigVersion), view.authored.file.path, view.authored.file.sha256] }
-        : { key: 'direction.authoredCurrent', values: [view.authored.file.path, view.authored.file.sha256] }
+        : { key: 'direction.authored.current', values: [view.authored.file.path, view.authored.file.sha256] }
       : { key: 'direction.authoredUnavailable' },
     ...(joined ? [{ key: 'direction.joined', values: [String(joined.postVersion), joined.projectModel.path,
       joined.packageRoot, joined.projectHash, joined.packageSourceHash] }] : []),

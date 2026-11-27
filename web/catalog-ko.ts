@@ -226,7 +226,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "direction.chooseSet": "부착물 세트 검사",
   "direction.setsUnavailable": "SETS_UNAVAILABLE · 불러온 부착물 세트가 없어요.",
   "direction.authored": "작성된 연출 · 리그 v{0} · {1} · SHA-256 {2}",
-  "direction.authoredCurrent": "작성된 연출 · {0} · SHA-256 {1}",
+  "direction.authored.current": "작성된 연출 · {0} · SHA-256 {1}",
   "direction.authoredUnavailable": "DIRECTION_METADATA_UNAVAILABLE · 화면의 모델에 연결된 연출 데이터가 없어요.",
   "direction.runtimeCameraUnavailable": "CAMERA_PLAYBACK_UNAVAILABLE · 작성된 카메라와 타이밍은 여기서 읽기 전용이에요. 이동과 확대는 검사 화면에만 적용돼요.",
   "direction.joined": "Create 포스트 {0} · 프로젝트 기준 모델 {1} · 기록된 패키지 {2} · 프로젝트 SHA-256 {3} · 패키지 소스 SHA-256 {4}",

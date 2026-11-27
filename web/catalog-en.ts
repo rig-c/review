@@ -226,7 +226,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "direction.chooseSet": "Inspect attachment set",
   "direction.setsUnavailable": "SETS_UNAVAILABLE · No attachment sets loaded.",
   "direction.authored": "Authored direction · rig v{0} · {1} · SHA-256 {2}",
-  "direction.authoredCurrent": "Authored direction · {0} · SHA-256 {1}",
+  "direction.authored.current": "Authored direction · {0} · SHA-256 {1}",
   "direction.authoredUnavailable": "DIRECTION_METADATA_UNAVAILABLE · No authored direction bound to this model on stage.",
   "direction.runtimeCameraUnavailable": "CAMERA_PLAYBACK_UNAVAILABLE · Authored camera and timing are read-only here. Pan and zoom adjust the inspection viewport.",
   "direction.joined": "Create post {0} · project-relative model {1} · recorded package {2} · project SHA-256 {3} · package source SHA-256 {4}",
