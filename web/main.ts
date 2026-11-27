@@ -1591,7 +1591,11 @@ async function start(): Promise<void> {
     if(host?.record&&!host.record.hasPicture){await startRecord();return;}
     let writes: { capabilityRequired: boolean; control?: boolean };
     const opened=await api<ReviewResponse|PartsSubjectEntry|InterviewSubjectEntry>('/api/review');
-    if('subject' in opened&&opened.subject==='interview'){await startRecord(opened);return;}
+    if('subject' in opened&&opened.subject==='interview'){
+      await startRecord(opened);
+      if(ownerStage&&!disposed)bindOwnerStage(opened.sourceHash);
+      return;
+    }
     const [saved,accessState]=await Promise.all([api<ReviewSession|PartsSubjectSession>('/api/session'),api<{capabilityRequired:boolean;control?:boolean}>('/api/access')]);
     if('subject' in opened&&opened.subject==='parts'){await startParts(opened,saved as PartsSubjectSession,accessState);return;}
     data=opened as ReviewResponse;session=saved as ReviewSession;writes=accessState;
@@ -1832,7 +1836,6 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  await workspace?.settle();if(disposed)return;
  if(host?.unavailable){message(t('job.refusal.'+host.unavailable),true,false,host.unavailable);button('save').disabled=true;button('save').title=host.unavailable;}
- if(interview&&ownerStage)bindOwnerStage(interview.sourceHash);
  document.body.dataset.ready='true';
  if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
