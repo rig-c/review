@@ -54,7 +54,7 @@ import {
 import type { CheckSummary } from '../src/applied-context.ts';
 import { dropNoticeForPanel, type RebuildPanelKind } from '../src/applied-blocks.ts';
 import { compareSeekStep } from '../src/compare-playhead.ts';
-import { composeAdjust, PhysicsPreview } from './preview.ts';
+import { composeStageAdjust, PhysicsPreview } from './preview.ts';
 import {
   createWindModel, environmentFor, windReadout, RUNTIME_START_READOUT, joltPacket,
   loadModelDocument, environmentContext, environmentJson, type JoltStep, type WindSnapshot,
@@ -181,6 +181,7 @@ export interface ComparePickedTools {
   appliedFor: (side: Side) => AppliedRecord | AppliedPatch | AppliedDelta | AppliedRetarget | AppliedAnimation | null;
   modelHashFor: (side: Side) => string | null;
   seekMode: (target: number, continuing: boolean) => 'settle' | 'seek';
+  updateAdjust: (side: Side) => void;
   stepSide: (mode: 'present' | 'settle' | 'seek', side: Side, target: number) => void;
   dispose: () => void;
 }
@@ -423,13 +424,19 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     if (picks && picks.parentElement !== viewport) viewport.append(picks);
   }
 
-  function setAdjust(side: Side = pickedSide): void {
+  function updateAdjust(side: Side): RigPlayer | undefined {
     const player = host.players[side];
     if (!player) return;
-    const baseTurn = host.turnAdjustFor(side);
-    const activeTools = side === pickedSide ? composeAdjust(idleAdjust, dialAdjust) : null;
-    player.adjust = composeAdjust(composeAdjust(baseTurn, activeTools), sides[side].animAdjust);
-    if (player.current && !host.playing()) {
+    const picked = side === pickedSide;
+    player.adjust = composeStageAdjust(
+      picked ? idleAdjust : null, picked ? dialAdjust : null, host.turnAdjustFor(side), sides[side].animAdjust,
+    );
+    return player;
+  }
+
+  function setAdjust(side: Side = pickedSide): void {
+    const player = updateAdjust(side);
+    if (player?.current && !host.playing()) {
       player.seek(host.time());
       player.draw();
       host.parts()?.present(side);
@@ -1971,6 +1978,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     setPickedSide,
     isSwitchingSide: () => switchingSide,
     defaultStatusMessage,
+    updateAdjust,
     registerSideModel: (side, modelUrl, prefix, sha256, partModel) => {
       const st = sides[side];
       if (!st.inspectedModel) st.inspectedModel = { url: modelUrl, prefix, sha256 };
