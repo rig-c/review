@@ -106,7 +106,7 @@ declared IDs in the owning process. The consumer host owns these implementations
 and private bootstrap channels. General cross-process callback registration is
 deferred.
 
-Use `publish`, `ask` and `next` per job. The trusted writer directly fetches
+Use `publish` and `next` per job. The trusted writer directly fetches
 finalized acts with its separate read-only grant. Human submission stays in the
 Review UI. Semantic `close` ends only that job and revokes its writer grant.
 Keep imagery, questions and approvals in the Review UI through supported
@@ -118,12 +118,11 @@ in private owner channels.
 
 For the active Create and Parts cycle, the authoritative contract is `src/job-contract.ts` (`JOB_API_SCHEMA` set to `rig-review/job-api@2`, `JOB_ACT_SCHEMA` set to `rig-review/act@2`, [Review #484](https://github.com/rig-c/review/issues/484)), backed by the implemented backend session/store (`src/job-session.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-api.ts`), standing loopback job front and browser window runtime (`src/job-front.ts`, `web/job-session.ts`), and `rig-review session` CLI (`src/entry.ts`, `src/job-cli.ts`). The public installed managed-host entry is `@rig-c/review/job-host` with frozen exports in [Public API stability](https://github.com/rig-c/review/blob/main/docs/STABILITY.md#managed-owner-host). Create supplies the production `readPublished` callback and private writer-owned binding under [Create #184](https://github.com/rig-c/create/issues/184), and its writers use the binding to fetch finalized acts directly under [Create #182](https://github.com/rig-c/create/issues/182). Publishing a Create root containing `project.json` without a host `readPublished` callback still refuses `JOB_SOURCE_UNRETAINABLE` with `CREATE_PUBLICATION_CONTRACT_UNAVAILABLE`. Do not invent public export names, producer scene fields or unimplemented flags, and never expose capabilities in reports or logs. See [Live job contract](https://github.com/rig-c/review/blob/main/docs/REVIEW_PACKAGE.md#live-job-contract) and [Standing live job workflow](https://github.com/rig-c/review/blob/main/docs/WORKFLOWS.md#standing-live-job-workflow).
 
-Exact CLI namespace (`src/entry.ts`, `src/job-cli.ts`; `publish`, `ask`, `next`, `close` also accept optional `--request-id <id>`):
+Exact CLI namespace (`src/entry.ts`, `src/job-cli.ts`; `publish`, `next`, `close` also accept optional `--request-id <id>`):
 
 ```text
 Usage: rig-review session open <root>
        rig-review session publish <job-url> --generation <n> --key <id> --result <relative-path> --freeze-hold <id> [--selector <JSON>] [--record <path> --record-hash <sha256>]
-       rig-review session ask <job-url> --generation <n> --key <id> --publication <id> --subject <JSON>
        rig-review session next <job-url> [--after <cursor>] [--wait-ms <n>]
        rig-review session close <job-url> --generation <n> --key <id> --reason <words>
 ```
@@ -142,9 +141,7 @@ RIG_REVIEW_JOB_REVIEWER_ID=owner-1 \
 rig-review session publish http://127.0.0.1:<port>/jobs/<job-id> \
   --generation 0 --key pub-1 --result package --freeze-hold hold-1 \
   --selector '{"kind":"rig","version":1}'
-rig-review session ask http://127.0.0.1:<port>/jobs/<job-id> \
-  --generation 1 --key ask-1 --publication <publication-id> \
-  --subject '{"kind":"review-verdict","stage":"rig-review"}'
+# The owner opens the standing link and sends comments on the published rig.
 rig-review session next http://127.0.0.1:<port>/jobs/<job-id> --wait-ms 5000
 # Pass the current generation returned by next (human UI acts advance generation):
 rig-review session close http://127.0.0.1:<port>/jobs/<job-id> \
@@ -152,7 +149,7 @@ rig-review session close http://127.0.0.1:<port>/jobs/<job-id> \
 ```
 
 - **One standing Review window and visual gate.** Every owner visual, question, choice, correction and verdict goes through one standing Review window/link plus one what-to-look-at line. Internal agent and HQ media stay internal. A missing required visual (`visual.status` set to `'unavailable'`) is an immediate stop plus a Create-filed on-path Review card, never a chat fallback.
-- **Human UI vs agent verbs.** People submit through the Review UI (`actor` set to `'human'`, `channel` set to `'review-ui'`). Trusted host bootstrap declares `reviewer` (`id` and `role` as `'owner'` or `'delegate'`), which the browser UI cannot type or override (declared provenance, not keyboard authentication, mapped by Create to its `by` authority). Agents use only `publish`, `ask`, `next` and `close` with `expectedGeneration` CAS and `idempotencyKey` on mutations.
+- **Human UI vs agent verbs.** People submit through the Review UI (`actor` set to `'human'`, `channel` set to `'review-ui'`). Trusted host bootstrap declares `reviewer` (`id` and `role` as `'owner'` or `'delegate'`), which the browser UI cannot type or override (declared provenance, not keyboard authentication, mapped by Create to its `by` authority). Agents use `publish`, `next` and `close` with `expectedGeneration` CAS and `idempotencyKey` on mutations.
 - **Explicit producer-held freeze and explicit close.** Every `publish` carries an explicit producer-held freeze (`freeze.kind` set to `'producer-held'`, `holdId`, `record` as `JobFileIdentity` or `null` for a declared non-Create root) held until acknowledgment as a caller obligation. Review validates retained bytes, detects a moved record and commits local generation CAS. No watched-root or automatic-close guarantee exists, and only explicit `close` ends an active job.
 - **Exact displayed source, cursor replay and draft retention.** `next` (`after` cursor and bounded abortable `waitMs` that never consumes an act) replays complete durable `JobEvent` items (`published`, `pending`, `act`, `closed`). The daemon derives `JobSourceBinding` from validated retained bytes and the page-scoped `displayedNonce` receipt rather than browser-supplied hashes. When a new publication replaces or updates the displayed source, old local drafts remain retained for their original source binding and are flagged without rebinding onto the new publication.
 - **Five enabled act kinds and two reserved disabled kinds.** Enabled kinds are `interview-picks`, `checkpoint`, `parts-verdict`, `review-verdict` and `signoff`. Reserved kinds `described-correction` (awaiting the joint [Create #182](https://github.com/rig-c/create/issues/182) context allowlist) and `mesh-edit` (awaiting the joint [Parts #1159](https://github.com/rig-c/parts/issues/1159) freeze) stay disabled (`JOB_ACT_KIND_DISABLED`) and cannot be asked or submitted.
