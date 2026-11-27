@@ -45,10 +45,10 @@ import {
   appliedCheckState, renderAppliedHistory, isPatchJob, recordFor, refusedText, restoredOutcomeForJob, retargetStage, undoControl,
   animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, chestSeed, designatedRegions, handoffText,
   landmarksRequest, noContourReason, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
-  pickBustPart, pickPart, runRebuild, seedFields, stageModel, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
+  pickBustPart, pickPart, runRebuildApply, seedFields, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
   type AnimationJobView, type AnimationRequestBody, type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
-  type AppliedRecord, type AppliedRetarget, type DeltaJobView, type DeltaRequestBody, type ConfigPatch,
-  type PatchJobView, type RebuildJobView, type RebuildRefusal, type RebuildRequestBody, type RebuildStatusView,
+  type AppliedRecord, type AppliedRetarget, type DeltaRequestBody, type ConfigPatch,
+  type PatchJobView, type RebuildRefusal, type RebuildRequestBody, type RebuildStatusView,
   type RetargetJobView, type RetargetRequestBody, type StageChange,
 } from './rebuild-client.ts';
 import { patchRoute } from '../src/retune-route.ts';
@@ -1271,20 +1271,17 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     rebuildBusy = true; rebuildState();
     if (pickedSide === side) chestEditor?.notify(`Rebuilding ${part} on Build ${side.toUpperCase()} with ${status.producer?.package} ${status.producer?.version}…`, false, []);
     try {
-      const result = await runRebuild(body, {
-        post: value => host.api<RebuildJobView | RebuildRefusal>(`${sideApiPrefix(side)}/rebuild`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
-        get: id => host.api<RebuildJobView>(`${sideApiPrefix(side)}/rebuild/${id}`),
-        sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      const { outcome, next } = await runRebuildApply(body, {
+        api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`, formatOutcome: outcomeLine,
         onLine: line => { lines.push(line); if (pickedSide === side) chestEditor?.notify(line.trim() || '…', false, lines.slice(-6)); },
       });
-      const outcome = outcomeLine(result);
-      if (!('id' in result) || result.status !== 'built' || !result.build) {
+      if (!next) {
         if (pickedSide === side) chestEditor?.notify(outcome.text, true, [...lines.slice(-5), outcome.text]);
         host.message(outcome.text, true);
         return;
       }
-      await swapPickedSide(side, new URL(host.route(result.build.modelUrl), location.href).href, host.route(`/compare-rebuild/${side}/${result.id}/`), result.build.modelHash);
-      state.appliedOnStage = appliedRecord(result); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'regions' });
+      await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
+      state.appliedOnStage = appliedRecord(next.job); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'regions' });
       if (pickedSide === side) {
         const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
         chestEditor?.notify(outcome.text, false, []);
@@ -1315,24 +1312,21 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         host.message(scheduled.error, true);
         return { status: 'refused', error: scheduled.error, producerLine: scheduled.error };
       }
-      const result = await runRebuild<{ patch: ConfigPatch; environment?: WorldExport['schedule'] }, PatchJobView>(
+      const { result, outcome, next } = await runRebuildApply(
         { patch, ...(scheduled ? { environment: scheduled.schedule } : {}) },
         {
-          post: value => host.api<PatchJobView | RebuildRefusal>(`${sideApiPrefix(side)}/rebuild`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
-          get: id => host.api<PatchJobView>(`${sideApiPrefix(side)}/rebuild/${id}`),
-          sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+          api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`, formatOutcome: patchOutcomeLine,
           onLine: line => { lines.push(line); if (pickedSide === side) chestEditor?.notify(line.trim() || '…', false, lines.slice(-6)); },
         },
       );
-      const outcome = patchOutcomeLine(result), next = stageModel(result, { url: '', hash: state.stageModelHash ?? '' });
-      if (next.id === null || !('id' in result)) {
+      if (!next) {
         if (pickedSide === side) chestEditor?.notify(outcome.text, true, [...lines.slice(-5), outcome.text]);
         host.message(outcome.text, true);
         return result;
       }
       await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
-      state.appliedOnStage = patchAppliedRecord(result);
-      state.stageCheck = { lines: [...result.lines], check: result.check };
+      state.appliedOnStage = patchAppliedRecord(next.job);
+      state.stageCheck = { lines: [...next.job.lines], check: next.job.check };
       stageChanged(side, { kind: 'apply', via: 'patch' });
       if (pickedSide === side) {
         const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1362,16 +1356,13 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const body: DeltaRequestBody = { part: doc.slot, delta: doc, configHash: status.inputs.configHash };
     rebuildBusy = true; rebuildState();
     try {
-      const result = await runRebuild<DeltaRequestBody, DeltaJobView>(body, {
-        post: value => host.api<DeltaJobView | RebuildRefusal>(`${sideApiPrefix(side)}/rebuild`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
-        get: id => host.api<DeltaJobView>(`${sideApiPrefix(side)}/rebuild/${id}`),
-        sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      const { outcome, next } = await runRebuildApply(body, {
+        api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`, formatOutcome: deltaOutcomeLine,
         onLine: textLine => { if (pickedSide === side) line(textLine); },
       });
-      const outcome = deltaOutcomeLine(result), next = stageModel(result, { url: '', hash: state.stageModelHash ?? '' });
-      if (next.id === null || !('id' in result)) { host.message(outcome.text, true); return { built: false, text: outcome.text, error: true }; }
+      if (!next) { host.message(outcome.text, true); return { built: false, text: outcome.text, error: true }; }
       await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
-      state.appliedOnStage = deltaAppliedRecord(result); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'delta' });
+      state.appliedOnStage = deltaAppliedRecord(next.job); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'delta' });
       if (pickedSide === side) {
         meshEditor?.setStatusNote(outcome.text, false);
         const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1402,19 +1393,16 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       retargetPanel?.status(`Retargeting ${body.sequence} as "${body.flags.animation}" on Build ${side.toUpperCase()}…`, false);
     }
     try {
-      const result = await runRebuild<RetargetRequestBody, RetargetJobView>(request, {
-        post: value => host.api<RetargetJobView | RebuildRefusal>(`${sideApiPrefix(side)}/rebuild`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
-        get: id => host.api<RetargetJobView>(`${sideApiPrefix(side)}/rebuild/${id}`),
-        sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      const { result, outcome, next } = await runRebuildApply(request, {
+        api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`, formatOutcome: retargetOutcomeLine,
         onLine: textLine => { if (pickedSide === side) retargetPanel?.line(textLine); },
       });
-      const outcome = retargetOutcomeLine(result), next = stageModel(result, { url: '', hash: state.stageModelHash ?? '' });
       if (pickedSide === side) {
         retargetPanel?.result(result); retargetPanel?.status(outcome.text, outcome.error);
       }
-      if (next.id === null || !('id' in result)) { host.message(outcome.text, true); return result; }
-      await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash, result.request.record.flags.animation);
-      state.appliedOnStage = retargetAppliedRecord(result); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'retarget' });
+      if (!next) { host.message(outcome.text, true); return result; }
+      await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash, next.job.request.record.flags.animation);
+      state.appliedOnStage = retargetAppliedRecord(next.job); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'retarget' });
       if (pickedSide === side) {
         const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
       } else if (state.animationState) {
@@ -1634,14 +1622,11 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       animationPanel?.setEditorStatus(`Applying ${ops.length} animation op(s) on Build ${side.toUpperCase()} (${animSource.path ?? 'animations_from'}: rig-parts rig → rigc build → rig-parts check)…`, false);
     }
     try {
-      const result = await runRebuild<AnimationRequestBody, AnimationJobView>(request, {
-        post: value => host.api<AnimationJobView | RebuildRefusal>(`${sideApiPrefix(side)}/rebuild`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
-        get: id => host.api<AnimationJobView>(`${sideApiPrefix(side)}/rebuild/${id}`),
-        sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      const { result, outcome, next } = await runRebuildApply(request, {
+        api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`, formatOutcome: animationOutcomeLine,
         onLine: line => { if (pickedSide === side) animationPanel?.setEditorStatus(line.trim() || '…', false); },
       });
-      const outcome = animationOutcomeLine(result), next = stageModel(result, { url: '', hash: state.stageModelHash ?? '' });
-      if (next.id === null || !('id' in result)) {
+      if (!next) {
         if (pickedSide === side) animationPanel?.setEditorStatus(outcome.text, true);
         host.message(outcome.text, true);
         return result;
@@ -1650,8 +1635,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         animationPanel?.markApplied(ops, outcome.text, outcome.error);
       }
       await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
-      state.appliedOnStage = animationAppliedRecord(result);
-      state.stageCheck = { lines: [...result.lines], check: result.check };
+      state.appliedOnStage = animationAppliedRecord(next.job);
+      state.stageCheck = { lines: [...next.job.lines], check: next.job.check };
       stageChanged(side, { kind: 'apply', via: 'animation' });
       if (pickedSide === side) {
         const draft = el<HTMLTextAreaElement>('rebuild-applied');
