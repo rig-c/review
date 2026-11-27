@@ -1,4 +1,5 @@
 import {expandViewportPair} from '../web/viewport-pair.ts';
+import {compareWorkspaceMarkup} from '../web/compare-markup.ts';
 /** Trusted application content, shared by client composition and the eight legacy comparison regions.
  * Never interpolate package or request data into these constants. Headers and camera controls
  * are constructed by workspace-ui and view-controls, not by the server splicer.
@@ -104,7 +105,7 @@ export function extractSharedWorkspaceMarkup(content: string = rigWorkspaceMarku
   return out;
 }
 
-export function assertNoDuplicateIds(html: string, label = 'compare.html'): void {
+export function assertNoDuplicateIds(html: string, label = 'Compare markup'): void {
   const seen = new Set<string>();
   for (const m of html.matchAll(/\bid="([^"]+)"/g)) {
     const id = m[1]!;
@@ -130,17 +131,17 @@ export function assertSharedCompareMarkup(compareHtml: string, content: string =
   assertNoDuplicateIds(compareHtml, 'rendered compare HTML');
 }
 
-export function renderCompareHtml(compareTemplate: string, content: string = rigWorkspaceMarkup): string {
+export function renderCompareHtml(compareTemplate: string = compareWorkspaceMarkup, content: string = rigWorkspaceMarkup): string {
   const shared = extractSharedWorkspaceMarkup(content);
   let out = compareTemplate;
   for (const r of REGIONS) {
     if (!out.includes(r.placeholder)) {
-      throw new Error(`COMPARE_SHARED_MARKUP_MISSING: placeholder ${r.placeholder} missing in web/compare.html`);
+      throw new Error(`COMPARE_SHARED_MARKUP_MISSING: placeholder ${r.placeholder} missing in Compare markup`);
     }
     out = out.replace(r.placeholder, shared[r.key]);
   }
   if (out.includes('<!-- shared:')) {
-    throw new Error('COMPARE_SHARED_MARKUP_MISSING: unreplaced shared placeholder in web/compare.html');
+    throw new Error('COMPARE_SHARED_MARKUP_MISSING: unreplaced shared placeholder in Compare markup');
   }
   assertSharedCompareMarkup(out, content);
   return out;

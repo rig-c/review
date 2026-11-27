@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { loadCompare, assertCompareUnchanged, type ComparePackage } from '../src/compare.ts';
 import { freshCompareSession, parseCompareSession, readCompareSession, saveCompareSession } from '../src/compare-session.ts';
 import { startCompareServer } from '../src/compare-server.ts';
-import { buildWeb } from '../src/build.ts';
+import { buildWeb, entryHtml } from '../src/build.ts';
+import { compareWorkspaceMarkup } from '../web/compare-markup.ts';
 
 const dirs:string[]=[];afterEach(async()=>{for(const root of dirs.splice(0))await rm(root,{recursive:true,force:true});});
 // Envelope-only transport probes; actual runtime controls use the separately gated fixture.
@@ -31,6 +32,26 @@ test('comparison refuses missing rig, animation, external package symlink and no
 });
 test('comparison animation refusal identifies each invalid side independently of parallel read order',async()=>{
  for(const side of ['a','b'] as const){const f=await fixture(),other=side==='a'?'b':'a',modelPath=join(f.root,other,'build/skeleton.model.json'),model=JSON.parse(await readFile(modelPath,'utf8'));model.animations.push({name:'only-other-side',duration:2});await writeFile(modelPath,JSON.stringify(model));await expect(loadCompare({...f.inputs,animation:'only-other-side'})).rejects.toThrow(`compare.${side}.animation: model has no animation "only-other-side"`);}
+});
+test('Compare serves the marked shared HTML entry at / and /index.html', async () => {
+ const f = await fixture();
+ const server = await startCompareServer(await loadCompare(f.inputs), {port: 0, stateDir: join(f.root, 'state')});
+ try {
+  for (const path of ['/', '/index.html']) {
+   const url = `http://127.0.0.1:${server.port}${path}`;
+   const response = await fetch(url);
+   expect(response.status).toBe(200);
+   const html = await response.text();
+   expect(html.includes('<div id="app" data-review-screen="compare"></div>')).toBe(true);
+   expect(html).toContain('<title>rig review · compare</title>');
+   const head = await fetch(url, {method: 'HEAD'});
+   expect(head.status).toBe(200);
+   expect(head.headers.get('content-type')).toBe(response.headers.get('content-type'));
+   expect(await head.text()).toBe('');
+  }
+ } finally {
+  await server.stop(true);
+ }
 });
 test('Compare /main.js serves the shared frontend bundle', async () => {
  const f = await fixture();
@@ -84,10 +105,8 @@ import { decodeBookmark, encodeBookmark, parseBookmark, type InspectionBinding, 
 import { stageCommentMode } from '../src/stage-comment.ts';
 
 test('compare mounts shared header content and retains eight identical canonical Setup/Animate regions, failing on planted differences', async () => {
-  const [indexHtml, compareTemplate] = await Promise.all([
-    readFile(new URL('../web/index.html', import.meta.url), 'utf8'),
-    readFile(new URL('../web/compare.html', import.meta.url), 'utf8'),
-  ]);
+  const indexHtml = await readFile(new URL('../web/index.html', import.meta.url), 'utf8');
+  const compareTemplate = compareWorkspaceMarkup;
   expect(indexHtml).not.toContain('id="package-title"');
   expect(indexHtml).not.toContain('id="inspector-rig"');
   expect(indexHtml).toContain('<div id="app"></div>');
@@ -99,7 +118,7 @@ test('compare mounts shared header content and retains eight identical canonical
   expect(legacyCompareHeaderContent.modeSwitch).toContain('data-mode="rig" aria-pressed="false">Setup</button>');
   expect(legacyCompareHeaderContent.modeSwitch).toContain('data-mode="playback" aria-pressed="false">Animate</button>');
   expect(legacyCompareHeaderContent.modeSwitch).toContain('data-mode="compare" aria-pressed="true">Compare</button>');
-  const rendered = renderCompareHtml(compareTemplate);
+  const rendered = renderCompareHtml();
   expect(() => assertSharedCompareMarkup(rendered)).not.toThrow();
   const shared = extractSharedWorkspaceMarkup();
   const keys = Object.keys(shared) as (keyof SharedWorkspaceMarkup)[];
@@ -248,8 +267,7 @@ fs.writeFileSync(path.join(out,'page.png'),'rebuilt-png');console.log('rigc: wro
   try {
     const landing = await fetch(opened.url);
     expect(landing.status).toBe(200);
-    const html = await landing.text();
-    expect(() => assertSharedCompareMarkup(html)).not.toThrow();
+    expect(await landing.text()).toBe(await entryHtml('compare'));
 
     const statusA = await (await fetch(base + 'api/compare/a/rebuild')).json();
     const statusB = await (await fetch(base + 'api/compare/b/rebuild')).json();

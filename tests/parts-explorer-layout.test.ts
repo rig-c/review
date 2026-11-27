@@ -1,4 +1,5 @@
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
+import {compareWorkspaceMarkup} from '../web/compare-markup.ts';
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -30,7 +31,7 @@ function cssRuleMap(css: string): Map<string, string[]> {
 }
 
 test('Change 1 & 4: compare and single-review HTML separate fixed tools from the scrolling [data-part-list]', () => {
-  const compareHtml = readFileSync(new URL('../web/compare.html', import.meta.url), 'utf8');
+  const compareHtml = compareWorkspaceMarkup;
   const singleHtml = (rigWorkspaceMarkup+rigReviewDialogMarkup);
 
   // Compare panel: heading, Whole rig button, search label + input, Solo toggle, and status count are inside .parts-tools before <ul data-part-list>

@@ -219,7 +219,7 @@ test('#655 slice 1: owner workspace serves pinned GET and HEAD HTML bytes and he
   }
 });
 
-test('#655 slice 1: entryHtml owns web/index.html reads across all four routes and preserves custom assets and marker checks', async () => {
+test('#655: entryHtml owns web/index.html reads across all five routes and preserves custom assets and marker checks', async () => {
   for (const screen of ['rig', 'job'] as const) {
     const html = await entryHtml(screen);
     expect(sha256(new TextEncoder().encode(html))).toBe(UNMARKED_HTML_SHA256);
@@ -241,7 +241,7 @@ test('#655 slice 1: entryHtml owns web/index.html reads across all four routes a
   await writeFile(join(brokenRoot, 'web/index.html'), '<!doctype html><html><body></body></html>\n');
   await expect(entryHtml('rig', undefined, brokenRoot)).rejects.toThrow('SETUP_ENTRY_MARKER_MISSING');
 
-  for (const routeFile of ['src/server.ts', 'src/parts-server.ts', 'src/job-front.ts', 'src/open-workspace.ts']) {
+  for (const routeFile of ['src/server.ts', 'src/parts-server.ts', 'src/job-front.ts', 'src/open-workspace.ts', 'src/compare-server.ts']) {
     const source = await readFile(routeFile, 'utf8');
     expect(source).toContain('entryHtml(');
     expect(source).not.toContain('web/index.html');
