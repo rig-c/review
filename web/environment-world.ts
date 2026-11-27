@@ -188,3 +188,11 @@ export function windClockOnMove(move: ClipMove, watched: boolean, playing: boole
   if (restartsWindClock(move, watched)) return 0;
   return move.kind === 'seek' && !playing ? move.to : null;
 }
+
+/** Rebase the wind and queued jolts to a new clip-clock position. */
+export function resetWindClock(wind: WindModel, jolts: readonly JoltStep[], at = 0): JoltStep[] {
+  const previous = wind.read().time;
+  wind.restore(wind.snapshot());
+  if (at > 0) wind.advance(at);
+  return jolts.map(step => ({ ...step, at: Math.max(0, step.at - previous) + at }));
+}

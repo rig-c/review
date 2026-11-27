@@ -8,6 +8,7 @@
 
 ### Fixed
 
+* Compare shows the wind for the selected time after a paused seek, regardless of earlier playback (#1301).
 * Compare's view controls read Zoom in · Zoom out · Fit · 1:1 like Rig's, and 1:1 works as it does on Rig: the active pane goes to native scale and synced panes keep their relative view (#1282). The View switch follows with the Compare toolbar migration.
 * Compare refuses a reading seek past the shared clip instead of seeking to a different time (#1302).
 * Compare keeps the selected chest-row bones when Apply, Undo or Reset reloads the picked build (#1304).
