@@ -34,6 +34,10 @@ for(const mode of ['compare','main'])test(`${mode} comment hold preserves the al
   expect(context.video.paused).toBe(true);expect(held).toBe(true);expect(camera).toEqual({x:2,y:3,zoom:1.5});
   // A still view is evidence already: replaying it changes history-dependent bone/overlay pixels.
   if(!running)expect(drawnBoneY).toBe(40);
+  const beforeUntouched=drawnBoneY;
+  context.turnPad={snapshot:()=>undefined,restore:()=>{throw Error('Untouched comment must not set Hold');}};
+  await hold();
+  expect(drawnBoneY).toBe(beforeUntouched);
  }
 });
 test('viewport crop uses inherited light pane pixels and anchored grid, not media black',()=>{

@@ -37,10 +37,12 @@ function timed(p:any,reference=false):any{
 async function fixture(fn:(p:any,root:string)=>Promise<void>){const root=await mkdtemp(join(tmpdir(),'timed-comment-'));try{const source=await turnPackage(join(root,'package'));await writeFile(join(source,'source.webm'),'inert local reference bytes');const p=await loadReferencedReview(source,join(source,'source.webm'));await fn(p,root);}finally{await rm(root,{recursive:true,force:true});}}
 test('clockless single rig/reference time-only comments keep null frame and interval through validation, drafts and immutable submission',()=>fixture(async(p,root)=>{
  expect(p.feedbackCatalog.clock).toBeNull();
- for(const reference of [false,true]){const f=timed(p,reference),state=join(root,reference?'video-state':'rig-state'),baseline=freshSession(p);
+ for(const [axis,reference] of [['held',false],['held',true],['untouched',false]] as const){const f=timed(p,reference),state=join(root,axis+(reference?'-video':'-rig')),baseline=freshSession(p);
+  if(axis==='untouched'){delete f.context.turn;delete f.context.comment.bookmark.selection.turn;}
   expect(parseStageComment(f.context.comment).frame).toBeNull();expect(parseFeedback(f)).toEqual(f);expect(validatePackageFeedback(f,p)).toEqual(f);
   expect(recoverSession({...baseline,feedback:[f]},baseline)?.feedback[0]).toEqual(f);
   const saved=await saveSession(p,{...baseline,feedback:[f]},state),read=await readSession(p,state);expect(read.feedback[0]).toEqual(f);expect(read.feedbackWarnings).toEqual([]);expect(saved.feedback[0]!.frameStart).toBeNull();
+  if(axis==='untouched')expect(read.feedback[0]!.context).not.toHaveProperty('turn');
   await expect(saveSession(p,{...saved,feedback:[]},state)).rejects.toThrow('COMMENT_SUBMITTED');
  }
 }));

@@ -41,6 +41,8 @@ test('a scratch stage cannot submit newly supported values outside the original 
   scratch.restore(snapshot(50));expect(()=>parseSession({...base,feedback:[note(scratch.snapshot())]},p)).toThrow('TURN_STATE_MODEL_MISMATCH');
   const binding={mode:'single' as const,sourceHash:p.sourceHash,rigs:[p.reviewedSource.rig!.sha256]},view={schema:'rig-review-view/1',cameras:{rig:null,a:null,b:null,reference:null}},bookmark={schema:'rig-review-inspection/1',binding,animation:'inspect',time:0,theme:'dark',layers:{images:true,meshes:false,bones:false},view,selection:{turn:snapshot()}};
   expect(parseBookmark(bookmark,binding).selection.turn).toEqual(snapshot());expect(()=>parseBookmark(bookmark,{...binding,sourceHash:'f'.repeat(64)})).toThrow('VIEW_SOURCE_CHANGED');
+  expect(parseBookmark({...bookmark,selection:{}},binding).selection).not.toHaveProperty('turn');
+  expect(()=>parseBookmark({...bookmark,selection:{turn:{...snapshot(),schema:'rig-review-turn/2'}}},binding)).toThrow('TURN_STATE_INVALID');
   expect(()=>parseBookmark({...bookmark,selection:{turn:{...snapshot(),values:{yaw:Infinity}}}},binding)).toThrow('TURN_');
  }finally{await rm(temp,{recursive:true,force:true});}
 });
