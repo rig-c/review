@@ -18,7 +18,6 @@ const PICKS_ACT_SHA256_285A59F = 'a7840d56090451e06143b4c5496e43338de57d387a2558
 import {parseCommentsAct, projectComments} from '../src/job-host.ts';
 import commentsLegacy from './fixtures/comments-contract-legacy.json';
 import {
-  bindJobAsk,
   bindJobRecordAsk,
   parseUISubmission,
   prepareJobRecordAct,
@@ -253,9 +252,6 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
     expect(() =>
       bindJobRecordAsk({ kind: 'interview-picks', questionId: 'rig_type', setId: 'set_rig_type_01' }, optRetained),
     ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
-    expect(() =>
-      bindJobAsk({ kind: 'interview-picks', questionId: 'rig_type', setId: 'set_rig_type_01' }, optRetained),
-    ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
 
     // Refuses wrong questionId/setId or plan/package subjects on option-set source
     expect(() =>
@@ -282,15 +278,9 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
     expect(() => bindJobRecordAsk({ kind: 'checkpoint', checkpointId: 'step_layout' }, planRetained)).toThrow(
       expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
     );
-    expect(() => bindJobAsk({ kind: 'checkpoint', checkpointId: 'step_layout' }, planRetained)).toThrow(
-      expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
-    );
     for (const stage of ['plan-approved', 'rigging-interview', 'post-interview'] as const) {
       expect(planRetained.source.subjects).toContainEqual({ kind: 'signoff', stage });
       expect(() => bindJobRecordAsk({ kind: 'signoff', stage }, planRetained)).toThrow(
-        expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
-      );
-      expect(() => bindJobAsk({ kind: 'signoff', stage }, planRetained)).toThrow(
         expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
       );
     }
@@ -755,9 +745,6 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
 
     // #989 Bar 2: declared reopen stage refuses with JOB_ASK_INVALID
     expect(() => bindJobRecordAsk(reopenSubject, retained)).toThrow(
-      expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
-    );
-    expect(() => bindJobAsk(reopenSubject, retained)).toThrow(
       expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
     );
 

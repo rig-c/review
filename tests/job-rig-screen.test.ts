@@ -129,7 +129,7 @@ test('#709 job-window rig verdict mount and capture path are deleted, not hidden
   const mainSource = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
   expect(mainSource).not.toContain('Review the reopened stage.');
   const actSource = await Bun.file(new URL('../src/job-act.ts', import.meta.url)).text();
-  expect(actSource.match(/reopen/g)).toEqual(['reopen']);
+  expect(actSource).not.toContain('reopen');
   expect(form).not.toContain("subject.kind === 'signoff'");
   expect(source).not.toContain('data-direction-signoff');
   expect(source).not.toContain('job.signoff');

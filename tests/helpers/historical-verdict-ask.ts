@@ -1,5 +1,4 @@
 import {randomUUID} from 'node:crypto';
-import {bindJobAsk} from '../../src/job-act.ts';
 import {parseJobSubject, requestDigest} from '../../src/job-api.ts';
 import type {JobEventV3, JobPendingAsk, JobSubject} from '../../src/job-contract.ts';
 import type {JobSession} from '../../src/job-session.ts';
@@ -37,7 +36,7 @@ export function seedHistoricalVerdictAsk(session: JobSession, publicationId: str
     if (!active || data.head !== publicationId) throw new Error('Historical verdict setup requires the active head');
     const retained = data.publications[publicationId].retained;
     if (isRetainedRecordSource(retained)) throw new Error('Historical verdict setup requires a package publication');
-    const source = bindJobAsk(boundSubject, retained);
+    const source = structuredClone(retained.source);
     ask = {...template.ask, askId: randomUUID(), publicationId, subject: boundSubject, source, status};
     const expectedGeneration = data.generation++;
     const digest = requestDigest({schema: session.apiSchema, jobId: session.jobId, verb: 'ask',
