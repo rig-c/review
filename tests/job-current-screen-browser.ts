@@ -1,6 +1,6 @@
 /** #1267 part B: EN and KO whole-screen pair captures and visible-text diffs for current/parts, current/rig and current/direction. */
 import assert from 'node:assert/strict';
-import {mkdir, mkdtemp, readFile, rm, unlink, writeFile} from 'node:fs/promises';
+import {cp, mkdir, mkdtemp, readFile, rm, unlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {jobHash} from '../src/job-api.ts';
@@ -67,15 +67,30 @@ async function setupOutputHost(kind: OutputKind, side: Side) {
     });
   } else {
     if (kind === 'direction') {
-      const modelSha = jobHash(await readFile(join(pkgRoot, 'skeleton.model.json')));
-      await writeFile(join(pkgRoot, 'direction.json'), JSON.stringify({
-        schema: 'rig-create/direction@1',
-        rig: {version: 2, model: {path: 'skeleton.model.json', sha256: modelSha}},
-        take: {duration: 1, loop: true},
-        camera: {space: 'rig-world-y-up', keys: [{time: 0, easing: 'hold', box: {x: 0, y: 0, width: 80, height: 64}}]},
-        timing: {keys: [{time: 0, source_time: 0, easing: 'linear'}, {time: 1, source_time: 1, easing: 'linear'}]},
-      }));
+      const createFixtureDir = 'tests/fixtures/create-example-current';
+      for (const stale of ['rigid.png', 'report.json']) {
+        await unlink(join(pkgRoot, stale)).catch(() => {});
+      }
+      for (const name of ['skeleton.model.json', 'skeleton.atlas', 'skeleton.png']) {
+        await cp(join(createFixtureDir, name), join(pkgRoot, name));
+      }
+      if (side === 'current') {
+        await cp(join(createFixtureDir, 'direction.json'), join(pkgRoot, 'direction.json'));
+      } else {
+        const modelSha = jobHash(await readFile(join(pkgRoot, 'skeleton.model.json')));
+        await writeFile(join(pkgRoot, 'direction.json'), JSON.stringify({
+          schema: 'rig-create/direction@3',
+          model: {path: 'skeleton.model.json', sha256: modelSha},
+          rig: {version: 2, model: {path: 'skeleton.model.json', sha256: modelSha}},
+          take: {duration: 4, loop: true},
+        }, null, 2) + '\n');
+      }
+      manifest.model = 'skeleton.model.json';
       manifest.direction = 'direction.json';
+      manifest.references = [];
+      manifest.authoring = [];
+      manifest.animations = [{id: 'idle', label: 'Idle', duration: 4}];
+      manifest.checkpoints = [];
     }
     await writeFile(manifestPath, JSON.stringify(manifest));
     h.input.setContext({selector, plan: null, parts: null, subjects: [], partIds: [], files: []});
@@ -110,11 +125,24 @@ try {
       const currentSetup = await setupOutputHost(kind, 'current');
       const numberedSetup = await setupOutputHost(kind, 'numbered');
       try {
-        assert.deepEqual(
-          await jobInputHashes(join(currentSetup.h.input.root, 'out')),
-          await jobInputHashes(join(numberedSetup.h.input.root, 'out')),
-          `${language}/${kind}: identical package bytes on both sides`,
-        );
+        const currentHashes = await jobInputHashes(join(currentSetup.h.input.root, 'out'));
+        const numberedHashes = await jobInputHashes(join(numberedSetup.h.input.root, 'out'));
+        if (kind === 'direction') {
+          const withoutDirection = (rows: Record<string, string>) =>
+            Object.fromEntries(Object.entries(rows).filter(([k]) => k !== 'direction.json'));
+          assert.deepEqual(
+            withoutDirection(currentHashes),
+            withoutDirection(numberedHashes),
+            `${language}/direction: identical package bytes on both sides excluding direction.json`,
+          );
+          assert.notEqual(currentHashes['direction.json'], numberedHashes['direction.json']);
+        } else {
+          assert.deepEqual(
+            currentHashes,
+            numberedHashes,
+            `${language}/${kind}: identical package bytes on both sides`,
+          );
+        }
         const currentPub = await currentSetup.h.publish();
         const numberedPub = await numberedSetup.h.publish();
         const captures: Record<Side, {png: string; text: string; pub: JobPublication}> = {} as never;
@@ -126,9 +154,13 @@ try {
           const stageReady = kind === 'parts'
             ? `Number(document.querySelector('#parts-canvas')?.width)>0`
             : kind === 'direction'
-              ? `!!document.querySelector('#rig-root canvas')&&!!document.querySelector('#direction-panel')&&!document.querySelector('#direction-panel').open`
+              ? `!!document.querySelector('#rig-root canvas')&&!!document.querySelector('#direction-panel')`
               : `!!document.querySelector('#rig-root canvas')`;
           await wait(`document.body.dataset.ready==='true'&&!document.body.inert&&document.querySelector('#send-comments')?.checkVisibility()===true&&document.querySelector('#save')?.hidden===true&&document.querySelector('#message')?.textContent===${JSON.stringify(setup.title)}&&${stageReady}`);
+          if (kind === 'direction') {
+            await page.evaluate(`(()=>{const d=document.querySelector('#direction-panel');if(d&&!d.open)d.querySelector('summary').click();})()`);
+            await wait(`!!document.querySelector('#direction-panel')?.open&&document.querySelectorAll('#direction-panel li').length>0`);
+          }
           await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
           assert.equal(await page.evaluate(`document.documentElement.lang`), language);
           const expectedBadge = (language === 'en' ? 'source ' : '소스 ') + pub.source.sourceHash.slice(0, 12);
@@ -157,18 +189,42 @@ try {
           await page.goto('about:blank');
         }
 
-        const currentNorm = captures.current.text.replaceAll(currentPub.source.sourceHash.slice(0, 12), '<sourceHash12>');
-        const numberedNorm = captures.numbered.text.replaceAll(numberedPub.source.sourceHash.slice(0, 12), '<sourceHash12>');
+        const currentNorm = captures.current.text
+          .replaceAll(currentPub.source.sourceHash, '<sourceHash64>')
+          .replaceAll(currentPub.source.sourceHash.slice(0, 12), '<sourceHash12>');
+        const numberedNorm = captures.numbered.text
+          .replaceAll(numberedPub.source.sourceHash, '<sourceHash64>')
+          .replaceAll(numberedPub.source.sourceHash.slice(0, 12), '<sourceHash12>');
         const diff = lineDiff(currentNorm, numberedNorm);
         const rawDiff = lineDiff(captures.current.text, captures.numbered.text);
 
         if (kind === 'direction') {
-          const currentSummary = language === 'en' ? 'Direction · 1 s · loop · fixed camera' : '연출 · 1초 · 반복 · 카메라 고정';
-          const numberedSummary = language === 'en' ? 'Direction v3 · 1 s · loop · fixed camera' : '연출 v3 · 1초 · 반복 · 카메라 고정';
+          const currentDirSha = currentHashes['direction.json']!;
+          const numberedDirSha = numberedHashes['direction.json']!;
+          const currentSummary = language === 'en' ? 'Direction · 4 s · loop' : '연출 · 4초 · 반복';
+          const numberedSummary = language === 'en' ? 'Direction v3 · 4 s · loop' : '연출 v3 · 4초 · 반복';
+          const currentAuthored = language === 'en'
+            ? `Authored direction · direction.json · SHA-256 ${currentDirSha}`
+            : `작성된 연출 · direction.json · SHA-256 ${currentDirSha}`;
+          const numberedAuthored = language === 'en'
+            ? `Authored direction · rig v2 · direction.json · SHA-256 ${numberedDirSha}`
+            : `작성된 연출 · 리그 v2 · direction.json · SHA-256 ${numberedDirSha}`;
+          assert.ok(!captures.current.text.includes('undefined'), `${language}/direction: no undefined in current text`);
+          assert.ok(!captures.current.text.includes('rig v'), `${language}/direction: no rig version in current text`);
+          assert.ok(!captures.current.text.includes('리그 v'), `${language}/direction: no KO rig version in current text`);
           assert.ok(currentNorm.includes(currentSummary), `${language}/direction current summary`);
           assert.ok(numberedNorm.includes(numberedSummary), `${language}/direction numbered summary`);
-          assert.equal(numberedNorm.replace(numberedSummary, currentSummary), currentNorm, `${language}/direction: only omitted version label differs`);
-          assert.deepEqual(diff.map(({current, numbered}) => ({current, numbered})), [{current: currentSummary, numbered: numberedSummary}]);
+          assert.ok(currentNorm.includes(currentAuthored), `${language}/direction current authored row`);
+          assert.ok(numberedNorm.includes(numberedAuthored), `${language}/direction numbered authored row`);
+          assert.equal(
+            numberedNorm.replace(numberedSummary, currentSummary).replace(numberedAuthored, currentAuthored),
+            currentNorm,
+            `${language}/direction: only omitted version labels and direction.json sha256 differ`,
+          );
+          assert.deepEqual(diff.map(({current, numbered}) => ({current, numbered})), [
+            {current: currentSummary, numbered: numberedSummary},
+            {current: currentAuthored, numbered: numberedAuthored},
+          ]);
         } else {
           assert.equal(currentNorm, numberedNorm, `${language}/${kind}: visible text equal across pair`);
           assert.deepEqual(diff, []);
@@ -179,9 +235,11 @@ try {
           output: kind,
           pngs: {current: captures.current.png, numbered: captures.numbered.png},
           omittedVersionLabel: kind === 'direction' ? ' v3' : null,
+          omittedRigVersionLabel: kind === 'direction' ? (language === 'en' ? 'rig v2 · ' : '리그 v2 · ') : null,
           diff,
           rawLineDiff: rawDiff,
           sourceHashes: {current: currentPub.source.sourceHash, numbered: numberedPub.source.sourceHash},
+          ...(kind === 'direction' ? {directionHashes: {current: currentHashes['direction.json'], numbered: numberedHashes['direction.json']}} : {}),
         }, null, 2) + '\n');
       } finally {
         await currentSetup.h.close();

@@ -87,7 +87,7 @@ export interface JobPublishedContext {
 
 /** Reload only the identity recorded for this publication; old bindings are never relabelled. */
 export async function loadRetainedJobReview(retained: JobRetainedSource, fingerprint: string) {
-  const review = await loadJobReview(retained.manifestPath, retained.root.path);
+  const review = await loadJobReview(retained.manifestPath, retained.root.path, retained.source.selector);
   const found = openKey({mode: 'single', p: {...review, sourceHash: retained.source.sourceHash},
     inputs: {input: join(retained.root.path, relative(retained.snapshotRoot, retained.manifestPath))},
     contentHash: retained.source.sourceHash, selection: null}, fingerprint);
@@ -1638,7 +1638,7 @@ export async function prepareJobSource(options: {
   try {
     const target = checkedPath(root.path, request.result.path, lstatSync(join(root.path, request.result.path)).isDirectory());
     // Resolve producer references from the designated job root for both copies.
-    review = await loadJobReview(target, root.path);
+    review = await loadJobReview(target, root.path, context.selector);
   } catch (error) {
     if (error instanceof JobError && error.code === 'JOB_PREVIOUS_BUILD_INVALID' && context.selector?.kind !== 'current') throw error;
     throw new JobError('JOB_SOURCE_MISMATCH', error instanceof HandoffError ? error.message : undefined);
@@ -1734,7 +1734,7 @@ export async function prepareJobSource(options: {
       options.afterDirectorySync?.(directory);
     }
     await assertReviewUnchanged(review);
-    const retained = await loadJobReview(join(snapshotRoot, request.result.path), root.path);
+    const retained = await loadJobReview(join(snapshotRoot, request.result.path), root.path, context.selector);
     if (retained.sourceHash !== review.sourceHash || requestDigest(retained.reviewedSource) !== requestDigest(review.reviewedSource)) {
       throw new JobError('JOB_SOURCE_UNRETAINABLE',
         `snapshot reload sourceHash ${retained.sourceHash} requires live ${review.sourceHash}; ` +
