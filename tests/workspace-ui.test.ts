@@ -634,16 +634,19 @@ test('#678 rig caller regions preserve the legacy shell DOM, labels, drawers and
  }finally{setLinkLanguage(link);setLanguagePreference(preference);}
 });
 
-test('#809 pending ask heading uses full subject sentences in EN/KO and names the absence of an ask',async()=>{
+test('#1232 historical verdict subjects leave the existing comment headline in EN/KO',async()=>{
  const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
  const raw={text:'',hidden:false,removeAttribute(){}};
- let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','renderDraftState','t','setSourceAttribute','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null,askSentence="",jobProgress=null,progressTimer;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},()=>{statusRefreshes++;},t,()=>{});
+ let statusRefreshes=0,commenting=false;
+ const inspector={comments:{panel:{querySelector:()=>null}}};
+ const render=new Function('askHeadline','setSourceText','renderDraftState','t','setSourceAttribute','commentHost','rigInspector','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null,askSentence="",jobProgress=null,progressTimer;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},()=>{statusRefreshes++;},t,()=>{},()=>commenting,inspector);
  render([]);expect(raw.hidden).toBe(false);expect(t(raw.text,undefined,'en')).toBe('Nothing is waiting for your answer.');expect(t(raw.text,undefined,'ko')).toBe('답변을 기다리는 요청이 없어요.');
- // #1229 / #1230: checkpoint and interview-picks asks are retired and produce no ask sentence; active verdict subjects join with full EN/KO sentences.
+ commenting=true;
+ const headline="We're looking at the work together. Leave your thoughts as comments.";
  render([{kind:'review-verdict',stage:'rig-review'},{kind:'parts-verdict'},{kind:'interview-picks'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
- expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Check the parts.');
- expect(t(raw.text,undefined,'ko')).toBe('리그와 모션을 확인해 주세요. · 파츠를 확인해 주세요.');
- render([]);expect(raw.hidden).toBe(false);expect(raw.text).toBe('Nothing is waiting for your answer.');expect(statusRefreshes).toBe(3);
+ expect(t(raw.text,undefined,'en')).toBe(enCatalog[headline]);
+ expect(t(raw.text,undefined,'ko')).toBe(koCatalog[headline]);
+ render([]);expect(raw.hidden).toBe(false);expect(raw.text).toBe(headline);expect(statusRefreshes).toBe(3);
 });
 
 test('#743 workspace owns detached portal lookup, settles redocking, and disposes only its drawers',async()=>{
@@ -672,7 +675,7 @@ test('#904 waiting prompt never guesses a rig subject for model-free record and 
  }
 });
 
-for(const language of ['en','ko'] as const)test('#987 ticks the current age and stops when a pending ask takes the headline ('+language+')',async()=>{
+for(const language of ['en','ko'] as const)test('#987 ticks the current age through a historical verdict ask and stops when progress clears ('+language+')',async()=>{
  const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
  const catalog=language==='ko'?koCatalog:enCatalog;
  const at='2026-11-20T00:00:00.000Z',text='Check the parts.';
@@ -711,7 +714,10 @@ for(const language of ['en','ko'] as const)test('#987 ticks the current age and 
  expect(parts).toBe(quietParts);
  expect(read()).toBe(t('job.progress.quiet',[2,phase],language));
  render.renderPendingSubjects([{kind:'review-verdict',stage:'rig-review'}]);
- expect(read()).toBe(catalog['Check the rig and motion.']);
+ expect(read()).toBe(t('job.progress.quiet',[2,phase],language));
+ expect(typeof activeTick).toBe('function');
+ render.setJobProgress(null);
+ expect(read()).toBe(catalog['Nothing is waiting for your answer.']);
  expect(attributes.has('translate')).toBe(false);
  expect(activeTick).toBeUndefined();
 });
