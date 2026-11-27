@@ -311,7 +311,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   patchOutcomeLine,
   deltaOutcomeLine,
   MESH_DELTA_APPLIED_SOURCE,
-  stageModel,
+  runRebuildApply,
   chestStatusForPart,
   designatedRegions,
   chestSeed,
@@ -923,7 +923,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    patchOutcomeLine,
    deltaOutcomeLine,
    MESH_DELTA_APPLIED_SOURCE,
-   stageModel,
+   runRebuildApply,
    chestPartFields,
    chestStatusForPart,
    designatedRegions,
@@ -1014,17 +1014,6 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    worldFor:()=>null,
    stageWorld:()=>null,
    swapRig:async()=>{throw new Error('SWAP_RIG_CALLED_IN_PRE_RIG');},
-   runRebuild:async(body:any)=>({
-    ...activeRebuildJob,
-    request:{
-     ...activeRebuildJob.request,
-     part:body?.part??'torso',
-     regions:body?.regions??[],
-     entrySha256:'entry-sha-123456',
-     delta:body?.delta??{ops:[]},
-     deltaSha256:'delta-sha-123456',
-    },
-   }),
    retargetStage:()=>null,
    chooseAnimation:()=>{},
    stageChanged:()=>{},
@@ -1035,7 +1024,21 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    redrawOverlay:()=>{},
    message:(text:string,error=false)=>{messages.push({text,error});},
    api:async(path:string,init?:any)=>{
-    if(path==='/api/rebuild')return structuredClone(rebuildStatusPayload);
+    if(path==='/api/rebuild'){
+     if(init?.method!=='POST')return structuredClone(rebuildStatusPayload);
+     const body=JSON.parse(init.body);
+     return {
+      ...activeRebuildJob,
+      request:{
+       ...activeRebuildJob.request,
+       part:body.part??'torso',
+       regions:body.regions??[],
+       entrySha256:'entry-sha-123456',
+       delta:body.delta??{ops:[]},
+       deltaSha256:'delta-sha-123456',
+      },
+     };
+    }
     if(path==='/api/stage-parts'){
      const b=init?.headers?.['X-Review-Stage-Build']??'inspected';
      stagePartsCallCount++;

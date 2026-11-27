@@ -9,12 +9,68 @@ import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
 import {compileArgs,firstRefusal,MODELING_PRODUCER_NOT_INSTALLED,remeshArgs,resolveProducer,REMESH_SINCE,versionAtLeast} from '../src/producer.ts';
 import {buildPlan,createRebuilds,designationId,producerInputs,rebuildDir,meshEntryText,parseRebuildRequest,RebuildError} from '../src/rebuild.ts';
-import {appliedRecord,patchAppliedRecord,type PatchJobView,designatedRegions,outcomeLine,pickPart,runRebuild,seedFields,type RebuildJobView} from '../web/rebuild-client.ts';
+import {appliedRecord,patchAppliedRecord,type PatchJobView,designatedRegions,outcomeLine,patchOutcomeLine,pickPart,runRebuild,runRebuildApply,seedFields,type AnyJobView,type PatchRequestBody,type RebuildJobView,type RebuildRefusal} from '../web/rebuild-client.ts';
 import {chestRowId,type ChestFieldValue} from '../web/chest-regions-tool.ts';
 
 const bust={name:'bust',shape:'circle' as const,cx:414,cy:342,r:50,bone:'chest_jiggle',spacing:13,band:30};
 const config={key:'k',meshes:{topwear:{contour:{tolerance:2,margin:2,spacing:28,maxEdge:45,stray:300,bridges:true,regions:[bust]},r:15,segments:[['chest',[416,230],[416,600]]]},neck:{grid:10}}};
 const REFUSAL='  FAIL  REMESH_TARGET_MESH: refuse — a linked mesh is bound to it (see rig-parts guide REMESH_TARGET_MESH)';
+
+test('#1285: rebuild Apply posts, polls and reports regions and patch outcomes',async()=>{
+ const configHash='f'.repeat(64),regions={part:'topwear',regions:[bust],configHash};
+ const patch:PatchRequestBody={patch:{
+  schema:'rig-review-config-patch/1',config_sha256:configHash,ops:[{op:'replace',path:'/meshes/topwear/contour/spacing',value:20}],
+  producer:{name:'@rig-c/parts',version:'1.42.0'},op:{cmd:'remesh',args:['--part','topwear']},
+ }};
+ const built={
+  id:'d'.repeat(64),status:'built',reused:false,lines:['started','finished'],producerLine:'wrote',exitCode:0,
+  producer:{package:'@rig-c/parts',version:'1.42.0'},compiler:{package:'rig-c',version:'2.64.1'},
+  build:{modelUrl:'/m',modelHash:'e'.repeat(64),files:{}},
+ } as const;
+ const regionsJob:RebuildJobView={...built,lines:[...built.lines],wallMs:{remesh:1000,compile:2000},request:{...regions,entrySha256:'0'.repeat(64)}};
+ const patchJob:PatchJobView={
+  ...built,lines:[...built.lines],kind:'patch',op:'remesh',wallMs:{op:1000,compile:2000,check:3000},diff:{count:1,paths:[]},
+  check:{schema:'rig-review-check-summary/1',pass:false,exitCode:1,line:'check: FAIL',bars:{},gate:false},
+  request:{patch:patch.patch,patchSha256:'a'.repeat(64),configHash},
+ };
+ async function verify<B,J extends AnyJobView>(
+  path:string,body:B,job:J,formatOutcome:(result:J|RebuildRefusal)=>{text:string;error:boolean},
+  outcome:{text:string;error:boolean},
+ ){
+  const events:unknown[]=[];
+  const refusal:RebuildRefusal={status:'refused',error:'REBUILD_CONFIG_STALE',producerLine:'FAIL: config changed'};
+  const running={...job,status:'running',build:null,lines:['started']};
+  let first:typeof running|RebuildRefusal=running;
+  const api=async<T>(url:string,init?:RequestInit):Promise<T>=>{
+   events.push(init?[url,init]:url);
+   return (init?first:job) as T;
+  };
+  const options={
+   path,api,formatOutcome,onLine:(line:string,index:number)=>{events.push([line,index]);},
+   sleep:async(ms:number)=>{events.push(ms);},
+  };
+  const post=[path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}];
+  const success=await runRebuildApply(body,options);
+  expect(success.result).toBe(job);
+  expect(success.outcome).toEqual(outcome);
+  expect(success.next).toEqual({job,id:job.id,url:built.build.modelUrl,hash:built.build.modelHash});
+  expect(events).toEqual([post,['started',0],700,`${path}/${job.id}`,['finished',1]]);
+
+  events.length=0;
+  first=refusal;
+  const refused=await runRebuildApply(body,options);
+  expect(refused.result).toBe(refusal);
+  expect(refused.outcome).toEqual({text:'FAIL: config changed',error:true});
+  expect(refused.next).toBeNull();
+  expect(events).toEqual([post]);
+ }
+ await verify('/api/rebuild',regions,regionsJob,outcomeLine,{
+  text:'Applied topwear with @rig-c/parts 1.42.0 · remesh 1.0 s + compile 2.0 s · Reset returns to the inspected build',error:false,
+ });
+ await verify('/api/compare/b/rebuild',patch,patchJob,patchOutcomeLine,{
+  text:'Applied patch aaaaaaaaaaaa… (1 op(s)) with @rig-c/parts 1.42.0 · remesh 1.0 s + compile 2.0 s + check 3.0 s · check FAIL · rig.json differs at 1 path(s) · Reset returns to the inspected build',error:true,
+ });
+});
 
 /** A stand-in `rig-parts` (remesh writes a rig spec; a part named "refuse" is refused) and `rigc` (build writes a model and one page). */
 const fakeParts=`const fs=require('fs'),path=require('path');const a=process.argv.slice(2);const f=n=>a[a.indexOf(n)+1];
