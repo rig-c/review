@@ -15,7 +15,7 @@ import { AnimationInspectionPanel, type AnimationSideState } from './animation-i
 import type { AnimationSourceOp } from '../src/animation-ops.ts';
 import { partBounds, type PartExplorer } from './part-selection.ts';
 import { bindInspectorBlocks, activeBlocksUI, restoreActiveBlocksUI, type InspectorBlocks } from './inspector-blocks.ts';
-import { tr } from './i18n.ts';
+import { sourceTextContent, tr } from './i18n.ts';
 import { bindChestEditor, canvasToCrop, chestField, chestCircles as readChestCircles, exportChest as exportChestFiles, chestMarkers as readChestMarkers, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, type ChestEditor } from './chest-editor.ts';
 import { chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from './chest-regions-tool.ts';
 import { cropWorldMapping, type CropWorldMapping } from '../src/chest-regions.ts';
@@ -27,25 +27,25 @@ import { bindBonesPanel, requestBonesCheck, type BonesPanel, type BonesCheckView
 import { bindCutsPanel, type CutsPanel } from './cuts-panel.ts';
 import { bindClothPanel, type ClothPanel } from './cloth-panel.ts';
 import { bindMeshPanel, type MeshPanel } from './mesh-panel.ts';
-import { bindDensityStrip, type DensityStripPanel, type DensityStripViewLike } from './density-strip-panel.ts';
-import { densityField, densityPath } from '../src/density-strip.ts';
-import { assertMeshPatch, countsText, meshApplyOutcome, meshPatchOps, setEntryValue, triangleAgreement, type MeshEntry } from '../src/mesh-entry.ts';
+import { bindDensityStrip, buildDensityStripJob, closeDensityStripJob, densityStripPatches, refreshDensityStripView, type DensityStripPanel, type DensityStripViewLike } from './density-strip-panel.ts';
+import { assertMeshPatch, countsText, meshApplyOutcome, meshPatchOps, triangleAgreement, type MeshEntry } from '../src/mesh-entry.ts';
 import { bindPhysicsPanel, type PhysicsPanel } from './physics-panel.ts';
-import { tuningRows, readoutRows, barLine, beforeLine, type InspectedCheckView } from '../src/physics-tuning.ts';
+import { tuningRows, readoutRows, type InspectedCheckView } from '../src/physics-tuning.ts';
 import { bindIdlePanel, type BoneSetup, type IdlePanel } from './idle-panel.ts';
 import { IDLE_READOUT_BARS, type LocalChannel } from '../src/idle-tracks.ts';
 import { bindRigFieldsPanel, type RigFieldsPanel } from './rig-fields-panel.ts';
 import { assertRigFieldOps, RIG_FIELDS_READOUT_BARS, TURN_BONE } from '../src/rig-fields.ts';
 import { bindReadingsPanel, readingsContext as buildReadingsContext, type ReadingsJobView, type ReadingsPanel, type ReadingsRefusal } from './readings-panel.ts';
-import { readingSeekTime, worstLine, type ReadingsContext } from '../src/readings.ts';
+import { readingSeekTime, type ReadingsContext } from '../src/readings.ts';
 import { bindRequirementsPanel, runRequirementsRequest, type RequirementsCatalogView, type RequirementsJobView, type RequirementsPanel, type RequirementsRefusal } from './requirements-panel.ts';
 import type { RequirementsRequest } from '../src/requirements.ts';
 import { bindRetargetPanel, type PoseMap, type RetargetPanel } from './retarget-panel.ts';
 import type { RetargetFlags } from '../src/retarget.ts';
 import {
-  appliedStatus as setAppliedStatus, inspectedCheckView as readInspectedCheck, renderApplied as renderAppliedPanel,
+  createHandoffRefresh, directJobUiSink, followInspectedCheckStatus, loadRequirementsCatalog, runMeshFolds,
+  applyPanelPatch,preparePanelPatch,followApplyReadout, resetPanelBuild, createJobUiState, type JobUiSink, appliedStatus as setAppliedStatus, inspectedCheckView as readInspectedCheck, renderApplied as renderAppliedPanel,
   renderAppliedBlocks as reconcileAppliedBlocks, isPatchJob, recordFor, retargetStage,
-  animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, chestSeed, designatedRegions, handoffText,
+  animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, chestSeed, designatedRegions,
   landmarksRequest, noContourReason, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
   pickBustPart, pickPart, runRebuildApply, runRebuildUndo, runReadingsRequest, seedFields, retargetAppliedRecord, retargetOutcomeLine, stageChanged as updateDensityPending,
   type AnimationJobView, type AnimationRequestBody, type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
@@ -62,7 +62,7 @@ import {
   createWindModel, environmentFor, windReadout, RUNTIME_START_READOUT, joltPacket,
   loadModelDocument, environmentContext, environmentJson, type JoltStep, type WindSnapshot,
 } from '../src/environment.ts';
-import { bindEnvironmentInputs, checkAnimation as selectCheckAnimation, environmentCheckRows, restartsWindClock, scheduleContext, worldExport, type ClipMove, type EnvironmentCheckView, type StageWorld, type WorldExport } from './environment-world.ts';
+import { bindEnvironmentInputs, checkAnimation as selectCheckAnimation, environmentCheckReadout, renderEnvironmentCheckRows, runEnvironmentCheckJob, type EnvironmentRow, restartsWindClock, scheduleContext, worldExport, type ClipMove, type EnvironmentCheckView, type StageWorld, type WorldExport } from './environment-world.ts';
 import type { OverlayCircle, OverlayMarker, OverlayRegion, OverlaySnapshot } from './rig-overlays.ts';
 import type { PatchOp } from '../src/config-patch.ts';
 
@@ -262,10 +262,30 @@ function sideElementProxy<T extends HTMLElement>(getSide: () => Side, suffix: 'p
 export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePickedTools {
   let workspaceMode: CommentMode = 'compare';
   let pickedSide: Side = 'a';
+  const jobUiState = createJobUiState<Side>(() => pickedSide);
+  const { sink: jobUi, transient: jobStatus, clearOutcome: clearJobOutcome, busy: jobBusy } = jobUiState;
+  let currentJobMessage: { source: string; error: boolean } | null = null;
+
+  function jobOutcome(side: Side, key: string, write: () => void, clear: () => void): void {
+    jobUiState.outcome(side, key, key === 'message' ? () => {
+      write();
+      const message = el('message');
+      currentJobMessage = { source: sourceTextContent(message), error: message.classList.contains('error') };
+    } : write, clear);
+  }
+
+  function clearCompareJobMessage(): void {
+    const message = el('message');
+    if (currentJobMessage && currentJobMessage.source === sourceTextContent(message) &&
+        currentJobMessage.error === message.classList.contains('error')) host.message(defaultStatusMessage());
+    currentJobMessage = null;
+  }
   let switchingSide = false;
   const sides: Record<Side, SideBuildState> = { a: emptySideState(), b: emptySideState() };
   let rebuildBusy = false, densityBusy = false, readingsBusy = false, environmentCheckBusy = false;
-  let handoffTimer: ReturnType<typeof setTimeout> | null = null;
+  const handoffRefresh = createHandoffRefresh();
+  let densityOwner: Side | null = null;
+  let rebuildUiOwner: Side | null = null;
   let lastMeshPatch: ConfigPatch | null = null;
   const disposers: (() => void)[] = [];
 
@@ -473,6 +493,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       return;
     }
     const prevSide = pickedSide;
+    jobUiState.leave(prevSide);
     if (sides[prevSide].chestInputs !== null) {
       sides[prevSide].chestInputs = snapshotChestInputs();
     }
@@ -533,6 +554,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     setAdjust(nextSide);
     host.redrawOverlays(true);
     host.saveDraft();
+    if (rebuildUiOwner !== null) renderRebuildState();
+    jobUiState.enter(nextSide);
   }
 
   function chestInputIds(): string[] {
@@ -723,18 +746,9 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function renderHandoff(status: RebuildStatusView): void {
-    const line = el('handoff-line'), shown = handoffText(status);
-    line.textContent = shown.text; line.title = shown.text; line.classList.toggle('error', shown.error);
-    if (handoffTimer) clearTimeout(handoffTimer); handoffTimer = null;
-    const side = pickedSide;
-    if (status.baseline?.status === 'running') {
-      handoffTimer = setTimeout(() => {
-        void host.api<RebuildStatusView>(`${sideApiPrefix(side)}/rebuild`).then(next => {
-          sides[side].rebuildStatus = next;
-          if (pickedSide === side) renderHandoff(next);
-        }).catch(() => {});
-      }, 2000);
-    }
+    const side = pickedSide, state = sides[side], ui = jobUi(side);
+    handoffRefresh.show(status, { api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`,
+      line: () => el('handoff-line'), ui, save: next => { state.rebuildStatus = next; } });
   }
 
   function chestPartForNotice(): string | null {
@@ -778,7 +792,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function renderApplied(): void {
-    renderAppliedPanel(renderAppliedBlocks, currentState, () => rebuildBusy || !!host.readOnly(), el, document);
+    renderAppliedPanel(renderAppliedBlocks, currentState, () => rebuildUiBusy() || !!host.readOnly(), el, document);
   }
 
   async function refreshApplied(side: Side = pickedSide): Promise<void> {
@@ -787,11 +801,18 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     if (side === pickedSide) renderApplied();
   }
 
-  function rebuildState(): void {
-    const state = currentState();
-    chestEditor?.rebuildState({ busy: rebuildBusy, applied: !!state.appliedOnStage });
+  function rebuildUiBusy(): boolean {
+    return rebuildBusy && (rebuildUiOwner === null || rebuildUiOwner === pickedSide);
+  }
+
+  function renderRebuildState(): void {
+    chestEditor?.rebuildState({ busy: rebuildUiBusy(), applied: !!currentState().appliedOnStage });
     renderApplied();
-    if (!rebuildBusy) void refreshApplied(pickedSide);
+  }
+
+  function rebuildState(historySide: Side = pickedSide, ui: JobUiSink = directJobUiSink): void {
+    ui.render(renderRebuildState);
+    if (!rebuildBusy) void refreshApplied(historySide);
   }
 
   function applySideStateToPanels(): void {
@@ -865,13 +886,21 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   async function loadRequirements(side: Side = pickedSide): Promise<void> {
-    try {
-      const catalog = await host.api<RequirementsCatalogView>(`${sideApiPrefix(side)}/requirements`);
-      sides[side].requirementsCatalog = catalog;
-      if (side === pickedSide) requirementsPanel?.load(catalog, catalog.reason);
-    } catch (error) {
-      if (side === pickedSide) requirementsPanel?.load(null, `REQUIREMENTS_UNAVAILABLE: ${errorText(error)}`);
-    }
+    const state = sides[side], ui = jobUi(side);
+    clearJobOutcome(side, 'requirements');
+    await loadRequirementsCatalog({
+      api: host.api.bind(host), path: `${sideApiPrefix(side)}/requirements`,
+      save: catalog => { state.requirementsCatalog = catalog; },
+      show: (catalog, reason) => {
+        if (catalog) { ui.render(() => requirementsPanel?.load(catalog, reason)); return; }
+        jobOutcome(side, 'requirements', () => requirementsPanel?.load(null, reason), () => {
+          const line = document.getElementById('requirements-state');
+          if (!line) return;
+          line.textContent = 'Reading the producer handoff…';
+          line.classList.remove('error');
+        });
+      },
+    });
   }
 
   function checkAnimation(side: Side = pickedSide): string {
@@ -1127,31 +1156,86 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     }
   }
 
-  async function applyPatch(patch: ConfigPatch, _world: StageWorld | null = null, side: Side = pickedSide): Promise<PatchJobView | RebuildRefusal> {
+  const panelReadoutOwners = { a: new Map<string, object>(), b: new Map<string, object>() };
+
+  function beginPanelRebuild(
+    side: Side, key: string,
+    panel: () => {
+      busy(value: boolean): void;
+      status(text: string, error: boolean): void;
+      readout?(rows: ReturnType<typeof readoutRows>): void;
+    } | null,
+  ) {
+    const ui = jobUi(side);
+    // A previous Apply can still be following the inspected check when this panel starts its next job.
+    const readoutKey = `${key}-readout`, owner = {};
+    const clear = () => panel()?.status('', false);
+    clearJobOutcome(side, 'message');
+    clearJobOutcome(side, key);
+    if (panel()?.readout) {
+      clearJobOutcome(side, readoutKey);
+      panelReadoutOwners[side].set(key, owner);
+    }
+    return {
+      ui,
+      busy: (value: boolean) => jobBusy(side, key, value, busy => panel()?.busy(busy)),
+      progress: (write: () => void) => jobStatus(side, key, write, clear),
+      status: (text: string, error: boolean) => jobOutcome(side, key, () => panel()?.status(text, error), clear),
+      readout: (rows: ReturnType<typeof readoutRows>) => {
+        if (panelReadoutOwners[side].get(key) !== owner) return;
+        jobOutcome(side, readoutKey, () => panel()?.readout?.(rows), () => panel()?.readout?.([]));
+      },
+    };
+  }
+
+  function rebuildJobOutput(side: Side, ui?: JobUiSink) {
+    const clearNotice = () => chestEditor?.notify(null, false, []);
+    return {
+      progress: (write: () => void) => {
+        if (ui) ui.status(() => jobStatus(side, 'chest', write, clearNotice));
+        else if (pickedSide === side) write();
+      },
+      notice: (text: string, error: boolean, lines?: readonly string[]) => {
+        const write = () => chestEditor?.notify(text, error, lines);
+        if (ui) jobOutcome(side, 'chest', write, clearNotice);
+        else if (pickedSide === side) write();
+      },
+      message: (text: string, error?: boolean) => {
+        const write = () => host.message(text, error);
+        if (ui) jobOutcome(side, 'message', write, clearCompareJobMessage);
+        else write();
+      },
+    };
+  }
+
+  async function applyPatch(patch: ConfigPatch, _world: StageWorld | null = null, side: Side = pickedSide, ui?: JobUiSink): Promise<PatchJobView | RebuildRefusal> {
     if (rebuildBusy) return { status: 'refused', error: 'REBUILD_BUSY: an Apply is still running', producerLine: null };
+    const output = rebuildJobOutput(side, ui);
+    if (ui) clearJobOutcome(side, 'chest');
     const ro = host.readOnly();
-    if (ro) { if (pickedSide === side) chestEditor?.notify(ro, true); return { status: 'refused', error: ro, producerLine: null }; }
+    if (ro) { output.notice(ro, true); return { status: 'refused', error: ro, producerLine: null }; }
     const state = sides[side];
     const lines: string[] = [];
-    rebuildBusy = true; rebuildState();
-    if (pickedSide === side) chestEditor?.notify(`Applying patch on Build ${side.toUpperCase()} (${patch.op.cmd}, ${patch.ops.length} op(s))…`, false, []);
+    if (ui) rebuildUiOwner = side;
+    rebuildBusy = true; rebuildState(ui ? side : undefined, ui);
+    output.progress(() => chestEditor?.notify(`Applying patch on Build ${side.toUpperCase()} (${patch.op.cmd}, ${patch.ops.length} op(s))…`, false, []));
     try {
       const scheduled = useWorld() ? worldFor(checkAnimation(side), side) : null;
       if (scheduled && 'error' in scheduled) {
-        if (pickedSide === side) chestEditor?.notify(scheduled.error, true);
-        host.message(scheduled.error, true);
+        output.notice(scheduled.error, true);
+        output.message(scheduled.error, true);
         return { status: 'refused', error: scheduled.error, producerLine: scheduled.error };
       }
       const { result, outcome, next } = await runRebuildApply(
         { patch, ...(scheduled ? { environment: scheduled.schedule } : {}) },
         {
           api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`, formatOutcome: patchOutcomeLine,
-          onLine: line => { lines.push(line); if (pickedSide === side) chestEditor?.notify(line.trim() || '…', false, lines.slice(-6)); },
+          onLine: line => { lines.push(line); output.progress(() => chestEditor?.notify(line.trim() || '…', false, lines.slice(-6))); },
         },
       );
       if (!next) {
-        if (pickedSide === side) chestEditor?.notify(outcome.text, true, [...lines.slice(-5), outcome.text]);
-        host.message(outcome.text, true);
+        output.notice(outcome.text, true, [...lines.slice(-5), outcome.text]);
+        output.message(outcome.text, true);
         return result;
       }
       await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
@@ -1160,19 +1244,20 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       stageChanged(side, { kind: 'apply', via: 'patch' });
       if (pickedSide === side) {
         const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
-        chestEditor?.notify(outcome.text, outcome.error, []);
-      } else if (state.animationState) {
-        state.animationState.appliedOps = [];
+        output.notice(outcome.text, outcome.error, []);
+      } else {
+        if (state.animationState) state.animationState.appliedOps = [];
+        if (ui) output.notice(outcome.text, outcome.error, []);
       }
-      host.message(outcome.text, outcome.error);
+      output.message(outcome.text, outcome.error);
       return result;
     } catch (error) {
       const textMsg = `REBUILD_FAILED: ${errorText(error)}`;
-      if (pickedSide === side) chestEditor?.notify(textMsg, true);
-      host.message(textMsg, true);
+      output.notice(textMsg, true);
+      output.message(textMsg, true);
       return { status: 'refused', error: textMsg, producerLine: null };
     } finally {
-      rebuildBusy = false; rebuildState();
+      rebuildBusy = false; rebuildUiOwner = null; rebuildState(ui ? side : undefined, ui);
     }
   }
 
@@ -1250,10 +1335,13 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     }
   }
 
-  async function resetRebuild(_world: StageWorld | null = null, side: Side = pickedSide): Promise<void> {
+  async function resetRebuild(_world: StageWorld | null = null, side: Side = pickedSide, ui?: JobUiSink): Promise<void> {
     const state = sides[side];
     if (rebuildBusy || (!state.appliedOnStage && !state.stripPending) || !state.inspectedModel) return;
-    rebuildBusy = true; rebuildState();
+    const output = rebuildJobOutput(side, ui);
+    if (ui) clearJobOutcome(side, 'chest');
+    if (ui) rebuildUiOwner = side;
+    rebuildBusy = true; rebuildState(ui ? side : undefined, ui);
     try {
       await swapPickedSide(side, state.inspectedModel.url, state.inspectedModel.prefix, state.inspectedModel.sha256);
       state.appliedOnStage = null; state.stageCheck = null; stageChanged(side, { kind: 'reset' });
@@ -1261,15 +1349,16 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         animationPanel?.reconcileStageApplied(null);
         if (animationPanel) state.animationState = animationPanel.exportSideState();
         const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
-        chestEditor?.notify(`Reset: Build ${side.toUpperCase()} is back on its inspected build.`, false);
-      } else if (state.animationState) {
-        state.animationState.appliedOps = [];
+        output.notice(`Reset: Build ${side.toUpperCase()} is back on its inspected build.`, false);
+      } else {
+        if (state.animationState) state.animationState.appliedOps = [];
+        if (ui) output.notice(`Reset: Build ${side.toUpperCase()} is back on its inspected build.`, false);
       }
-      host.message(`Reset Build ${side.toUpperCase()} to its inspected build.`);
+      output.message(`Reset Build ${side.toUpperCase()} to its inspected build.`);
     } catch (error) {
-      if (pickedSide === side) chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`, true);
+      if (ui || pickedSide === side) output.notice(`REBUILD_RESET_FAILED: ${errorText(error)}`, true);
     } finally {
-      rebuildBusy = false; rebuildState();
+      rebuildBusy = false; rebuildUiOwner = null; rebuildState(ui ? side : undefined, ui);
     }
   }
 
@@ -1331,70 +1420,58 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     return readInspectedCheck(sides[side].rebuildStatus);
   }
 
-  async function followInspectedCheck(show: () => void, side: Side = pickedSide): Promise<void> {
-    for (let i = 0; i < 120 && (!sides[side].rebuildStatus?.inspectedCheck || sides[side].rebuildStatus?.inspectedCheck?.status === 'running'); i++) {
-      try { sides[side].rebuildStatus = await host.api<RebuildStatusView>(`${sideApiPrefix(side)}/rebuild`); } catch { return; }
-      if (side === pickedSide) show();
-      if (sides[side].rebuildStatus?.inspectedCheck && sides[side].rebuildStatus?.inspectedCheck?.status !== 'running') return;
-      if (!sides[side].rebuildStatus?.inspectedCheck && sides[side].rebuildStatus?.baseline?.status !== 'running') return;
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    }
+  async function followInspectedCheck(show: () => void, side: Side = pickedSide, ui = jobUi(side)): Promise<void> {
+    const state = sides[side];
+    return followInspectedCheckStatus({ api: host.api.bind(host), path: `${sideApiPrefix(side)}/rebuild`,
+      read: () => state.rebuildStatus, save: next => { state.rebuildStatus = next; }, onReply: () => ui.render(show) });
   }
 
   async function applyPhysics(ops: PatchOp[]): Promise<PatchJobView | RebuildRefusal | null> {
     const side = pickedSide, state = sides[side];
+    const job = beginPanelRebuild(side, 'physics', () => physicsPanel);
     const status = state.rebuildStatus ?? await loadRebuildStatus(side);
-    const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig' }) : null;
-    if (!patch) { const reason = !ops.length ? 'PHYSICS_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) physicsPanel?.status(reason, true); return null; }
-    if (pickedSide === side) physicsPanel?.clearPreview();
+    const patch = preparePanelPatch(status, ops, 'PHYSICS_NOTHING_PENDING: no pending ops', job);
+    if (!patch) return null;
+    job.ui.render(() => physicsPanel?.clearPreview());
     const world = stageWorld(), before = state.stageCheck;
-    if (pickedSide === side) { physicsPanel?.busy(true); physicsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
-    try {
-      const result = await applyPatch(patch, world, side);
-      const outcome = patchOutcomeLine(result);
-      if (pickedSide === side) physicsPanel?.status(outcome.text, outcome.error);
-      if ('id' in result && result.status === 'built') {
-        if (pickedSide === side) physicsPanel?.applied(result.request.patch.ops);
-        const after = { lines: [...result.lines], check: result.check };
-        const show = () => { if (pickedSide === side) physicsPanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after)); };
-        show(); if (!before) void followInspectedCheck(show, side);
-      }
-      return result;
-    } finally { physicsPanel?.busy(false); }
+    return applyPanelPatch(job,
+      () => physicsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false),
+      () => applyPatch(patch, world, side, job.ui), result => {
+        job.ui.render(() => physicsPanel?.applied(result.request.patch.ops));
+        followApplyReadout(before, result, () => inspectedCheckView(side), job.readout,
+          show => followInspectedCheck(show, side));
+      });
   }
 
   async function resetPhysicsBuild(): Promise<void> {
     const side = pickedSide, state = sides[side];
-    physicsPanel?.clear(); physicsPanel?.applied(null); physicsPanel?.readout([]);
-    if (state.appliedOnStage) { physicsPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { physicsPanel?.busy(false); } }
-    if (pickedSide === side) physicsPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
+    const job = beginPanelRebuild(side, 'physics', () => physicsPanel);
+    job.ui.render(() => { physicsPanel?.clear(); physicsPanel?.applied(null); physicsPanel?.readout([]); });
+    return resetPanelBuild(job, state.appliedOnStage ? () => resetRebuild(stageWorld(), side, job.ui) : null,
+      'Reset: the inspected build is on the stage; no pending ops.');
   }
 
   async function applyIdle(ops: PatchOp[], keys: 'ctl' | 'direct' | null): Promise<PatchJobView | RebuildRefusal | null> {
     const side = pickedSide, state = sides[side];
+    const job = beginPanelRebuild(side, 'idle', () => idlePanel);
     const status = state.rebuildStatus ?? await loadRebuildStatus(side);
-    const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig', args: keys ? ['--idle-keys', keys] : [] }) : null;
-    if (!patch) { const reason = !ops.length ? 'IDLE_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) idlePanel?.status(reason, true); return null; }
+    const patch = preparePanelPatch(status, ops, 'IDLE_NOTHING_PENDING: no pending ops', job, keys ? ['--idle-keys', keys] : []);
+    if (!patch) return null;
     const world = stageWorld(), before = state.stageCheck;
-    if (pickedSide === side) { idlePanel?.busy(true); idlePanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
-    try {
-      const result = await applyPatch(patch, world, side);
-      const outcome = patchOutcomeLine(result);
-      if (pickedSide === side) idlePanel?.status(outcome.text, outcome.error);
-      if ('id' in result && result.status === 'built') {
-        const after = { lines: [...result.lines], check: result.check };
-        const show = () => { if (pickedSide === side) idlePanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after, IDLE_READOUT_BARS)); };
-        show(); if (!before) void followInspectedCheck(show, side);
-      }
-      return result;
-    } finally { idlePanel?.busy(false); }
+    return applyPanelPatch(job,
+      () => idlePanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false),
+      () => applyPatch(patch, world, side, job.ui), result => {
+        followApplyReadout(before, result, () => inspectedCheckView(side), job.readout,
+          show => followInspectedCheck(show, side), IDLE_READOUT_BARS);
+      });
   }
 
   async function resetIdleBuild(): Promise<void> {
     const side = pickedSide, state = sides[side];
-    idlePanel?.clear(); idlePanel?.applied(null); idlePanel?.readout([]);
-    if (state.appliedOnStage) { idlePanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { idlePanel?.busy(false); } }
-    if (pickedSide === side) idlePanel?.status('Reset: the inspected build is on the stage; no pending ops; the preview is cleared.', false);
+    const job = beginPanelRebuild(side, 'idle', () => idlePanel);
+    job.ui.render(() => { idlePanel?.clear(); idlePanel?.applied(null); idlePanel?.readout([]); });
+    return resetPanelBuild(job, state.appliedOnStage ? () => resetRebuild(stageWorld(), side, job.ui) : null,
+      'Reset: the inspected build is on the stage; no pending ops; the preview is cleared.');
   }
 
   async function applyAnimation(ops: readonly AnimationSourceOp[]): Promise<AnimationJobView | RebuildRefusal | null> {
@@ -1514,97 +1591,92 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   async function applyBones(ops: PatchOp[]): Promise<PatchJobView | RebuildRefusal | null> {
-    const side = pickedSide, status = sides[side].rebuildStatus ?? await loadRebuildStatus(side);
-    const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig' }) : null;
-    if (!patch) { const reason = !ops.length ? 'BONES_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) bonesPanel?.status(reason, true); return null; }
-    if (pickedSide === side) { bonesPanel?.busy(true); bonesPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
-    try {
-      const result = await applyPatch(patch, stageWorld(), side);
-      const outcome = patchOutcomeLine(result);
-      if (pickedSide === side) bonesPanel?.status(outcome.text, outcome.error);
-      if ('id' in result && result.status === 'built') {
-        if (pickedSide === side) bonesPanel?.applied(result.request.patch.ops);
-        host.redrawOverlays(true);
-      }
-      return result;
-    } finally { bonesPanel?.busy(false); }
+    const side = pickedSide;
+    const job = beginPanelRebuild(side, 'bones', () => bonesPanel);
+    const status = sides[side].rebuildStatus ?? await loadRebuildStatus(side);
+    const patch = preparePanelPatch(status, ops, 'BONES_NOTHING_PENDING: no pending ops', job);
+    if (!patch) return null;
+    return applyPanelPatch(job,
+      () => bonesPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false),
+      () => applyPatch(patch, stageWorld(), side, job.ui), result => {
+        job.ui.render(() => bonesPanel?.applied(result.request.patch.ops));
+        job.ui.render(() => host.redrawOverlays(true));
+      });
   }
 
   async function resetBonesBuild(): Promise<void> {
     const side = pickedSide, state = sides[side];
-    bonesPanel?.clear(); bonesPanel?.applied(null);
-    if (state.appliedOnStage) { bonesPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { bonesPanel?.busy(false); } }
-    if (pickedSide === side) bonesPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
+    const job = beginPanelRebuild(side, 'bones', () => bonesPanel);
+    job.ui.render(() => { bonesPanel?.clear(); bonesPanel?.applied(null); });
+    return resetPanelBuild(job, state.appliedOnStage ? () => resetRebuild(stageWorld(), side, job.ui) : null,
+      'Reset: the inspected build is on the stage; no pending ops.');
   }
 
   async function applyCuts(ops: PatchOp[]): Promise<PatchJobView | RebuildRefusal | null> {
-    const side = pickedSide, status = sides[side].rebuildStatus ?? await loadRebuildStatus(side);
-    const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig' }) : null;
-    if (!patch) { const reason = !ops.length ? 'CUTS_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) cutsPanel?.status(reason, true); return null; }
-    if (pickedSide === side) { cutsPanel?.busy(true); cutsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
-    try {
-      const result = await applyPatch(patch, stageWorld(), side);
-      const outcome = patchOutcomeLine(result);
-      if (pickedSide === side) cutsPanel?.status(outcome.text, outcome.error);
-      if ('id' in result && result.status === 'built') host.redrawOverlays(true);
-      return result;
-    } finally { cutsPanel?.busy(false); }
+    const side = pickedSide;
+    const job = beginPanelRebuild(side, 'cuts', () => cutsPanel);
+    const status = sides[side].rebuildStatus ?? await loadRebuildStatus(side);
+    const patch = preparePanelPatch(status, ops, 'CUTS_NOTHING_PENDING: no pending ops', job);
+    if (!patch) return null;
+    return applyPanelPatch(job,
+      () => cutsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false),
+      () => applyPatch(patch, stageWorld(), side, job.ui), () => {
+        job.ui.render(() => host.redrawOverlays(true));
+      });
   }
 
   async function resetCutsBuild(): Promise<void> {
     const side = pickedSide, state = sides[side];
-    cutsPanel?.clear(); cutsPanel?.shown(null);
-    if (state.appliedOnStage) { cutsPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { cutsPanel?.busy(false); } }
-    if (pickedSide === side) cutsPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
+    const job = beginPanelRebuild(side, 'cuts', () => cutsPanel);
+    job.ui.render(() => { cutsPanel?.clear(); cutsPanel?.shown(null); });
+    return resetPanelBuild(job, state.appliedOnStage ? () => resetRebuild(stageWorld(), side, job.ui) : null,
+      'Reset: the inspected build is on the stage; no pending ops.');
   }
 
   async function applyCloth(ops: PatchOp[]): Promise<PatchJobView | RebuildRefusal | null> {
-    const side = pickedSide, status = sides[side].rebuildStatus ?? await loadRebuildStatus(side);
-    const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig' }) : null;
-    if (!patch) { const reason = !ops.length ? 'CLOTH_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) clothPanel?.status(reason, true); return null; }
-    if (pickedSide === side) { clothPanel?.busy(true); clothPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
-    try {
-      const result = await applyPatch(patch, stageWorld(), side);
-      const outcome = patchOutcomeLine(result);
-      if (pickedSide === side) clothPanel?.status(outcome.text, outcome.error);
-      if ('id' in result && result.status === 'built') host.redrawOverlays(true);
-      return result;
-    } finally { clothPanel?.busy(false); }
+    const side = pickedSide;
+    const job = beginPanelRebuild(side, 'cloth', () => clothPanel);
+    const status = sides[side].rebuildStatus ?? await loadRebuildStatus(side);
+    const patch = preparePanelPatch(status, ops, 'CLOTH_NOTHING_PENDING: no pending ops', job);
+    if (!patch) return null;
+    return applyPanelPatch(job,
+      () => clothPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false),
+      () => applyPatch(patch, stageWorld(), side, job.ui), () => {
+        job.ui.render(() => host.redrawOverlays(true));
+      });
   }
 
   async function resetClothBuild(): Promise<void> {
     const side = pickedSide, state = sides[side];
-    clothPanel?.clear(); clothPanel?.shown(null);
-    if (state.appliedOnStage) { clothPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { clothPanel?.busy(false); } }
-    if (pickedSide === side) clothPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
+    const job = beginPanelRebuild(side, 'cloth', () => clothPanel);
+    job.ui.render(() => { clothPanel?.clear(); clothPanel?.shown(null); });
+    return resetPanelBuild(job, state.appliedOnStage ? () => resetRebuild(stageWorld(), side, job.ui) : null,
+      'Reset: the inspected build is on the stage; no pending ops.');
   }
 
   async function applyRigFields(ops: PatchOp[]): Promise<PatchJobView | RebuildRefusal | null> {
-    const side = pickedSide, state = sides[side], status = state.rebuildStatus ?? await loadRebuildStatus(side);
-    try { assertRigFieldOps(ops); } catch (error) { if (pickedSide === side) rigFieldsPanel?.status(errorText(error), true); return null; }
-    const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig' }) : null;
-    if (!patch) { const reason = !ops.length ? 'RIG_FIELDS_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) rigFieldsPanel?.status(reason, true); return null; }
+    const side = pickedSide, state = sides[side];
+    const job = beginPanelRebuild(side, 'rig-fields', () => rigFieldsPanel);
+    const status = state.rebuildStatus ?? await loadRebuildStatus(side);
+    try { assertRigFieldOps(ops); } catch (error) { job.status(errorText(error), true); return null; }
+    const patch = preparePanelPatch(status, ops, 'RIG_FIELDS_NOTHING_PENDING: no pending ops', job);
+    if (!patch) return null;
     const world = stageWorld(), before = state.stageCheck;
-    if (pickedSide === side) { rigFieldsPanel?.busy(true); rigFieldsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
-    try {
-      const result = await applyPatch(patch, world, side);
-      const outcome = patchOutcomeLine(result);
-      if (pickedSide === side) rigFieldsPanel?.status(outcome.text, outcome.error);
-      if ('id' in result && result.status === 'built') {
-        if (pickedSide === side) rigFieldsPanel?.applied(result.request.patch.ops);
-        const after = { lines: [...result.lines], check: result.check };
-        const show = () => { if (pickedSide === side) rigFieldsPanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after, RIG_FIELDS_READOUT_BARS)); };
-        show(); if (!before) void followInspectedCheck(show, side);
-      }
-      return result;
-    } finally { rigFieldsPanel?.busy(false); }
+    return applyPanelPatch(job,
+      () => rigFieldsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false),
+      () => applyPatch(patch, world, side, job.ui), result => {
+        job.ui.render(() => rigFieldsPanel?.applied(result.request.patch.ops));
+        followApplyReadout(before, result, () => inspectedCheckView(side), job.readout,
+          show => followInspectedCheck(show, side), RIG_FIELDS_READOUT_BARS);
+      });
   }
 
   async function resetRigFieldsBuild(): Promise<void> {
     const side = pickedSide, state = sides[side];
-    rigFieldsPanel?.setDial(0); rigFieldsPanel?.clear(); rigFieldsPanel?.applied(null); rigFieldsPanel?.readout([]);
-    if (state.appliedOnStage) { rigFieldsPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { rigFieldsPanel?.busy(false); } }
-    if (pickedSide === side) rigFieldsPanel?.status('Reset: the inspected build is on the stage; no pending ops; the dial is at 0.', false);
+    const job = beginPanelRebuild(side, 'rig-fields', () => rigFieldsPanel);
+    job.ui.render(() => { rigFieldsPanel?.setDial(0); rigFieldsPanel?.clear(); rigFieldsPanel?.applied(null); rigFieldsPanel?.readout([]); });
+    return resetPanelBuild(job, state.appliedOnStage ? () => resetRebuild(stageWorld(), side, job.ui) : null,
+      'Reset: the inspected build is on the stage; no pending ops; the dial is at 0.');
   }
 
   async function applyMesh(part: string, entry: MeshEntry): Promise<PatchJobView | RebuildRefusal | null> {
@@ -1644,11 +1716,10 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   async function resetMeshBuild(): Promise<void> {
     const side = pickedSide, state = sides[side];
-    meshPanel?.counts([]); meshPanel?.readout([]);
-    if (state.appliedOnStage || state.stripPending) {
-      meshPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { meshPanel?.busy(false); }
-    }
-    if (pickedSide === side) meshPanel?.status('Reset: the inspected build is on the stage; the pending entry is the config\'s.', false);
+    const job = beginPanelRebuild(side, 'mesh', () => meshPanel);
+    job.ui.render(() => { meshPanel?.counts([]); meshPanel?.readout([]); });
+    return resetPanelBuild(job, state.appliedOnStage || state.stripPending ? () => resetRebuild(stageWorld(), side, job.ui) : null,
+      'Reset: the inspected build is on the stage; the pending entry is the config\'s.');
   }
 
   const densityLine = (msg: string, error = false, side: Side = pickedSide) => {
@@ -1657,54 +1728,49 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   };
   const renderStrip = () => {
     const state = currentState();
-    densityStrip?.show(state.stripView, state.stripPending && state.stripView?.id === state.stripPending.id ? state.stripPending.index : null, densityBusy || rebuildBusy || !!host.readOnly());
+    densityStrip?.show(state.stripView, state.stripPending && state.stripView?.id === state.stripPending.id ? state.stripPending.index : null, (densityBusy && densityOwner === pickedSide) || rebuildUiBusy() || !!host.readOnly());
   };
 
   async function refreshDensityStrip(side: Side = pickedSide): Promise<void> {
-    try { const r = await host.api<{ strip: DensityStripViewLike | null }>(`${sideApiPrefix(side)}/density-strip`); sides[side].stripView = r.strip; } catch { /* keep */ }
-    if (side === pickedSide) renderStrip();
+    const state = sides[side], ui = jobUi(side);
+    return refreshDensityStripView({ api: host.api.bind(host), path: `${sideApiPrefix(side)}/density-strip`,
+      save: next => { state.stripView = next; }, render: () => ui.render(renderStrip) });
+  }
+
+  function densityJobOutcome(side: Side, text: string, error: boolean): void {
+    jobOutcome(side, 'density', () => densityStrip?.status(text, error), () => densityStrip?.status('', false));
+    if (error) jobOutcome(side, 'message', () => host.message(text, true), clearCompareJobMessage);
   }
 
   async function buildDensityStrip(values: number[]): Promise<DensityStripViewLike | { error: string }> {
     if (densityBusy) return { error: 'DENSITY_STRIP_BUSY: a strip is still building' };
+    const side = pickedSide, state = sides[side], ui = jobUi(side);
+    const outcome = (text: string, error: boolean) => densityJobOutcome(side, text, error);
+    clearJobOutcome(side, 'density'); clearJobOutcome(side, 'message');
     const ro = host.readOnly();
-    if (ro) { densityLine(ro, true); return { error: ro }; }
-    const side = pickedSide, state = sides[side];
-    const status = state.rebuildStatus ?? await loadRebuildStatus(side), part = meshPanel?.part() ?? null, entry = meshPanel?.entry() ?? null;
-    if (!status || !part || !entry) { const t = status?.reason ?? 'MESH_PANEL_NO_PART: select a mesh part'; densityLine(t, true, side); return { error: t }; }
-    const problems = meshPanel?.precheck() ?? [];
-    if (problems.length) { const t = `${problems[0]} (review pre-check; nothing sent)`; densityLine(t, true, side); return { error: t }; }
-    let patches: ConfigPatch[];
-    try {
-      const field = densityField(entry, part);
-      patches = values.map(v => {
-        const patch = makePatch(status, meshPatchOps(part, setEntryValue(entry, densityPath(field), v)), { cmd: 'remesh', args: ['--part', part] });
-        if (!patch) throw new Error(status.reason ?? 'REBUILD_STATUS_UNAVAILABLE');
-        assertMeshPatch(patch, part);
-        return patch;
-      });
-    } catch (error) { const t = errorText(error); densityLine(t, true, side); return { error: t }; }
-    if (state.stripPending) await stripBack(side);
-    densityBusy = true; if (pickedSide === side) renderStrip();
-    densityLine(`Building a strip of ${values.length} on ${part} (Build ${side.toUpperCase()}): ${values.join(', ')}…`, false, side);
-    const t0 = performance.now();
-    try {
-      let view: DensityStripViewLike | { status: string; error: string };
-      try { view = await host.api<DensityStripViewLike | { status: string; error: string }>(`${sideApiPrefix(side)}/density-strip`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patches }) }); }
-      catch (error) { const t = errorText(error); densityLine(t, true, side); return { error: t }; }
-      if ('error' in view) { densityLine(view.error, true, side); return { error: view.error }; }
-      state.stripView = view; if (pickedSide === side) renderStrip();
-      while (state.stripView.status === 'running') {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        state.stripView = await host.api<DensityStripViewLike>(`${sideApiPrefix(side)}/density-strip/${state.stripView.id}`);
-        if (pickedSide === side) renderStrip();
-        const settled = state.stripView.rows.filter(r => r.status !== 'running').length;
-        densityLine(`Strip ${state.stripView.id.slice(0, 12)}…: ${settled} of ${state.stripView.rows.length} settled · ${((performance.now() - t0) / 1000).toFixed(0)} s`, false, side);
-      }
-      const passing = state.stripView.rows.filter(r => r.verdict === 'PASS').length;
-      densityLine(`Strip of ${state.stripView.rows.length} on ${state.stripView.part} settled: ${passing} passing.`, false, side);
-      return state.stripView;
-    } finally { densityBusy = false; renderStrip(); }
+    if (ro) { outcome(ro, true); return { error: ro }; }
+    const initial = state.rebuildStatus ? null : {
+      part: meshPanel?.part() ?? null, entry: meshPanel?.entry() ?? null, problems: meshPanel?.precheck() ?? [],
+    };
+    const status = state.rebuildStatus ?? await loadRebuildStatus(side);
+    const offside = pickedSide !== side;
+    const part = offside ? initial?.part ?? null : meshPanel?.part() ?? null;
+    const entry = offside ? initial?.entry ?? null : meshPanel?.entry() ?? null;
+    const request = densityStripPatches(status, part, entry, () => offside ? initial?.problems ?? [] : meshPanel?.precheck() ?? [], values);
+    if ('error' in request) { outcome(request.error, true); return request; }
+    // A pending row goes back first: the strip it came from is about to be replaced.
+    if (state.stripPending) {
+      await stripBack(side, ui);
+      clearJobOutcome(side, 'density');
+    }
+    return buildDensityStripJob(request.patches, {
+      api: host.api.bind(host), path: `${sideApiPrefix(side)}/density-strip`,
+      save: next => { state.stripView = next; }, render: () => ui.render(renderStrip),
+      busy: value => { densityBusy = value; densityOwner = value ? side : null; }, outcome,
+      initial: `Building a strip of ${values.length} on ${request.part} (Build ${side.toUpperCase()}): ${values.join(', ')}…`,
+      progress: text => jobStatus(side, 'density', () => densityStrip?.status(text, false), () => densityStrip?.status('', false)),
+      summary: (view, passing) => `Strip of ${view.rows.length} on ${view.part} settled: ${passing} passing.`,
+    });
   }
 
   async function loadStripRow(index: number): Promise<{ line: string; ok: boolean } | { error: string }> {
@@ -1744,63 +1810,92 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     finally { rebuildBusy = false; rebuildState(); renderStrip(); }
   }
 
-  async function stripBack(side: Side = pickedSide): Promise<void> {
+  async function stripBack(side: Side = pickedSide, ui?: JobUiSink): Promise<void> {
     const state = sides[side], pending = state.stripPending;
     if (!pending || rebuildBusy) return;
-    rebuildBusy = true; rebuildState();
+    const outcome = (text: string, error: boolean) => {
+      if (ui) densityJobOutcome(side, text, error);
+      else densityLine(text, error, side);
+    };
+    const show = (write: () => void) => {
+      if (ui) ui.render(write);
+      else if (pickedSide === side) write();
+    };
+    if (ui) rebuildUiOwner = side;
+    rebuildBusy = true; rebuildState(ui ? side : undefined, ui);
     try {
       await swapPickedSide(side, pending.back.url, pending.back.prefix, pending.back.hash);
       state.appliedOnStage = pending.back.applied; state.stageCheck = pending.back.check; state.stripPending = null;
-      if (pickedSide === side) {
+      show(() => {
         const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = state.appliedOnStage ? JSON.stringify(state.appliedOnStage) : ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
         meshPanel?.counts([]);
-      }
+      });
       host.redrawOverlays(true);
-      densityLine(`Back: Build ${side.toUpperCase()} shows ${state.appliedOnStage ? 'the last applied record' : 'the inspected build'}.`, false, side);
-    } catch (error) { densityLine(`DENSITY_STRIP_BACK_FAILED: ${errorText(error)}`, true, side); }
-    finally { rebuildBusy = false; rebuildState(); renderStrip(); }
+      outcome(`Back: Build ${side.toUpperCase()} shows ${state.appliedOnStage ? 'the last applied record' : 'the inspected build'}.`, false);
+    } catch (error) { outcome(`DENSITY_STRIP_BACK_FAILED: ${errorText(error)}`, true); }
+    finally {
+      rebuildBusy = false; rebuildUiOwner = null;
+      rebuildState(ui ? side : undefined, ui);
+      if (ui) ui.render(renderStrip); else renderStrip();
+    }
   }
 
   async function closeDensityStrip(): Promise<{ status: string; error?: string }> {
-    const side = pickedSide, state = sides[side], view = state.stripView;
+    const side = pickedSide, state = sides[side], view = state.stripView, ui = jobUi(side);
     if (!view) return { status: 'closed' };
-    if (state.stripPending && state.stripPending.id === view.id) await stripBack(side);
-    try {
-      const r = await host.api<{ status: string; error?: string }>(`${sideApiPrefix(side)}/density-strip/close`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: view.id }) });
-      if (r.status !== 'closed') { densityLine(r.error ?? 'DENSITY_STRIP_CLOSE_REFUSED', true, side); return r; }
-      state.stripView = null; if (pickedSide === side) renderStrip(); densityLine('Strip closed; its scratch is removed.', false, side); return r;
-    } catch (error) { const t = errorText(error); densityLine(t, true, side); return { status: 'refused', error: t }; }
+    clearJobOutcome(side, 'density'); clearJobOutcome(side, 'message');
+    if (state.stripPending && state.stripPending.id === view.id) await stripBack(side, ui);
+    return closeDensityStripJob(view.id, {
+      api: host.api.bind(host), path: `${sideApiPrefix(side)}/density-strip`,
+      save: next => { state.stripView = next; }, render: () => ui.render(renderStrip),
+      outcome: (text, error) => densityJobOutcome(side, text, error),
+    });
   }
 
-  async function runReadings(override?: { readings: import('../src/readings.ts').ReadingRequest[] }): Promise<ReadingsJobView | ReadingsRefusal | null> {
+  async function runReadings(override?: { readings: import('../src/readings.ts').ReadingRequest[] },
+    scope?: { side: Side; ui: JobUiSink }): Promise<ReadingsJobView | ReadingsRefusal | null> {
     if (!readingsPanel || readingsBusy) return null;
+    const side = scope?.side ?? pickedSide, state = sides[side];
+    const hint = 'Pick readings, then Run: each runs on the picked build and on its latest scratch build.';
+    const clearStatus = () => readingsPanel?.status(hint, false);
+    const status = (text: string, error: boolean) => {
+      if (scope) jobOutcome(side, 'readings', () => scope.ui.status(() => readingsPanel?.status(text, error)), clearStatus);
+      else if (pickedSide === side) readingsPanel?.status(text, error);
+    };
+    clearJobOutcome(side, 'readings');
     const chosen = override ?? readingsPanel.requests();
-    if ('error' in chosen) { readingsPanel.status(chosen.error, true); return { status: 'refused', error: chosen.error }; }
-    const side = pickedSide, animation = host.data().animation;
+    if ('error' in chosen) { status(chosen.error, true); return { status: 'refused', error: chosen.error }; }
+    const animation = host.data().animation;
     let environment: ReturnType<typeof environmentFor> | WorldExport['schedule'] | null = currentPlayer() && input('environment-applied').checked ? environmentFor(wind.read(), Number(input('gravity').value)) : null;
     if (environment && useWorld()) {
       const world = worldFor(animation, side);
-      if ('error' in world) { readingsPanel.status(world.error, true); return { status: 'refused', error: world.error }; }
+      if ('error' in world) { status(world.error, true); return { status: 'refused', error: world.error }; }
       environment = world.schedule;
     }
     const body = { animation, readings: chosen.readings, environment };
-    readingsBusy = true; readingsPanel.busy(true); readingsPanel.status(`Running ${chosen.readings.length} reading(s) of ${animation} on Build ${side.toUpperCase()}…`, false);
+    const busy = (value: boolean) => {
+      readingsBusy = value;
+      if (scope) jobBusy(side, 'readings', value, active => readingsPanel?.busy(active));
+      else readingsPanel?.busy(value);
+    };
+    busy(true);
+    const starting = `Running ${chosen.readings.length} reading(s) of ${animation} on Build ${side.toUpperCase()}…`;
+    if (scope) jobStatus(side, 'readings', () => readingsPanel?.status(starting, false), clearStatus);
+    else readingsPanel.status(starting, false);
     const started = performance.now();
     try {
-      const job = await runReadingsRequest(body, { api: host.api.bind(host), path: `${sideApiPrefix(side)}/readings`,
-        onError: text => { if (pickedSide === side) readingsPanel?.status(text, true); },
-      });
+      const job = await runReadingsRequest(body, { api: host.api.bind(host), path: `${sideApiPrefix(side)}/readings`, onError: text => status(text, true) });
       if (job.status !== 'done') return job;
-      sides[side].readingsJob = job;
-      if (pickedSide === side) {
-        readingsPanel.lines(job);
-        const ticks = job.runs.map(r => `${r.build} ${r.results.reduce((n, x) => n + x.frames.length, 0)} tick(s)`).join(' · ');
-        const refused = job.runs.flatMap(r => r.results).find(r => r.status !== 'read');
-        readingsPanel.status(`${refused ? `${refused.refusal} · ` : ''}Readings of ${job.request.animation}: ${ticks} · ${((performance.now() - started) / 1000).toFixed(1)} s`, !!refused);
-      }
+      state.readingsJob = job;
+      const ticks = job.runs.map(r => `${r.build} ${r.results.reduce((n, x) => n + x.frames.length, 0)} tick(s)`).join(' · ');
+      const refused = job.runs.flatMap(r => r.results).find(r => r.status !== 'read');
+      const line = `${refused ? `${refused.refusal} · ` : ''}Readings of ${job.request.animation}: ${ticks} · ${((performance.now() - started) / 1000).toFixed(1)} s`;
+      const write = () => { readingsPanel?.lines(job); readingsPanel?.status(line, !!refused); };
+      if (scope) jobOutcome(side, 'readings', () => scope.ui.render(write), () => { readingsPanel?.lines(null); clearStatus(); });
+      else if (pickedSide === side) write();
       return job;
-    } catch (error) { if (pickedSide === side) readingsPanel.status(`READINGS_FAILED: ${errorText(error)}`, true); return null; }
-    finally { readingsBusy = false; readingsPanel.busy(false); }
+    } catch (error) { status(`READINGS_FAILED: ${errorText(error)}`, true); return null; }
+    finally { busy(false); }
   }
 
   function readingsContext(): ReadingsContext | null {
@@ -1808,18 +1903,12 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   async function meshFolds(): Promise<string[]> {
-    const side = pickedSide, animation = host.data().animation;
-    meshPanel?.status(`Running the folds reading of ${animation}…`, false);
-    const job = await runReadings({ readings: [{ kind: 'folds' }] });
-    if (!job || !('runs' in job)) {
-      const textMsg = job && 'error' in job && job.error ? job.error : 'READINGS_UNAVAILABLE: no reading ran';
-      if (pickedSide === side) meshPanel?.status(textMsg, true);
-      return [textMsg];
-    }
-    const lines = job.runs.map(run => { const r = run.results[0]; return r ? worstLine(run.build, r) : `${run.build} · folds: not run`; });
-    if (job.runs.length < 2) lines.push('scratch · folds: no scratch build yet (Apply builds one)');
-    if (pickedSide === side) meshPanel?.status(lines.join(' | '), job.runs.some(run => run.results.some(r => r.status !== 'read')));
-    return lines;
+    const side = pickedSide, ui = jobUi(side), animation = host.data().animation;
+    const clear = () => meshPanel?.status('', false);
+    clearJobOutcome(side, 'mesh');
+    jobStatus(side, 'mesh', () => meshPanel?.status(`Running the folds reading of ${animation}…`, false), clear);
+    return runMeshFolds(() => runReadings({ readings: [{ kind: 'folds' }] }, { side, ui }),
+      (text, error) => jobOutcome(side, 'mesh', () => meshPanel?.status(text, error), clear));
   }
 
   function runRequirements(body: RequirementsRequest): Promise<RequirementsJobView | RequirementsRefusal | null> {
@@ -1830,37 +1919,40 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     });
   }
 
+  const environmentCheckRevision: Record<Side, number> = { a: 0, b: 0 };
+
   async function runEnvironmentCheck(): Promise<EnvironmentCheckView | { status: 'refused'; error: string } | null> {
     if (environmentCheckBusy) return null;
-    const side = pickedSide, state = sides[side];
-    const out = el('environment-check-lines');
-    const show = (rows: { kind: string; text: string }[]) => {
-      if (pickedSide !== side) return;
-      out.replaceChildren(...rows.map(row => { const line = document.createElement('div'); line.className = `env-${row.kind}`; line.textContent = row.text; return line; }));
+    const side = pickedSide, state = sides[side], revision = ++environmentCheckRevision[side];
+    const out = el('environment-check-lines'), clear = () => out.replaceChildren();
+    const show = (rows: EnvironmentRow[]) => renderEnvironmentCheckRows(out, rows);
+    const outcome = (rows: EnvironmentRow[]) => {
+      if (revision === environmentCheckRevision[side]) jobOutcome(side, 'environment-check', () => show(rows), clear);
     };
+    clearJobOutcome(side, 'environment-check');
     const name = checkAnimation(side), world = worldFor(name, side);
-    if ('error' in world) { show([{ kind: 'error', text: world.error }]); return { status: 'refused', error: world.error }; }
     const build = state.appliedOnStage ? 'scratch' : 'inspected', before = state.stageCheck;
-    environmentCheckBusy = true; button('environment-check').disabled = true;
-    show([{ kind: 'label', text: `Checking Build ${side.toUpperCase()} (${build}) under ${name}'s schedule…` }]);
-    try {
-      let job = await host.api<EnvironmentCheckView | { status: 'refused'; error: string }>(`${sideApiPrefix(side)}/environment-check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ build, schedule: world.schedule }) }).catch(error => ({ status: 'refused' as const, error: errorText(error).replace(/^\d+: /, '') }));
-      if (!('id' in job)) {
-        const textMsg = (() => { try { return (JSON.parse(job.error) as { error?: string }).error ?? job.error; } catch { return job.error; } })();
-        show([{ kind: 'error', text: textMsg }]); return { status: 'refused', error: textMsg };
-      }
-      while (job.status === 'running') {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        job = await host.api<EnvironmentCheckView>(`${sideApiPrefix(side)}/environment-check/${job.id}`);
-      }
-      const checked = job;
-      const label = build === 'inspected' ? 'default world (the inspected build\'s own check)' : 'the scratch build\'s Apply check';
-      const baseline = state.rebuildStatus?.baseline, noDefault = build === 'inspected' && !inspectedCheckView(side) && baseline && baseline.status !== 'running' && baseline.status !== 'reproduced';
-      const draw = () => show(environmentCheckRows(checked, barName => noDefault ? `${barName}: no default-world check — ${baseline!.line}` : build === 'inspected' ? beforeLine(barName, null, inspectedCheckView(side)) : barLine(barName, before?.lines ?? null, before?.check ?? null), label));
-      draw(); if (build === 'inspected' && inspectedCheckView(side)?.status !== 'checked') void followInspectedCheck(draw, side);
-      return job;
-    } catch (error) { show([{ kind: 'error', text: `ENVIRONMENT_CHECK_FAILED: ${errorText(error)}` }]); return null; }
-    finally { environmentCheckBusy = false; button('environment-check').disabled = !currentPlayer(); }
+    return runEnvironmentCheckJob(world, build, {
+      api: host.api.bind(host), path: `${sideApiPrefix(side)}/environment-check`,
+      busy: value => {
+        environmentCheckBusy = value;
+        jobBusy(side, 'environment-check', value, active => { button('environment-check').disabled = active || !currentPlayer(); });
+      },
+      initial: () => {
+        const rows: EnvironmentRow[] = [{ kind: 'label', text: `Checking Build ${side.toUpperCase()} (${build}) under ${name}'s schedule…` }];
+        jobStatus(side, 'environment-check', () => show(rows), clear);
+      },
+      outcome,
+      checked: job => {
+        const inspected = () => inspectedCheckView(side);
+        const rows = environmentCheckReadout(job, build, { baseline: state.rebuildStatus?.baseline, inspected, before,
+          scratchLabel: "the scratch build's Apply check", noDefaultSuffix: '' });
+        const draw = () => outcome(rows());
+        draw();
+        // The follow-up updates the origin's saved readout; jobOutcome alone gates display.
+        if (build === 'inspected' && inspected()?.status !== 'checked') void followInspectedCheck(draw, side, directJobUiSink);
+      },
+    });
   }
 
   function seekReading(clip: string, frame: number, exact: number | null, label: string): void {
@@ -2611,7 +2703,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     seekMode,
     stepSide,
     dispose: () => {
-      if (handoffTimer) clearTimeout(handoffTimer);
+      handoffRefresh.cancel();
       for (const dispose of disposers) dispose();
       disposers.length = 0;
     },

@@ -15,9 +15,10 @@ import type {AnimationSourceOp} from '../src/animation-ops.ts';
 import type {MotionSummary,RetargetFlags,RetargetLine,RetargetRecord} from '../src/retarget.ts';
 export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,AppliedRetarget,AppliedAnimation,AnimationSourceOp,CheckSummary,BustSpec};
 import {chestContourFields,chestRegionFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
-import type {InspectedCheckView} from '../src/physics-tuning.ts';
+import {readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {samplesClock,type StageClock} from '../src/frame-clock.ts';
-import type {ReadingsRequest} from '../src/readings.ts';
+import {worstLine,type ReadingsRequest} from '../src/readings.ts';
+import type {RequirementsCatalogView} from './requirements-panel.ts';
 import type {ReadingsJobView,ReadingsRefusal} from './readings-panel.ts';
 import type {AnimationInspectionPanel} from './animation-inspection.ts';
 import type {BonesPanel} from './bones-panel.ts';
@@ -290,7 +291,7 @@ interface JobApi {path:string;api:<T>(path:string,init?:RequestInit)=>Promise<T>
 const wait=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 export const jsonPost=(body:unknown):RequestInit=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 const stripResponseStatus=(error:unknown)=>(error instanceof Error?error.message:String(error)).replace(/^\d+: /,'');
-function refusalBodyText(text:string):string {
+export function refusalBodyText(text:string):string {
  try{return (JSON.parse(text) as {error?:string}).error??text;}catch{return text;}
 }
 export const requestRefusalText=(error:unknown):string=>refusalBodyText(stripResponseStatus(error));
@@ -445,6 +446,75 @@ export async function runRebuildUndo(from:string,{path,api,onLine,showLines=()=>
  return {status:'built',undone:result.undone,job,history:await api<AppliedHistoryView>(`${path}/history`)};
 }
 
+
+/** The handoff line (#101), with one display-owned baseline refresh timer per screen. */
+export function createHandoffRefresh() {
+ let timer:ReturnType<typeof setTimeout>|null=null;
+ const cancel=()=>{if(timer)clearTimeout(timer);timer=null;};
+ function show(status:RebuildStatusView,{api,path,save,line,ui}:JobApi&{
+  save:(next:RebuildStatusView)=>void;line:()=>HTMLElement;ui:JobUiSink;
+ }):void {
+  ui.render(()=>{
+   const node=line(),shown=handoffText(status);
+   node.textContent=shown.text;node.title=shown.text;node.classList.toggle('error',shown.error);
+  });
+  ui.poll(()=>{
+   cancel();
+   if(status.baseline?.status!=='running')return;
+   timer=setTimeout(()=>{
+    void api<RebuildStatusView>(path).then(next=>{
+     save(next);
+     show(next,{api,path,save,line,ui});
+    }).catch(()=>{});
+   },2000);
+  });
+ }
+ return {show,cancel};
+}
+
+/** Follow the inspected check even if the readout's screen has moved to another side. */
+export async function followInspectedCheckStatus({api,path,read,save,onReply,sleep=wait}:JobApi&{
+ read:()=>RebuildStatusView|null;save:(status:RebuildStatusView)=>void;onReply:()=>void;
+}):Promise<void> {
+ const pending=(status:RebuildStatusView|null)=>!status?.inspectedCheck||status.inspectedCheck.status==='running';
+ for(let i=0;i<120&&pending(read());i++){
+  try{save(await api<RebuildStatusView>(path));}catch{return;}
+  onReply();
+  const status=read();
+  if(!pending(status)||(!status?.inspectedCheck&&status?.baseline?.status!=='running'))return;
+  await sleep(3000);
+ }
+}
+
+/** Requirements (#113): the producer's spec, or the refusal in the same catalog slot. */
+export async function loadRequirementsCatalog({api,path,save,show}:JobApi&{
+ save?:(catalog:RequirementsCatalogView)=>void;show:(catalog:RequirementsCatalogView|null,reason:string|null)=>void;
+}):Promise<void> {
+ try{
+  const catalog=await api<RequirementsCatalogView>(path);
+  save?.(catalog);
+  show(catalog,catalog.reason);
+ }catch(error){show(null,`REQUIREMENTS_UNAVAILABLE: ${error instanceof Error?error.message:String(error)}`);}
+}
+
+/** The folds reading (#108) has one summary line per inspected/scratch build. */
+export async function runMeshFolds(read:()=>Promise<ReadingsJobView|ReadingsRefusal|null>,
+ outcome:(text:string,error:boolean)=>void):Promise<string[]> {
+ const job=await read();
+ if(!job||!('runs' in job)){
+  const text=job&&'error' in job&&job.error?job.error:'READINGS_UNAVAILABLE: no reading ran';
+  outcome(text,true);
+  return [text];
+ }
+ const lines=job.runs.map(run=>{
+  const result=run.results[0];
+  return result?worstLine(run.build,result):`${run.build} · folds: not run`;
+ });
+ if(job.runs.length<2)lines.push('scratch · folds: no scratch build yet (Apply builds one)');
+ outcome(lines.join(' | '),job.runs.some(run=>run.results.some(result=>result.status!=='read')));
+ return lines;
+}
+
 type ReadingsActions={onProgress?:(job:ReadingsJobView)=>void;onError?:(text:string)=>void};
 export async function runReadingsRequest(body:ReadingsRequest,{path,api,onProgress,onError,sleep=wait}:JobApi&ReadingsActions):Promise<ReadingsJobView|ReadingsRefusal> {
  let job=await api<ReadingsJobView|ReadingsRefusal>(path,jsonPost(body)).catch(error=>({
@@ -519,6 +589,64 @@ export function undoControl(history:AppliedHistoryView|null,stageId:string|null,
 export function appliedStatus(node:HTMLElement,text:string,error=false):void {
  node.textContent=text;
  node.classList.toggle('error',error);
+}
+
+type RebuildPanelJob = {
+ busy(value:boolean):void;
+ status(text:string,error:boolean):void;
+ progress?(write:()=>void):void;
+};
+
+export function preparePanelPatch(status:RebuildStatusView|null,ops:PatchOp[],empty:string,
+ panel:Pick<RebuildPanelJob,'status'>,args?:string[]):ConfigPatch|null {
+ const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig',args}):null;
+ if(!patch)panel.status(!ops.length?empty:status?.reason??'REBUILD_STATUS_UNAVAILABLE',true);
+ return patch;
+}
+
+/** The before reading follows the inspected check when there was no scratch build on stage. */
+export function followApplyReadout(
+ before:Parameters<typeof readoutRows>[0],result:PatchJobView,inspected:()=>InspectedCheckView|null,
+ show:(rows:ReturnType<typeof readoutRows>)=>void,follow:(refresh:()=>void)=>Promise<void>,
+ bars?:readonly string[],
+):void {
+ const after={lines:[...result.lines],check:result.check};
+ let last:InspectedCheckView|null|undefined;
+ const refresh=()=>{
+  const check=before?null:inspected();
+  if(check===last)return;
+  last=check;
+  show(readoutRows(before,check,after,bars));
+ };
+ refresh();
+ if(!before)void follow(refresh).then(refresh);
+}
+
+/** The existing panel lifecycle around a config patch; each screen owns its request, wording and built-stage effects. */
+export async function applyPanelPatch(
+ panel:RebuildPanelJob,
+ progress:()=>void,
+ apply:()=>Promise<PatchJobView|RebuildRefusal>,
+ built:(result:PatchJobView)=>void,
+):Promise<PatchJobView|RebuildRefusal> {
+ panel.busy(true);
+ if(panel.progress)panel.progress(progress);else directJobUiSink.status(progress);
+ try{
+  const result=await apply();
+  const {text,error}=patchOutcomeLine(result);
+  panel.status(text,error);
+  if('id' in result&&result.status==='built')built(result);
+  return result;
+ }finally{panel.busy(false);}
+}
+
+/** Preserve the panel's unconditional Reset announcement after the optional stage reset. */
+export async function resetPanelBuild(panel:RebuildPanelJob,reset:(()=>Promise<void>)|null,done:string):Promise<void> {
+ if(reset){
+  panel.busy(true);
+  try{await reset();}finally{panel.busy(false);}
+ }
+ panel.status(done,false);
 }
 
 export function renderApplied(
@@ -674,4 +802,88 @@ export function renderAppliedBlocks(
  // #186: when the stage record changes, a Cuts / Cloth readout the new record is not that block's names an older build.
  for(const block of staleReadouts(stage.readoutStage,stage.appliedOnStage))(block==='cuts'?cutsPanel:clothPanel)?.shown(null);
  stage.readoutStage=stage.appliedOnStage;
+}
+
+/** Synchronous UI delivery. Required requests, job polling and origin cache writes stay with the caller. */
+export interface JobUiSink {
+ status(write:()=>void):void;
+ busy(write:()=>void):void;
+ render(write:()=>void):void;
+ poll(schedule:()=>void):void;
+}
+
+const writeJobUi=(write:()=>void):void=>write();
+export const directJobUiSink:JobUiSink={
+ status:writeJobUi,busy:writeJobUi,render:writeJobUi,poll:writeJobUi,
+};
+
+type JobStatusWrite={write:()=>void;clear:()=>void};
+type JobBusyWrite=(value:boolean)=>void;
+type JobBusyState<S>={active:Map<S,JobBusyWrite>;painted?:JobBusyWrite};
+
+/** Call leave before switching sides, then enter after hydrating the newly selected side. */
+export function createJobUiState<S>(selected:()=>S) {
+ const outcomes=new Map<S,Map<string,JobStatusWrite>>();
+ const displayed=new Map<string,{side:S;clear:()=>void}>();
+ const busyByKey=new Map<string,JobBusyState<S>>();
+
+ function showStatus(side:S,key:string,{write,clear}:JobStatusWrite):void {
+  displayed.set(key,{side,clear});
+  write();
+ }
+
+ function clearDisplayed(side:S,key:string):void {
+  const current=displayed.get(key);
+  if(!current||current.side!==side)return;
+  displayed.delete(key);
+  current.clear();
+ }
+
+ return {
+  sink(side:S):JobUiSink {
+   const emit=(write:()=>void):void=>{if(selected()===side)write();};
+   return {status:emit,busy:emit,render:emit,poll:emit};
+  },
+  transient(side:S,key:string,write:()=>void,clear:()=>void):void {
+   if(selected()===side)showStatus(side,key,{write,clear});
+  },
+  outcome(side:S,key:string,write:()=>void,clear:()=>void):void {
+   let sideOutcomes=outcomes.get(side);
+   if(!sideOutcomes)outcomes.set(side,sideOutcomes=new Map());
+   const terminal={write,clear};
+   sideOutcomes.set(key,terminal);
+   if(selected()===side)showStatus(side,key,terminal);
+  },
+  clearOutcome(side:S,key:string):void {
+   outcomes.get(side)?.delete(key);
+   if(selected()===side)clearDisplayed(side,key);
+  },
+  busy(side:S,key:string,value:boolean,write:JobBusyWrite):void {
+   let state=busyByKey.get(key);
+   if(value){
+    if(!state)busyByKey.set(key,state={active:new Map()});
+    state.active.set(side,write);
+   }else if(!state||!state.active.delete(side))return;
+   const visible=selected()===side;
+   if(visible)state.painted=value?write:undefined;
+   if(!state.active.size&&!state.painted)busyByKey.delete(key);
+   if(visible)write(value);
+  },
+  leave(side:S):void {
+   for(const key of displayed.keys())clearDisplayed(side,key);
+  },
+  enter(side:S):void {
+   if(selected()!==side)return;
+   for(const [key,state] of busyByKey){
+    const active=state.active.get(side);
+    const write=active??state.painted??state.active.values().next().value;
+    state.painted=active;
+    // Once the last lease and its true paint are gone, hydration owns the control again.
+    if(!state.active.size)busyByKey.delete(key);
+    write?.(!!active);
+   }
+   const sideOutcomes=outcomes.get(side);
+   if(sideOutcomes)for(const [key,terminal] of sideOutcomes)showStatus(side,key,terminal);
+  },
+ };
 }

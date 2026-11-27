@@ -1,5 +1,5 @@
 /**
- * The Environment block's "Use for readings" (issue #112), the DOM-free half: the controls as the exported
+ * The Environment block's "Use for readings" (issue #112), the controls as the exported
  * `rigc-environment/1` schedule for a clip, its bytes and their hash, the feedback context that carries them, and the
  * "Check under this world" rows (each readout bar under the default world beside the same bar under this one).
  */
@@ -7,7 +7,8 @@ import { scheduleSummary, scheduleText, sha256Hex, SCHEDULE_CONTEXT_SCHEMA, wind
 import { dueJolts, environmentFor, type JoltStep, type WindModel, type WindSnapshot, type WindState } from '../src/environment.ts';
 import type { RigPlayer } from '@rig-c/play';
 import type { CheckSummary } from '../src/applied-context.ts';
-import { READOUT_BARS } from '../src/physics-tuning.ts';
+import { barLine, beforeLine, READOUT_BARS, type InspectedCheckView } from '../src/physics-tuning.ts';
+import { jsonPost, refusalBodyText, type BaselineView } from './rebuild-client.ts';
 
 /** The world an Apply's reload resumes: wind (clock and active pulse), pending jolts, whether the controls are engaged, gravity. */
 export interface StageWorld { wind: WindState; jolts: JoltStep[]; applied: boolean; gravity: number }
@@ -83,6 +84,59 @@ export interface EnvironmentCheckView {
   bars: { name: string; line: string }[]; error: string | null; lines: string[];
 }
 export interface EnvironmentRow { kind: 'label' | 'bar' | 'error'; text: string }
+
+export function renderEnvironmentCheckRows(out:HTMLElement,rows:readonly EnvironmentRow[]):void {
+ out.replaceChildren(...rows.map(row=>{
+  const line=document.createElement('div');line.className=`env-${row.kind}`;line.textContent=row.text;return line;
+ }));
+}
+
+export function environmentCheckReadout(job:EnvironmentCheckView,build:EnvironmentCheckView['build'],{
+ baseline,inspected,before,scratchLabel,noDefaultSuffix,
+}:{
+ baseline:BaselineView|null|undefined;inspected:()=>InspectedCheckView|null;
+ before:{lines:readonly string[];check:CheckSummary|null}|null;
+ scratchLabel:string;noDefaultSuffix:string;
+}):()=>EnvironmentRow[] {
+ const label=build==='inspected'?'default world (the inspected build\'s own check)':scratchLabel;
+ // No inspected check exists when the baseline did not reproduce the inspected rig; say why, verbatim (a schedule of wind [1, 0], gravity [0, 1] reads the default world).
+ const noDefault=build==='inspected'&&!inspected()&&baseline&&baseline.status!=='running'&&baseline.status!=='reproduced';
+ return ()=>environmentCheckRows(job,name=>noDefault?`${name}: no default-world check — ${baseline.line}${noDefaultSuffix}`
+  :build==='inspected'?beforeLine(name,null,inspected()):barLine(name,before?.lines??null,before?.check??null),label);
+}
+
+type EnvironmentCheckResult=EnvironmentCheckView|{status:'refused';error:string}|null;
+const checkErrorText=(error:unknown)=>error instanceof Error?error.message:String(error);
+
+export async function runEnvironmentCheckJob(world:WorldExport|{error:string},build:EnvironmentCheckView['build'],{
+ api,path,busy,initial,progress,outcome,checked,
+}:{
+ api:<T>(path:string,init?:RequestInit)=>Promise<T>;path:string;busy:(value:boolean)=>void;
+ initial:(world:WorldExport)=>void;progress?:(job:EnvironmentCheckView,started:number)=>void;
+ outcome:(rows:EnvironmentRow[])=>void;checked:(job:EnvironmentCheckView)=>void;
+}):Promise<EnvironmentCheckResult> {
+ if('error' in world){outcome([{kind:'error',text:world.error}]);return {status:'refused',error:world.error};}
+ busy(true);initial(world);
+ try{
+  let job=await api<EnvironmentCheckView|{status:'refused';error:string}>(path,jsonPost({build,schedule:world.schedule}))
+   .catch(error=>({status:'refused' as const,error:checkErrorText(error).replace(/^\d+: /,'')}));
+  if(!('id' in job)){
+   const text=refusalBodyText(job.error);
+   outcome([{kind:'error',text}]);
+   return {status:'refused',error:text};
+  }
+  const started=performance.now();
+  while(job.status==='running'){
+   progress?.(job,started);
+   await new Promise(resolve=>setTimeout(resolve,1500));
+   job=await api<EnvironmentCheckView>(`${path}/${job.id}`);
+  }
+  checked(job);
+  return job;
+ }catch(error){outcome([{kind:'error',text:`ENVIRONMENT_CHECK_FAILED: ${checkErrorText(error)}`}]);return null;}
+ finally{busy(false);}
+}
+
 /** The panel's lines: which schedule check read, then per bar the default world's line and this world's, or the refusal verbatim. */
 export function environmentCheckRows(job: EnvironmentCheckView, defaultLine: (name: string) => string, defaultLabel: string): EnvironmentRow[] {
   if (job.status !== 'checked') return [{ kind: 'error', text: job.error ?? `ENVIRONMENT_CHECK_FAILED: ${job.status}` }];
