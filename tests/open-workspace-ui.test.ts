@@ -16,7 +16,7 @@ test('retained iframe CSS declares a scoped important override for the shared hi
 
 test('owner language control declares scoped compact width constraints', async () => {
   const base = await readFile(new URL('../web/styles.css', import.meta.url), 'utf8');
-  const rule = /\.owner-header select\s*\{([^}]+)\}/.exec(base)![1]!;
+  const rule = /\[data-retained-workspace=owner\]>\.topbar>#settings-language\s*\{([^}]+)\}/.exec(base)![1]!;
   expect(rule).toMatch(/width:\s*auto/); expect(rule).toMatch(/max-width:\s*12rem/);
   expect(rule).toMatch(/flex:\s*0\s+0\s+auto/);
 });
