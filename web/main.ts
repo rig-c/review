@@ -171,7 +171,7 @@ const rigAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pen
 const askHeadline=panelMake('span',{id:'workspace-ask-headline',className:'workspace-act-ask',hidden:true});
 rigInspector.act.prepend(askHeadline,rigAsk);
 // #1226: Send comments sits in the act bar, leftmost of the answers; it sends a comment-only act that answers no ask.
-const sendComments=panelMake('button',{id:'send-comments',type:'button',hidden:true});setSourceText(sendComments,'Send comments');button('save').before(sendComments);
+const sendComments=panelMake('button',{id:'send-comments',type:'button',hidden:true});setSourceText(sendComments,'Send comments');el('review-draft-recovery').after(sendComments);
 let commentSendState:'idle'|'sent'='idle';let commentSending=false;
 const rowStoreCache=new Map<string,{key:string;rows:Record<string,string>}>();
 let pendingAnswers:readonly {kind:string;stage?:string}[]=[];
@@ -344,7 +344,6 @@ function message(value: string, error = false, footerOnly = false, diagnostic?: 
   text('review-message', value); reviewMessage.classList.toggle('error', error);
   if (diagnostic) reviewMessage.title = diagnostic;
   if(error&&rigInspector.act.hidden){
-    if(!rigInspector.answersRendered)for(const node of rigInspector.act.querySelectorAll<HTMLElement>('#save,#review-status,label[for="review-status"]'))node.hidden=true;
     rigInspector.act.hidden=false;
     rigInspector.syncActRow?.();
   }
@@ -375,8 +374,6 @@ function updateSavedState(): void {
   if (saving) { text('review-message', ''); el('review-message').classList?.toggle('error', false); }
   text('dirty', dirty ? 'Unsubmitted changes' : session.updatedAt ? 'Submitted' : 'Not submitted');
   el('dirty').classList.toggle('dirty', dirty);
-  button('save').disabled = saving || draftConflict || !!readOnly || session.feedbackWarnings.length > 0;
-  button('save').title = actReadOnly ? actReadOnly : session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : '';
   renderDraftState();
   renderAnswerControls();
 }
@@ -1689,7 +1686,6 @@ async function start(): Promise<void> {
       const controls=[...screenRoot.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')]
         .filter(control=>control.id!=='settings-language').map(control=>({control,disabled:control.disabled}));
       for(const {control}of controls)control.disabled=true;
-      for(const control of [button('save'),select('review-status'),screenRoot.querySelector<HTMLElement>('label[for="review-status"]')!])control.hidden=true;
       renderAskHeadline(t('job.waiting',undefined,'en'));syncJobActRow();
       await workspace?.settle();if(disposed)return;
       const next=await new Promise<RigHost>((resolve,reject)=>{
@@ -1734,7 +1730,7 @@ async function start(): Promise<void> {
     actReadOnly = readOnlyReason(access, writes.capabilityRequired, host?.ownerActAccess);
     if(data.capabilities.preRig&&!host?.record){rigInspector.comments.button.disabled=true;rigInspector.act.hidden=true;}
     submittedBaseline=structuredClone(session);
-    text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status;
+    text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`);
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));
     for (const reference of data.manifest.references.filter(item => item.type === 'video')) select('strip-reference').append(option(reference.id, reference.label));
     if (!data.manifest.references.length) { select('reference-select').append(option('', 'No references supplied')); select('reference-select').disabled = true; }
@@ -1801,15 +1797,13 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  };
  const showCommentCount=()=>setSourceText(rigInspector.comments.button,`Comments (${issues.length+(generalRows?.length??0)})`);
  const changed=()=>{if(/^The source changed, so /.test(draftStatus??''))draftStatus=null;dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});renderDraftState();showCommentCount();return persistence?.save();};
- // A parts verdict is saved only over a drawn subject: until the first paint, or after a failed one, Save stays off.
- const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded'||draftConflict||!!persistence?.restoring();
  text('rig-empty','Loading package…');
  if(generalRows||host?.record)restoreRecordComments();
  partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),openComments:openReview,hasPicture:()=>!activeInterviewImages,issues,
   ...(host?.record?{recordComments}:notes?{generalComments:notes,submitting:()=>saving}:{}),
   request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,
   changed:()=>{if(host?.record){recordCommentsChanged();return;}if(generalRows)persistRecordComments();return changed();},
-  selectionChanged:()=>{parts?.refreshImages();renderAnswerControls();},locked:id=>submittedIssues.has(id)||[...issues,...generalRows??[],...host?.record?recordComments:[]].some(row=>row.id===id&&isSentAlone(row)),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
+  selectionChanged:()=>{parts?.refreshImages();renderAnswerControls();},locked:id=>submittedIssues.has(id)||[...issues,...generalRows??[],...host?.record?recordComments:[]].some(row=>row.id===id&&isSentAlone(row)),refusal:()=>readOnly,drawn:state=>{rigInput=state;renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
  parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{});
  const thumbnails=new PartThumbnails();viewDisposers.push(()=>thumbnails.dispose());
  parts.registerImages({thumbnail:(icon,item,glyph)=>thumbnails.showOriginal(icon,item,()=>partsSubject!.image(item.index),glyph),items:subject.items,selected:partsSubject.selected,solo:partsSubject.solo,visible:partsSubject.visible,select:partsSubject.select,isolate:partsSubject.isolate,show:partsSubject.show});
@@ -1857,8 +1851,6 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  const reference=select('reference-select');reference.replaceChildren(option('',subject.painting?'Original painting':'No references supplied'));reference.disabled=true;
  el('package-context').removeAttribute('open');el('reference-empty').hidden=!!subject.painting;el('rig-overlay').hidden=true;
  const state=rigInspector.actBar;state.setSaveState({kind:actReadOnly?'read-only':'unsaved',text:actReadOnly??'Not submitted'});
- select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
- button('save').disabled=saveBlocked();
  viewDisposers.push(viewport.bindControls(unitScaleMessage),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  if(!host)renderPendingSubjects([]);
@@ -1875,7 +1867,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
    bookmark:()=>({schema:'rig-review-inspection/1',binding,animation:null,time:null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:null,a:null,b:null,reference:null}},selection:{}}),
    // Parts comments carry their own explicit view restore. Opening never replays a selection or camera.
    restoreBookmark:async()=>{},
-   ui:()=>({}),restoreUI:()=>{},afterInputs:()=>{if(!dirty||issues.length===0){const current=partsSubject!.comparison();overlay.checked=current.mode==='overlay';opacity.value=String(current.opacity);return;}partsSubject!.setComparison(overlay.checked?'overlay':'part');partsSubject!.opacity(Number(opacity.value));},onConflict:value=>{draftConflict=value;button('save').disabled=saveBlocked();renderAnswerControls();},onStatus:value=>{draftStatus=value;renderDraftState();}});
+   ui:()=>({}),restoreUI:()=>{},afterInputs:()=>{if(!dirty||issues.length===0){const current=partsSubject!.comparison();overlay.checked=current.mode==='overlay';opacity.value=String(current.opacity);return;}partsSubject!.setComparison(overlay.checked?'overlay':'part');partsSubject!.opacity(Number(opacity.value));},onConflict:value=>{draftConflict=value;renderAnswerControls();},onStatus:value=>{draftStatus=value;renderDraftState();}});
   if(disposed){connection.dispose();return;}persistence=connection;
  };
  await setupPartsPersistence();if(disposed)return;
@@ -1935,13 +1927,12 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  if(interview){
   const interviewRefusal='INTERVIEW_PICKS_DISABLED: the interview answer form has been removed; discuss options through live job comments.';
   button('stage-comment').hidden=true;
-  button('save').disabled=true;setSourceAttribute(button('save'),'aria-description',interviewRefusal);
   text('provenance-rig',unavailable);text('provenance-motion',unavailable);text('source-files','project.json');
   text('rig-empty',interviewRefusal);message(interviewRefusal);message(interviewRefusal,true,false,'INTERVIEW_PICKS_DISABLED');
  }else{restoreRecordComments();setupComments();showRecordComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  await workspace?.settle();if(disposed)return;
- if(host?.unavailable){message(t('job.refusal.'+host.unavailable),true,false,host.unavailable);button('save').disabled=true;button('save').title=host.unavailable;}
+ if(host?.unavailable){message(t('job.refusal.'+host.unavailable),true,false,host.unavailable);}
  document.body.dataset.ready='true';
  if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
@@ -2146,7 +2137,7 @@ function persistRecordComments():void {
    if(binding.previousPublicationId&&`${prefix}${binding.previousPublicationId}:${binding.sourceHash}`!==recordCommentKey)localStorage.removeItem(`${prefix}${binding.previousPublicationId}:${binding.sourceHash}`);
   }
   if(notes&&!comments.length)localStorage.removeItem(recordCommentKey);
-  else localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:activePub,sourceHash:binding.sourceHash,comments}));
+  else localStorage.setItem(recordCommentKey,JSON.stringify({publicationId:activePub,sourceHash:binding.sourceHash,comments}));
  }catch{/* In-memory comments remain bound to this host. */}
 }
 function recordCommentsChanged():void {
@@ -2372,14 +2363,12 @@ function renderAskHeadline(sentence=askSentence):void {
  };
  if(!suspended&&!disposed)progressTimer=setInterval(tickAge,1000);
 }
-/** Keep the retired controls hidden and update Send comments. */
+/** Keep the retired ask opener hidden and update Send comments. */
 function renderAnswerControls():void {
  const subjects=pendingAnswers;
  const blocked=saving||draftConflict||!!actReadOnly||!!host?.unavailable||
   (typeof persistence!=='undefined'&&!!persistence?.restoring());
- const save=button('save');
- select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
- save.hidden=true;rigAsk.hidden=true;
+ rigAsk.hidden=true;
  if(typeof sendComments!=='undefined'){
   const parts=typeof partsOnly!=='undefined'&&partsOnly;
   const pendingComment=parts?!!partsSubject?.hasPendingComment?.():typeof comments!=='undefined'&&!!comments?.hasPendingComment?.();
@@ -2724,7 +2713,7 @@ let inspectionOpening=false;
 async function setupPersistence(keepCameraOnResume=false):Promise<boolean> {
  let restoredChestFormPart:string|null=null;
  inspectionOpening=true;try{
- persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();renderProvenance();updateSavedState();},bookmark:navigationBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b)),keepCameraOnResume||bookmarkCameraKept(inspectionOpening,!!host)),
+ persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;renderProposals();renderCheckpoint();renderCheckpoints();renderProvenance();updateSavedState();},bookmark:navigationBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b)),keepCameraOnResume||bookmarkCameraKept(inspectionOpening,!!host)),
  ui:()=>({chestFormPart,...(host?{chestLandmarkDraft:chestEditor?.jobDraftText()??null}:{}),inspectorScroll:workspace?.scroll()??'{}',...(inspectorBlocks?activeBlocksUI(inspectorBlocks.state()):{}),reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{restoredChestFormPart=typeof value.chestFormPart==='string'?value.chestFormPart:null;if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();inspectorBlocks?.restore(restoreActiveBlocksUI(value));workspace?.restoreScroll(value.inspectorScroll);},afterInputs:draft=>{
   if(host){
    const saved=draft?.ui.chestLandmarkDraft;
@@ -3544,7 +3533,7 @@ function setupComments():void {
   if(localCommentSource){
    // The persisted draft can predate a successful send. Recheck its comments against the sent-row cache.
    const recoveredReviewChanges=dirty&&submittedBaseline!==null&&
-    (session.status!==submittedBaseline.status||JSON.stringify(session.checkpoints)!==JSON.stringify(submittedBaseline.checkpoints));
+    JSON.stringify(session.checkpoints)!==JSON.stringify(submittedBaseline.checkpoints);
    dirty=hasUnsentComments()||recoveredReviewChanges;
    updateSavedState();
   }else if(notes.rows.length)markDirty();

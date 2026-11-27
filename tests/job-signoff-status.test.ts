@@ -103,7 +103,7 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>, localStore = new Ma
   const rigAsk = node('button', 'workspace-pending-ask');
   rigAsk.className = 'workspace-act-ask';
   const sendComments = node('button', 'send-comments'); sendComments.hidden = true; setSourceText(sendComments, 'Send comments');
-  const save = node('button', 'save'), notice = node('p', 'review-message');
+  const notice = node('p', 'review-message');
   const communicationPanel = node('aside', 'workspace-communication');
   const inspector = node('div'); inspector.className = 'inspector';
   const heading = node('div'); heading.className = 'inspector-heading';
@@ -111,9 +111,8 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>, localStore = new Ma
   inspector.append(heading, body);
   const dialog = node('div', 'review-dialog'), dialogHeader = node('div'), dialogActions = node('div');
   dialogHeader.className = 'review-dialog-header'; dialogActions.className = 'review-dialog-actions';
-  dialogActions.append(sendComments, save, actStatus, notice); dialog.append(dialogHeader, dialogActions);
-  const feedback = node('div', 'inspector-feedback'), verdict = node('select', 'review-status'), label = node('label');
-  label.setAttribute('for', verdict.id); feedback.append(label, verdict);
+  dialogActions.append(notice, actStatus, node('span', 'review-draft-recovery'), sendComments); dialog.append(dialogHeader, dialogActions);
+  const feedback = node('div', 'inspector-feedback');
   root.append(inspector, dialog, feedback, row, dirty, communicationPanel, node('p', 'message'), node('p', 'draft-state'), node('div', 'draft-recovery'),
     node('div', 'proposal-panel'), node('div', 'comments-list-host'), node('div', 'inspector-rig'), node('div', 'inspector-playback'));
   const rigInspector = mountRigInspector(document, row);
@@ -144,7 +143,7 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>, localStore = new Ma
         status: actStatus.textContent!, statusKind: actStatus.dataset.saveState ?? '',
         form: forms.length > 0, formStatus: notice.textContent ?? '',
         submitDisabled: sendComments.hidden || sendComments.disabled,
-        actions: [rigAsk, sendComments, save].filter(control => !row.hidden && !control.hidden).map(control => ({
+        actions: [rigAsk, sendComments].filter(control => !row.hidden && !control.hidden).map(control => ({
           id: control.id, disabled: control.disabled, opacityOverride: control.classList.contains('workspace-act-ask'),
         }))};
     },

@@ -10,7 +10,7 @@ if(start<0||end<=start||rowStart<0||rowEnd<=rowStart)throw new Error('ACT_BAR_SO
 const renderer=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(rowStart,rowEnd)+main.slice(start,end));
 function harness(commenting=true) {
  const control=()=>({hidden:false,disabled:false,classList:{values:new Set<string>(),toggle(name:string,on:boolean){on?this.values.add(name):this.values.delete(name);}}});
- const save=control(),rigAsk=control(),select=control(),label=control(),sendComments=control();
+ const rigAsk=control(),sendComments=control();
  const rigInspector={act:{hidden:true},comments:{panel:{querySelector:()=>null}}};
  const headlines:string[]=[];
  const env={
@@ -18,7 +18,7 @@ function harness(commenting=true) {
   firstPublicationPrompt:false,jobProgress:null as object|null,saving:false,draftConflict:false,
   actReadOnly:null as string|null,readOnly:null as string|null,partsOnly:false,partsSubject:{hasPendingComment:()=>false},
   rigInput:{state:'loaded'},comments:{hasPendingComment:()=>false},
-  rigInspector,rigAsk,sendComments,button:()=>save,select:()=>select,document:{querySelector:()=>label},
+  rigInspector,rigAsk,sendComments,
   el:()=>({classList:{contains:()=>false}}),commentHost:()=>commenting,hasUnsentContent:()=>false,
   renderAskHeadline:(value:string)=>headlines.push(value),
   renderDraftState:()=>api.render(),
@@ -27,7 +27,7 @@ function harness(commenting=true) {
   render():void;subjects(subjects:typeof env.pendingAnswers):void;
  };
  api.render();
- return {save,rigAsk,select,label,sendComments,env,headlines,rigInspector,...api};
+ return {rigAsk,sendComments,env,headlines,rigInspector,...api};
 }
 for(const subject of [
  {kind:'review-verdict',stage:'rig-review'},
@@ -38,7 +38,7 @@ for(const subject of [
  h.subjects([subject]);
  expect(h.headlines).toEqual(["We're looking at the work together. Leave your thoughts as comments."]);
  expect(h.env.pendingAnswers).toEqual([]);
- expect([h.save,h.rigAsk,h.select,h.label].every(control=>control.hidden)).toBe(true);
+ expect(h.rigAsk.hidden).toBe(true);
  expect(h.sendComments.hidden).toBe(false);
  expect(h.sendComments.classList.values.has('primary')).toBe(true);
  expect(h.sendComments.disabled).toBe(true);
@@ -68,9 +68,9 @@ test('#987 and #904 progress and first-publication waiting show the row with no 
  const h=harness(false);
  expect(h.rigInspector.act.hidden).toBe(true);
  h.env.jobProgress={};h.render();expect(h.rigInspector.act.hidden).toBe(false);
- for(const control of [h.save,h.rigAsk,h.sendComments])expect(control.hidden).toBe(true);
+ for(const control of [h.rigAsk,h.sendComments])expect(control.hidden).toBe(true);
  h.env.jobProgress=null;h.env.firstPublicationPrompt=true;h.render();
- expect(h.rigInspector.act.hidden).toBe(false);expect(h.save.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);
+ expect(h.rigInspector.act.hidden).toBe(false);expect(h.rigAsk.hidden).toBe(true);
  expect(h.sendComments.hidden).toBe(true);
 });
 
@@ -104,12 +104,12 @@ test.each([
  expect(states).toEqual([showsRefusal?{kind:'saved',text:draftStatus}:{kind:'unsaved',text:'Not submitted'}]);
 });
 
-test('#833 revealing the live act row from initial markup hides the legacy controls first',()=>{
+test('#833 revealing the live act row from initial markup keeps the retired ask opener hidden',()=>{
  const h=harness();
- for(const control of [h.save,h.rigAsk,h.select,h.label])control.hidden=false;
+ h.rigAsk.hidden=false;
  h.rigInspector.act.hidden=true;
  h.render();
- expect([h.save,h.rigAsk,h.select,h.label].every(control=>control.hidden)).toBe(true);
+ expect(h.rigAsk.hidden).toBe(true);
  expect(h.rigInspector.act.hidden).toBe(false);
  expect(h.sendComments.disabled).toBe(true);
 });
@@ -121,12 +121,12 @@ for(const item of [
  {name:'standalone refusal',host:null,error:true,footerOnly:false,hidden:true,reveal:true},
  {name:'already rendered live refusal',host:{},error:true,footerOnly:false,hidden:false,reveal:false},
  {name:'completed live ask refusal',host:{},error:true,footerOnly:false,hidden:true,reveal:true,rendered:true},
-])test('#833 '+item.name+' preserves refusal visibility without exposing legacy acts',()=>{
+])test('#833 '+item.name+' preserves refusal visibility',()=>{
  const begin=main.indexOf('function message(value:'),end=main.indexOf('\nasync function api',begin);
  const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end));
  const node=()=>({hidden:false,title:'',textContent:'',classList:{contains:()=>false,toggle(){}}});
- const nodes={'message':node(),'review-message':node()},legacy=[node(),node(),node()];
- const act={hidden:item.hidden,querySelectorAll:()=>legacy};
+ const nodes={'message':node(),'review-message':node()};
+ const act={hidden:item.hidden};
  let rowReveals=0;
  const env={host:item.host,rigInspector:{act,answersRendered:item.rendered??false,syncActRow:()=>rowReveals++},el:(id:keyof typeof nodes)=>nodes[id],text:(id:keyof typeof nodes,value:string)=>{nodes[id].textContent=value;}};
  const message=new Function('env',`with(env){${script};return message;}`)(env);
@@ -134,13 +134,12 @@ for(const item of [
  expect(nodes.message.textContent).toBe(item.error?'':'JOB_VISUAL_UNAVAILABLE');
  expect(nodes['review-message'].textContent).toBe('JOB_VISUAL_UNAVAILABLE');
  expect(act.hidden).toBe(item.reveal?false:item.hidden);expect(rowReveals).toBe(item.reveal?1:0);
- expect(legacy.map(control=>control.hidden)).toEqual(item.reveal&&!item.rendered?[true,true,true]:[false,false,false]);
 });
 
 for(const subject of [{kind:'signoff',stage:'plan-approved'},{kind:'checkpoint'},{kind:'interview-picks'}]){
  test('#1230 and #1232 retired '+subject.kind+' has no answer opener or question headline',()=>{
   const h=harness(false);h.subjects([subject]);
-  expect(h.save.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);expect(h.sendComments.hidden).toBe(true);
+  expect(h.rigAsk.hidden).toBe(true);expect(h.sendComments.hidden).toBe(true);
   expect(h.headlines).toEqual(['Nothing is waiting for your answer.']);
  });
 }

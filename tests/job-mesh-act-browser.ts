@@ -167,7 +167,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
     const dialogs: {type: string; message: string; accepted: boolean}[] = [];
     const catalog = language === 'ko' ? koCatalog : enCatalog;
     // The comment act leaves the original live rig controls in place.
-    const commentsSettled = `document.querySelector('#save').hidden && !document.querySelector('#workspace-act-row').hidden && !document.querySelector('#send-comments').hidden && document.querySelector('#workspace-ask-headline').textContent === ${JSON.stringify(catalog["We're looking at the work together. Leave your thoughts as comments."])} && document.querySelector('#review-draft-state').dataset.saveState === 'saved'`;
+    const commentsSettled = `!document.querySelector('#save') && !document.querySelector('#review-status') && !document.querySelector('#workspace-act-row').hidden && !document.querySelector('#send-comments').hidden && document.querySelector('#workspace-ask-headline').textContent === ${JSON.stringify(catalog["We're looking at the work together. Leave your thoughts as comments."])} && document.querySelector('#review-draft-state').dataset.saveState === 'saved'`;
     page = await launchCdpSession(profile, {onEvent: (event, command) => {
       send = command;
       if (event.method === 'Page.javascriptDialogOpening') {

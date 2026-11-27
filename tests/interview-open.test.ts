@@ -194,7 +194,8 @@ test('#1230 interview-only open screen renders a named refusal in EN and KO with
  expect(document.body.dataset.ready).toBe('true');
  expect(act.hidden).toBe(false);
  expect(el('stage-comment').hidden).toBe(true);
- expect(el('save').disabled).toBe(true);
+ expect(nodes.has('save')).toBe(false);
+ expect(nodes.has('review-status')).toBe(false);
  expect(el('review-message').classList.contains('error')).toBe(true);
  expect(el('review-message').title).toBe('INTERVIEW_PICKS_DISABLED');
  expect(el('review-message').textContent).toBe(refusal);

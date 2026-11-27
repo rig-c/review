@@ -406,7 +406,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
      const maxX=Math.min(window.innerWidth-4,main.right-4)-ox-w,maxY=Math.min(window.innerHeight-4,main.bottom-4)-oy-h;
      if(maxX>=minX&&maxY>=minY){
       const cx=(v:number)=>Math.max(minX,Math.min(v,maxX)),cy=(v:number)=>Math.max(minY,Math.min(v,maxY));
-      const acts=[...document.querySelectorAll<HTMLElement>('#workspace-act-row,.workspace-act-bar,#save,#request-changes,#submit')].filter(n=>!n.hidden&&n.getClientRects().length).map(n=>{const r=n.getBoundingClientRect();return {x:r.left-ox,y:r.top-oy,width:r.width,height:r.height};});
+      const acts=[...document.querySelectorAll<HTMLElement>('#workspace-act-row,.workspace-act-bar,#request-changes,#submit')].filter(n=>!n.hidden&&n.getClientRects().length).map(n=>{const r=n.getBoundingClientRect();return {x:r.left-ox,y:r.top-oy,width:r.width,height:r.height};});
       const blocksAct=(p:{x:number;y:number})=>acts.some(r=>boxesIntersect({...p,w,h},{x:r.x,y:r.y,w:r.width,h:r.height}));
       const xs=[x,minX,maxX,...points.flatMap(p=>[p.x-radius-w,p.x+radius]),...acts.flatMap(r=>[r.x-w,r.x+r.width])].map(cx);
       const ys=[y,minY,maxY,...points.flatMap(p=>[p.y-radius-h,p.y+radius]),...acts.flatMap(r=>[r.y-h,r.y+r.height])].map(cy);

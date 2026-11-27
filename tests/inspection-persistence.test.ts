@@ -798,3 +798,71 @@ test('#992 pinned parts drafts stored under the legacy instance/route scope rest
  const reloaded=await reloadedStore.read();
  expect((reloaded?.session as {issues:unknown[]})?.issues).toEqual([]);
 });
+
+test('#1225 legacy local drafts carrying status still load against status-free baselines without re-injecting status',async()=>{
+ const statuslessBaseline={id:'rig',revision:'1',sourceHash:binding.sourceHash,feedback:[],feedbackWarnings:[],updatedAt:null,reviewedSource:{rig:{sha256:'b'.repeat(64)}}};
+ const legacySession={...statuslessBaseline,status:'approved',feedback:[{id:'f1',frameStart:0,frameEnd:2,target:{kind:'rig',name:'hero'},category:'defect',summary:'legacy note'}]};
+ const recovered=recoverSession(legacySession,statuslessBaseline);
+ expect(recovered).not.toBeNull();
+ expect('status' in (recovered as object)).toBe(false);
+ expect(recovered?.feedback).toHaveLength(1);
+
+ // Conflict recovery ("Recover local draft as pending") also preserves a status-free baseline without injecting status
+ const storage=new MemoryStorage();
+ const saved=draft();
+ saved.baseline='f'.repeat(64);
+ saved.session=legacySession;
+ const source=await readFile(new URL('../web/inspection-persistence.ts',import.meta.url),'utf8');
+ const controls=(await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8')).split('export type ThemePreference')[0]!.replaceAll('export const','const');
+ const inputs=source.slice(source.indexOf('export function captureInputs('),source.indexOf('function parseInputs(')).replaceAll('export function','function');
+ const connect=source.slice(source.indexOf('export async function connectInspectionPersistence')).replace('export async function','async function');
+ const ids=source.slice(source.indexOf('const viewInputIds='),source.indexOf('/** Restore once'));
+ const script=`async function open(deps){const {InspectionDraftStore:Base,storage,saved,baseline,binding,bookmark,sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction}=deps;
+ class HTMLInputElement{hasAttribute(){return false;}}class HTMLSelectElement{hasAttribute(){return false;}}class HTMLTextAreaElement{}
+ const notice={children:[],replaceChildren(){this.children=[];},append(button){this.children.push(button);}};
+ const document={hidden:false,body:{inert:false},getElementById:id=>id==='review-draft-recovery'?notice:null,querySelectorAll:()=>[],querySelector:()=>null,createElement:()=>({type:'',textContent:'',onclick:null,append(){}})};
+ const window=new EventTarget(),location={href:'http://127.0.0.1:1234/',hash:''},history={replaceState(){}},CSS={escape:v=>v};
+ const InspectionDraftStore=class extends Base{constructor(scope,binding,warn){super(scope,binding,warn,storage,Date.now,null);}};
+ await new InspectionDraftStore('single:rig',binding,()=>{}).write(saved);
+ let current=structuredClone(baseline),dirty=false,conflict=false;
+ ${controls}\n${ids}\n${inputs}\n${connect}
+ const connection=await connectInspectionPersistence({scope:'single:rig',binding,baseline,session:()=>current,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{current=value;dirty=isDirty;},bookmark:()=>bookmark,restoreBookmark:async()=>{},ui:()=>({}),restoreUI:()=>{},afterInputs:()=>{},onConflict:v=>{conflict=v;},onStatus:()=>{}});
+ return {connection,state:()=>({current,dirty,conflict}),click:label=>{const b=notice.children.find(b=>b.textContent===label);if(!b)throw new Error('missing '+label);return b.onclick();}};}`;
+ const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script);
+ const app=await new Function('deps',code+';return open(deps);')({InspectionDraftStore,storage,saved,baseline:statuslessBaseline,binding,bookmark:bookmark(),sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction});
+ try{
+  expect(app.state().conflict).toBe(true);
+  await app.click('Recover local draft as pending');
+  expect(app.state().conflict).toBe(false);
+  expect(app.state().dirty).toBe(true);
+  expect('status' in app.state().current).toBe(false);
+  expect(app.state().current.feedback).toHaveLength(1);
+ }finally{app.connection.dispose();}
+});
+
+test('#1225 record comment draft restores legacy payload with status and omits status on subsequent saves',async()=>{
+ const mainSource=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+ const restoreStart=mainSource.indexOf('function restoreRecordComments('),persistEnd=mainSource.indexOf('function recordCommentsChanged(');
+ if(restoreStart<0||persistEnd<restoreStart)throw new Error('record comment persistence boundary missing');
+ const snippet=mainSource.slice(restoreStart,persistEnd);
+ const script=`function run(localStorage){
+  let recordCommentKey='',recordComments=[];
+  const host={record:{jobId:'job-1',draftId:'draft-1',publicationId:'pub-1',sourceHash:'${binding.sourceHash}',hasPicture:false}};
+  const data={sourceHash:'${binding.sourceHash}',manifest:{references:[]}};
+  const projectComments=entries=>entries.map(e=>e.text).join('\\n');
+  const projectCommentLabels=projectComments,feedbackItemComments=()=>[],partsIssueComments=()=>[],parsePartsIssue=x=>x,assertPartsIssueBinding=()=>{},parseStageComment=x=>x, parsePictureCommentLabel=x=>x;
+  ${snippet}
+  restoreRecordComments();
+  const restored=[...recordComments];
+  persistRecordComments();
+  return {key:recordCommentKey,restored,saved:JSON.parse(localStorage.getItem(recordCommentKey))};
+ }`;
+ const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script);
+ const storage=new MemoryStorage();
+ const key=`rig-review-record-comments/1:job-1:draft-1:${binding.sourceHash}`;
+ storage.setItem(key,JSON.stringify({publicationId:'pub-1',sourceHash:binding.sourceHash,status:'approved',comments:[{id:'c1',summary:'Keep eyebrow arc'}]}));
+ const out=new Function('localStorage',code+';return run(localStorage);')(storage) as {key:string;restored:{id:string;summary:string}[];saved:Record<string,unknown>};
+ expect(out.restored).toEqual([{id:'c1',summary:'Keep eyebrow arc'}]);
+ expect('status' in out.saved).toBe(false);
+ expect(out.saved).toEqual({publicationId:'pub-1',sourceHash:binding.sourceHash,comments:[{id:'c1',summary:'Keep eyebrow arc'}]});
+});

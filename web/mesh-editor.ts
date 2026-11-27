@@ -117,7 +117,7 @@ export interface MeshEditorHost {
  pause:()=>void;
  changed:()=>void;
  download:(document:MeshEditDocument)=>void;
- /** Live jobs keep the editor but send rig-review edits via the verdict. */
+ /** Live jobs keep the editor and send rig-review edits as act@10 comment carriers. */
  job?:{slots:()=>readonly string[];modelHash:()=>string|null}|'read-only';
  /** Apply · Rebuild (#135): send the delta through the shared runner; `built` when the revision is on the stage. Lines stream to `line`. */
  apply:(document:MeshEditDocument,line:(text:string)=>void)=>Promise<{built:boolean;text:string;error:boolean}>;
