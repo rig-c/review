@@ -153,12 +153,11 @@ export function createViewControls(options:ViewControlsOptions) {
  const value=panelMake(rig||compare?'output':'span',{id:compare?'zoom-label':'zoom-value',textContent:rig||compare?'100%':''});
  const sync=panelMake('input',{id:'camera-sync',type:'checkbox'});
  const syncLabel=labelledControl(t('Sync cameras'),sync,true);
- if(rig||compare){sync.checked=true;syncLabel.className='camera-sync';zoomIn.setAttribute('aria-label',t(compare?'Zoom active view in':'Zoom in'));zoomOut.setAttribute('aria-label',t(compare?'Zoom active view out':'Zoom out'));}
+ if(rig||compare){sync.checked=true;syncLabel.className='camera-sync';zoomIn.setAttribute('aria-label',t('Zoom in'));zoomOut.setAttribute('aria-label',t('Zoom out'));}
  if(compare)for(const button of [zoomIn,zoomOut,fit])button.removeAttribute('type');
  const zoomButtons=[zoomIn,zoomOut,fit];
  const zoomGroup=rig||compare?panelMake('div',{className:rig?'zoom-controls':'row'}):null;
- const nativeOne=rig?actionButton('1:1',null):null;
- if(nativeOne)nativeOne.id='native-one';
+ const nativeOne=actionButton(t('1:1'),null);nativeOne.id='native-one';
  let viewSwitch:HTMLDetailsElement|null=null,viewLabel:HTMLSpanElement|null=null;
  const modes=new Map<string,{mode:ViewSwitchMode;button:HTMLButtonElement;group:readonly ViewSwitchMode[]}>();
  /** A null effective mode clears pressed states but may still name the requested mode. */
@@ -243,8 +242,8 @@ export function createViewControls(options:ViewControlsOptions) {
  };
  if(rig){
   viewSwitch=panelMake('details',{id:'view-menu',className:'view-menu'});configure(options.viewSwitch);
-  zoomGroup!.append(zoomIn,zoomOut,fit,nativeOne!,viewSwitch,value);
- }else if(compare)zoomGroup!.append(syncLabel,zoomIn,zoomOut,fit,value);
+  zoomGroup!.append(...zoomButtons,nativeOne,viewSwitch,value);
+ }else if(compare)zoomGroup!.append(syncLabel,...zoomButtons,nativeOne,value);
  return {zoomButtons,zoomGroup,syncLabel,value,nativeOne,viewSwitch,get viewModeIds(){return [...modes.keys()];},setMode,setDisabled,replaceViewSwitch};
 }
 
