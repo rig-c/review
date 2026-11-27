@@ -1186,7 +1186,7 @@ recorded act bytes remain unchanged.
 
 ### Exact displayed source and local draft retention
 
-- **Daemon-derived source binding.** The original model branch of `JobSourceBinding` requires non-null `sourceHash` (`JobSha256`) and `package` (`id` and `revision`), and requires explicit values or explicit `null` for its typed nullable fields (`projectHash`, `selector` as `draft` / `rig` / `post`, `model`, `direction`, `optionSet`, `appliedResult`, `plan`, `parts`). Original input paths are literal project-relative or package-relative provenance only, and no public field names a Review state directory or stored document. The daemon derives `JobSourceBinding` from validated retained bytes and the actual displayed publication. Clients never provide trusted source hashes or transfer prior approval onto a new binding.
+- **Daemon-derived source binding.** The original model branch of `JobSourceBinding` requires non-null `sourceHash` (`JobSha256`) and `package` (`id` and `revision`), and requires explicit values or explicit `null` for its typed nullable fields (`projectHash`, `selector` as `draft` / `rig` / `post` / `current`, `model`, `direction`, `optionSet`, `appliedResult`, `plan`, `parts`). Original input paths are literal project-relative or package-relative provenance only, and no public field names a Review state directory or stored document. The daemon derives `JobSourceBinding` from validated retained bytes and the actual displayed publication. Clients never provide trusted source hashes or transfer prior approval onto a new binding.
 - **Display receipt and UI submission.** `JobDisplayPublication` pins same-origin `routes` (`entry`, `apiBase`, `assetsBase`) to that specific `publicationId` and `instanceKey` without a mutable current alias. All metadata, images, runtime assets, routes and pending form dependencies prepare before the visible swap; paint and the single `displayedNonce` acknowledgment precede retirement of the previous view, and failed preparation or acknowledgment restores the prior view and draft. After `ackDisplayed` validates `JobDisplayAcknowledgment` (`publicationId`, `pageId`, `sourceHash`), it returns `JobDisplayReceipt` containing the page-scoped `displayedNonce` secret (never returned by the agent or consumer API). `JobUISubmission` supplies `publicationId`, `askId`, `pageId`, `displayedNonce`, `expectedGeneration`, `submissionId`, `kind` and `value` (`JobUIActValues`). Neither `authority` nor `source` is accepted from the browser. The daemon derives both from the validated nonce and displayed publication (`JOB_DISPLAY_MISMATCH`, `JOB_ACT_SOURCE_STALE`). Retrying the same `submissionId` returns the same immutable `JobAct`, while a changed payload refuses.
 - **Pinned package input recheck.** Each applicable pinned package request rechecks the full package byte binding against the publication, with no stale-response window. A removed or changed bound member, a symlink swap outside the valid package path, or a member recreated with different bytes refuses on the very next applicable request with HTTP 409 `JOB_SOURCE_MISMATCH`. Restoring identical bytes at a valid path resumes successful reads, including when the regular file was recreated.
 - **Cache policy ([Review #1050](https://github.com/rig-c/review/issues/1050)).** Publication JSON, `api/*` JSON, the event stream, acts and every refusal stay `Cache-Control: no-store`. A sealed snapshot file under a publication's instance route is `private, max-age=31536000, immutable` with its seal SHA-256 as `ETag`: each publish mints a new `publicationId`, so one URL names one content, and the no-store `api/review` read that starts every page load still runs the full package recheck above. The shipped `index.html`, `main.js` and `styles.css` keep one URL across Review installs, so they are `no-cache` with a content `ETag` and revalidate through the job liveness check on every load. In one page load each resource is requested once: `/api/review` once per preparation, and the compiled model once for Play, the part catalog and the physics document together.
@@ -1402,7 +1402,7 @@ The manifest and complete retained image rows enter the composite source hash. L
 - **Sibling binding ownership.** `JOB_CONSUMER_AUTH_MODE` is `'writer-owned-sibling-fetch-capability'` (`JobConsumerGrant` with `jobId`, `operation` set to `'fetch-act'`, `actKinds` and `lifetime` set to `'until-explicit-close'`). [Create #184](https://github.com/rig-c/create/issues/184) owns creation and path of a private writer-owned sibling binding outside `project.json`. The versioned record carries only the semantic job locator, and the Create writer uses the binding to fetch finalized acts. The binding is never tracked in version control, never present in unstaged project output and never shipped in templates, public examples or fixtures.
 - **Agent isolation and capability lifecycle.** The consumer writer reads its own sibling binding directly. Agents never construct, parse or carry Review session, picks, verdict, applied-record or sibling-binding files. Actual separate-UID isolation remains required for Review's distinct state unreadability test (`JOB_AGENT_ISOLATION_HOLE`), and no same-user forger-resistance claim is made. The random per-job bearer capability grants finalized act fetch (`fetch-act`) only, via exact loopback routes and `Authorization`. Neither `next` nor `status` returns it, and human metadata alone never authenticates a fetch. The capability dies at explicit `close`, old project history cannot restore it, each new job incarnation receives a new grant, invalid grants refuse with `JOB_CAPABILITY_REQUIRED` or `JOB_AUTHORITY_REFUSED` and closed-job fetches refuse with `JOB_CLOSED`. No self-service grant API exists.
 - **Consumer deduplication and in-process mesh consumption.** Verdict, signoff and stage transition remain separate consumer writes. For these writes, consumers deduplicate `actId` before checking the current source, then validate each new source and atomically commit the result with its replay identity. Replaying an applied `actId` returns the existing record. A new stale act refuses before mutation. The typed mesh relay uses per-edit identity as defined in [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8).
-- **Error codes.** `JOB_ERROR_CODES` enumerates the closed refusal set (`JOB_REQUEST_INVALID`, `JOB_BODY_LIMIT`, `JOB_LOOPBACK_REQUIRED`, `JOB_SAME_ORIGIN_REQUIRED`, `JOB_CAPABILITY_REQUIRED`, `JOB_AUTHORITY_REFUSED`, `JOB_UNKNOWN`, `JOB_CLOSED`, `JOB_GENERATION_STALE`, `JOB_IDEMPOTENCY_CONFLICT`, `JOB_FREEZE_REQUIRED`, `JOB_RECORD_INCOMPLETE`, `JOB_RECORD_MOVED`, `JOB_SOURCE_MISMATCH`, `JOB_SOURCE_UNRETAINABLE`, `JOB_ROOT_REPLACED`, `JOB_PUBLICATION_UNKNOWN`, `JOB_SNAPSHOT_RECLAIMED`, `JOB_ASK_INVALID`, `JOB_ASK_SUPERSEDED`, `JOB_ACT_UNKNOWN`, `JOB_ACT_INVALID`, `JOB_ACT_KIND_DISABLED`, `JOB_ACT_SOURCE_STALE`, `JOB_DISPLAY_MISMATCH`, `JOB_CURSOR_INVALID`, `JOB_STORAGE_FAILED`, `JOB_AGENT_ISOLATION_HOLE`, `JOB_OPTION_SET_DUPLICATE`), each returning bounded safe detail with no arbitrary worker text or private paths.
+- **Error codes.** `JOB_ERROR_CODES` enumerates the closed refusal set (`JOB_REQUEST_INVALID`, `JOB_BODY_LIMIT`, `JOB_LOOPBACK_REQUIRED`, `JOB_SAME_ORIGIN_REQUIRED`, `JOB_CAPABILITY_REQUIRED`, `JOB_AUTHORITY_REFUSED`, `JOB_UNKNOWN`, `JOB_CLOSED`, `JOB_GENERATION_STALE`, `JOB_IDEMPOTENCY_CONFLICT`, `JOB_FREEZE_REQUIRED`, `JOB_RECORD_INCOMPLETE`, `JOB_RECORD_MOVED`, `JOB_SOURCE_INVALID`, `JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID`, `JOB_PREVIOUS_BUILD_INVALID`, `JOB_SOURCE_MISMATCH`, `JOB_SOURCE_UNRETAINABLE`, `JOB_ROOT_REPLACED`, `JOB_PUBLICATION_UNKNOWN`, `JOB_SNAPSHOT_RECLAIMED`, `JOB_ASK_INVALID`, `JOB_ASK_SUPERSEDED`, `JOB_ACT_UNKNOWN`, `JOB_ACT_INVALID`, `JOB_ACT_KIND_DISABLED`, `JOB_ACT_SOURCE_STALE`, `JOB_DISPLAY_MISMATCH`, `JOB_STILL_CAPTURE_FAILED`, `JOB_STILL_CAMERA_NOT_FIXED`, `JOB_STILL_VIEW_UNSUPPORTED`, `JOB_STILL_BINDING_MISMATCH`, `JOB_STILL_UNAVAILABLE`, `JOB_STILL_OUTPUT_FAILED`, `JOB_CURSOR_INVALID`, `JOB_STORAGE_FAILED`, `JOB_AGENT_ISOLATION_HOLE`, `JOB_OPTION_SET_DUPLICATE`, `JOB_CURRENT_RECORD_MISSING`, `JOB_CURRENT_RECORD_MISMATCH`, `JOB_CURRENT_OUTPUT_MISMATCH`), each returning bounded safe detail with no arbitrary worker text or private paths.
 
 ### Model-free record mode and source seam
 
@@ -2192,3 +2192,48 @@ and the publication's bytes and source hash are unchanged.
 `source.projectHash` names a record hash only where the publication declares a
 record: a package publication frozen without a `project.json` record has
 `projectHash: null`.
+
+### Current output selector
+
+A producer on the unnumbered current path publishes an output with
+`selector: {kind: "current", output: "parts" | "rig" | "direction", record: JobSha256}`
+([Review #1267](https://github.com/rig-c/review/issues/1267),
+[Create #1063](https://github.com/rig-c/create/issues/1063)). `parseJobSelector`
+requires the exact keys `kind`, `output` and `record`, `output` in the closed
+three-string set, and `record` as 64 lowercase hex characters, refusing any
+other shape with `JOB_REQUEST_INVALID`. `result.selector` and
+`JobPublishedContext.selector` must agree (`JOB_SOURCE_MISMATCH`).
+
+| Check or output | Requirement | Refusal |
+| --- | --- | --- |
+| Project record | `freeze.record` must be present and name `project.json`, matching on-disk bytes (`JOB_RECORD_MOVED`). | `JOB_CURRENT_RECORD_MISSING` (HTTP 409) |
+| Record hash | `selector.record === freeze.record.sha256` (echoed as `source.projectHash`). | `JOB_CURRENT_RECORD_MISMATCH` (HTTP 409) |
+| `output: "parts"` | `JobPublishedContext.parts` and non-empty `partIds` enumerated through the Parts boundary; no package `model` or `direction` (`api/review` sets `capabilities.preRig: true`). | `JOB_CURRENT_OUTPUT_MISMATCH` (HTTP 409) |
+| `output: "rig"` | Package `model` present; `direction` absent and `parts: null`. | `JOB_CURRENT_OUTPUT_MISMATCH` (HTTP 409) |
+| `output: "direction"` | Package `model` and `direction` present (with optional `scene` plates as today) and `parts: null`; `api/review` `direction` carries no `postVersion`. | `JOB_CURRENT_OUTPUT_MISMATCH` (HTTP 409) |
+| Plan and numbered-only declarations | `plan` must be `null`; `previousDraft`, `previousBuild`, `answeredDirectionFeedback`, `chestLandmarks` and `checkpointEvidence` are not accepted on `current`. Optional `commit` is allowed and echoed. | `JOB_SOURCE_MISMATCH` (HTTP 409) |
+| `ask` and `ask-batch` | No ask is accepted on a `current` publication (`review-verdict`, `parts-verdict` and retired kinds). | `JOB_ASK_INVALID` (HTTP 409) |
+
+Comments travel as `rig-review/act@10` (`kind: "comments"`). Its `source`
+carries `selector` verbatim, `projectHash === selector.record`, `package` from
+the manifest, `model` (`{path, sha256}` on `rig` and `direction`, `null` on
+`parts`), `direction` (`{path, sha256}` on `direction`, else `null`), `parts`
+(`JobPartsIdentity` on `parts`, else `null`), `plan: null`, `optionSet: null`,
+`appliedResult: null`, optional `commit`, and `sourceHash` over `selector` so
+two outputs of the same record produce distinct source hashes. Carriers keep
+their `source.model` rule.
+
+**Send-time check on `current` (§5a).** When an `act@10` submission arrives for
+a `current` publication, Review verifies that:
+
+1. the publication is still the job's head (`JOB_ACT_SOURCE_STALE`);
+2. every seal except `project.json` (package files, model, direction file, and
+   parts manifest and images) is unchanged on disk (`JOB_ACT_SOURCE_STALE`);
+3. the retained snapshot is intact (`JOB_ACT_SOURCE_STALE`).
+
+`project.json` is not re-hashed at send, so subsequent producer writes to
+`project.json` do not refuse a comment while the output's own files and head
+remain current. Numbered selectors (`draft`, `rig`, `post`) keep the full
+`assertJobSourceCurrent` re-hash including `JOB_RECORD_MOVED`. Standalone
+correction handoff (`src/correction-handoff.ts`) has no `current` arm and
+continues to refuse `CORRECTION_SELECTOR_INVALID`.

@@ -541,7 +541,8 @@ export interface JobPreviousBuild {
 export type JobSelector =
   | { readonly kind: 'draft'; readonly id: string }
   | { readonly kind: 'rig'; readonly version: number }
-  | { readonly kind: 'post'; readonly version: number; readonly rigVersion: number };
+  | { readonly kind: 'post'; readonly version: number; readonly rigVersion: number }
+  | { readonly kind: 'current'; readonly output: 'parts' | 'rig' | 'direction'; readonly record: JobSha256 };
 
 /** The model source keeps required explicit nulls. The daemon derives its binding from
  * validated retained bytes and the actual displayed publication. Clients never
@@ -974,6 +975,9 @@ export const JOB_ERROR_CODES = [
   'JOB_AGENT_ISOLATION_HOLE',
   /** #1004: an option-set publication names one set twice (two subjects or two `sets` rows for one set). */
   'JOB_OPTION_SET_DUPLICATE',
+  'JOB_CURRENT_RECORD_MISSING',
+  'JOB_CURRENT_RECORD_MISMATCH',
+  'JOB_CURRENT_OUTPUT_MISMATCH',
 ] as const;
 export type JobErrorCode = typeof JOB_ERROR_CODES[number];
 

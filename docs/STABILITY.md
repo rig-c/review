@@ -15,6 +15,7 @@
 | [Host-bound act wait](#host-bound-act-wait) | `waitForJobAct` | Uses the host's API schema and existing agent capability. | Review #1005 |
 | [Parts enumeration](#parts-enumeration-boundary) | `rig-review-job-source/2` and `JOB_PARTS_ENUMERATOR_RANGE` | Binds official Parts references in their original order, with roles and retained-byte hashes. | C4 (Review #501) |
 | [Publication commit](REVIEW_PACKAGE.md#publication-commit) | Optional `commit` in the trusted reader's publication context | 40 lowercase hex, sealed into `source.sourceHash` and echoed as `source.commit`. Absent stays absent, and the publication keeps its bytes. | Review #1226 |
+| [Current output selector](REVIEW_PACKAGE.md#current-output-selector) | `{kind: 'current', output, record}` in `JobSelector` | Additive selector arm under `rig-review/job-api@2` and `@3` for unnumbered current `parts`, `rig` and `direction` outputs, with no ask (`JOB_ASK_INVALID`), `rig-review/act@10` comments whose send-time check re-hashes every seal except `project.json`, and three `JOB_CURRENT_*` publication refusal codes. | Review #1267 |
 | [Package manifest `frames`](#package-manifest-frames-declaration) | Optional `rigc-frames/1` in `rig-review/1` | The declared record is validated and hashed. Older manifests without the field keep their source hash. | Review #1018 |
 
 Standalone `rig-review-session/1` saves accept an inclusive range containing the
@@ -46,15 +47,20 @@ See the [comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract)
 | `rig-review/job-api@2` | `ask` with one `JobSubject`. A record-and-package listener also accepts the @2 request envelope. |
 | `rig-review/job-api@3` | `ask` with one package or record subject. `ask-batch` requires a record publication. |
 
-Package asks cover parts verdict, and rig or direction verdict. Fresh record
+Package asks cover parts verdict, and rig or direction verdict, on numbered
+`draft`, `rig` and `post` publications. Publications with a `current` selector
+accept no asks (`JOB_ASK_INVALID`) and receive feedback through comment-only
+acts (`rig-review/act@10`). Fresh record
 asks, image-review, reopen, signoff (including `plan-approved`), checkpoint,
-and interview-picks asks are refused. See [Act kinds, plan identity and parts identity](REVIEW_PACKAGE.md#act-kinds-plan-identity-and-parts-identity)
+and interview-picks asks are refused. See [Act kinds, plan identity and parts identity](REVIEW_PACKAGE.md#act-kinds-plan-identity-and-parts-identity),
+[Current output selector](REVIEW_PACKAGE.md#current-output-selector)
 and [the record contract](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
 
 ## Codes
 
 See [owner submit refusals](REVIEW_PACKAGE.md#owner-submit-refusals), the
-[rig-verdict refusal table](REVIEW_PACKAGE.md#rig-verdict-still-backend), and
+[rig-verdict refusal table](REVIEW_PACKAGE.md#rig-verdict-still-backend),
+[current output selector refusals](REVIEW_PACKAGE.md#current-output-selector), and
 the [Parts mesh refusal table](PARTS_VIEW.md#mesh-geometry). The live job
 code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-contract.ts).
 
@@ -611,6 +617,27 @@ kept by the browser, not the daemon: the sent rows are recorded in page memory
 and `localStorage`. If that store is cleared, a later verdict act can carry
 those rows again. The verdict path that could carry them is removed in
 [Review #1232](https://github.com/rig-c/review/issues/1232).
+
+### Current output selector compatibility
+
+`JobSelector` gains the additive arm
+`{kind: 'current', output: 'parts' | 'rig' | 'direction', record: JobSha256}`
+([Review #1267](https://github.com/rig-c/review/issues/1267)), and
+`JOB_ERROR_CODES` gains `JOB_CURRENT_RECORD_MISSING`,
+`JOB_CURRENT_RECORD_MISMATCH` and `JOB_CURRENT_OUTPUT_MISMATCH`. No new runtime
+or type-only export name is added, and `rig-review/job-api@2` and `@3` keep
+their schema identifiers. Older Review versions refuse `current` selectors with
+`JOB_REQUEST_INVALID`, so Create pins the Review release that ships this arm
+before publishing `current` outputs.
+
+Numbered selectors (`draft`, `rig`, `post`) keep their parsing, screens, asks,
+verdicts, act shapes `@2`–`@10`, replay, stored bytes and send-time
+`JOB_RECORD_MOVED` check unchanged. On a `current` publication, every `ask` and
+`ask-batch` subject refuses `JOB_ASK_INVALID`, and `rig-review/act@10` send
+checks verify that the publication is still the job's head, that every seal
+except `project.json` is unchanged on disk (`JOB_ACT_SOURCE_STALE`), and that
+the snapshot is intact, without re-hashing `project.json` on disk. See the
+[current output selector contract](REVIEW_PACKAGE.md#current-output-selector).
 
 ### Named export inventory
 

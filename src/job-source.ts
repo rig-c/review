@@ -290,18 +290,21 @@ function assertRecord(root: JobRootIdentity, record: JobFileIdentity | null): vo
  */
 export function assertJobSourceCurrent(
   source: Pick<JobRetainedSourceV3, 'root' | 'record' | 'seals'>,
+  options?: { readonly skipRecord?: boolean; readonly staleCode?: JobErrorCode },
 ): void {
-  assertRecord(source.root, source.record);
+  if (options?.skipRecord) assertJobRoot(source.root);
+  else assertRecord(source.root, source.record);
   for (const file of source.seals) {
+    if (options?.skipRecord && file.path === source.record?.path) continue;
     try {
       if (jobHash(sourceBytes(source.root.path, file.path)) !== file.sha256) throw new Error('Changed');
     } catch (error) {
       if (file.path === source.record?.path) throw new JobError('JOB_RECORD_MOVED');
       if (error instanceof JobError && error.code === 'JOB_ROOT_REPLACED') throw error;
-      throw new JobError('JOB_SOURCE_MISMATCH');
+      throw new JobError(options?.staleCode ?? 'JOB_SOURCE_MISMATCH');
     }
   }
-  assertRecord(source.root, source.record);
+  if (!options?.skipRecord) assertRecord(source.root, source.record);
 }
 
 function publishedIdentities(context: JobPublishedContext): JobFileIdentity[] {
@@ -1574,6 +1577,10 @@ export async function prepareJobSource(options: {
   const request = options.request as JobPublishRequest;
   assertJobRoot(root);
   const record = request.freeze.record;
+  if (request.result.selector?.kind === 'current') {
+    if (record?.path !== 'project.json') throw new JobError('JOB_CURRENT_RECORD_MISSING');
+    if (request.result.selector.record !== record.sha256) throw new JobError('JOB_CURRENT_RECORD_MISMATCH');
+  }
   let project: ReturnType<typeof readProject> | null = null;
   try {
     let hasProject = false;
@@ -1604,6 +1611,12 @@ export async function prepareJobSource(options: {
     throw new JobError('JOB_SOURCE_UNRETAINABLE', 'CREATE_PUBLICATION_CONTRACT_UNAVAILABLE');
   }
   if (requestDigest(context.selector) !== requestDigest(request.result.selector)) throw new JobError('JOB_SOURCE_MISMATCH');
+  if (context.selector?.kind === 'current' && (context.plan !== null ||
+      Object.hasOwn(context, 'previousDraft') || Object.hasOwn(context, 'previousBuild') ||
+      Object.hasOwn(context, 'answeredDirectionFeedback') || Object.hasOwn(context, 'chestLandmarks') ||
+      Object.hasOwn(context, 'checkpointEvidence'))) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
   const answeredDirectionFeedback = Object.hasOwn(context, 'answeredDirectionFeedback')
     ? parseAnsweredDirectionFeedbackReferences(context.answeredDirectionFeedback) : undefined;
   if (answeredDirectionFeedback && context.selector?.kind !== 'post') {
@@ -1627,11 +1640,20 @@ export async function prepareJobSource(options: {
     // Resolve producer references from the designated job root for both copies.
     review = await loadJobReview(target, root.path);
   } catch (error) {
-    if (error instanceof JobError && error.code === 'JOB_PREVIOUS_BUILD_INVALID') throw error;
+    if (error instanceof JobError && error.code === 'JOB_PREVIOUS_BUILD_INVALID' && context.selector?.kind !== 'current') throw error;
     throw new JobError('JOB_SOURCE_MISMATCH', error instanceof HandoffError ? error.message : undefined);
   }
+  if (review.manifest.previousBuild && context.selector?.kind === 'current') throw new JobError('JOB_SOURCE_MISMATCH');
   if (review.manifest.previousBuild && requestDigest(review.manifest.previousBuild) !== requestDigest(previousBuild ?? null))
     throw new JobError('JOB_PREVIOUS_BUILD_INVALID');
+  if (context.selector?.kind === 'current') {
+    const {output} = context.selector;
+    if (output === 'parts'
+      ? !context.parts || !Array.isArray(context.partIds) || !context.partIds.length || !!review.manifest.model || !!review.reviewedSource.rig || !!review.direction
+      : !review.manifest.model || !review.reviewedSource.rig || context.parts !== null || (output === 'direction' ? !review.direction : !!review.direction)) {
+      throw new JobError('JOB_CURRENT_OUTPUT_MISMATCH');
+    }
+  }
   const previousBuildSeals = previousBuild && jobPreviousBuildFiles(previousBuild, root.path, review.root, declared);
   if (previousBuild) {
     if (!review.manifest.model || (context.selector?.kind === 'post' && !review.direction))
