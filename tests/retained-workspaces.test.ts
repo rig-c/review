@@ -242,24 +242,27 @@ test('owner reflects modes only from the bound retained rig and directs clicks t
   } finally {h.close();}
 });
 
-test('legacy Compare retains its URL and language handoff without taking the outer mode switch', async () => {
+test('owner Compare retains its URL and language handoff and takes the outer mode switch', async () => {
   const h = await host('owner');
   h.targets[0]!.mode = 'compare';
   try {
     await h.mount(); await h.waitForFrame();
     const [frame] = h.frames;
-    expect(frame.dataset.stageEmbed).toBeUndefined();
+    expect(frame.dataset.stageEmbed).toBe('owner');
     expect(frame.dataset.workspaceLocale).toBe('legacy-compare');
     expect(frame.src.split('&lang=')[0]).toBe(h.targets[0]!.entry);
     expect(h.root.children[0].querySelector('strong').textContent).toBe('A');
-    expect(h.root.children[0].querySelector('.mode-switch').hidden).toBe(true);
+    expect(h.modes().every((button: HTMLButtonElement) => button.disabled)).toBe(true);
     h.receive(frame, {schema: WORKSPACE_MODE_STATE_SCHEMA, incarnation, key: 'a', sourceHash: 'a'.repeat(64),
-      modes: Array.from({length: 3}, () => ({pressed: false, disabled: false, title: null}))});
+      modes: Array.from({length: 3}, (_, i) => ({pressed: i === 2, disabled: false, title: null}))});
+    expect(h.root.children[0].querySelector('.mode-switch').hidden).toBe(false);
+    expect(h.modes()[2].getAttribute('aria-pressed')).toBe('true');
     h.messages.length = 0;
     h.modes()[0].click();
     setLanguagePreference('ko');
-    expect(h.messages).toHaveLength(1);
-    expect(h.messages[0]!.data).toMatchObject({schema: WORKSPACE_VISIBILITY_SCHEMA, visible: true, language: 'ko'});
+    expect(h.messages).toHaveLength(2);
+    expect(h.messages[0]!.data).toMatchObject({schema: WORKSPACE_MODE_REQUEST_SCHEMA, mode: 'rig'});
+    expect(h.messages[1]!.data).toMatchObject({schema: WORKSPACE_VISIBILITY_SCHEMA, visible: true, language: 'ko'});
   } finally {h.close();}
 });
 
@@ -313,9 +316,10 @@ test('marked Compare consumes owner language, then reports only an explicit visi
     Object.assign(h.events, {frameElement: frame});
     const identity = {incarnation, key: 'a'.repeat(64), sourceHash: 'b'.repeat(64)};
     h.location.pathname = `/instances/${identity.key}/`;
+    const modeSwitch = document.createElement('div');
     const binding = {...identity, pause() {}};
     const visibility = {schema: WORKSPACE_VISIBILITY_SCHEMA, ...identity, visible: true, language: 'ko'};
-    stop = bindWorkspaceVisibility(binding);
+    stop = bindWorkspaceVisibility({...binding, modeSwitch});
     expect(outgoing).toEqual([{data: {schema: WORKSPACE_READY_SCHEMA, ...identity}, destination: origin}]);
     h.receive({contentWindow: parent}, visibility, {source: {}});
     expect(picker.value).toBe('en');

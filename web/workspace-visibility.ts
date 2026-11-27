@@ -18,7 +18,7 @@ export function bindWorkspaceVisibility(binding: {key: string; sourceHash: strin
   if (parent === window || !incarnation) return;
   const identity = {incarnation, key: binding.key, sourceHash: binding.sourceHash};
   const buttons = binding.modeSwitch ? workspaceModeButtons(binding.modeSwitch) : [];
-  const comparePicker = !binding.modeSwitch && location.pathname === `/instances/${binding.key}/` &&
+  const comparePicker = location.pathname === `/instances/${binding.key}/` &&
     window.frameElement?.getAttribute('data-workspace-locale') === 'legacy-compare'
     ? document.getElementById('settings-language') as HTMLSelectElement | null : null;
   let visible = false, reported = '';
