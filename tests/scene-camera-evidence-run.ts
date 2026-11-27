@@ -12,6 +12,7 @@ import type {ReviewSession} from '../src/session.ts';
 import {parseStageComment, type StageComment} from '../src/stage-comment.ts';
 import {parseBookmark} from '../web/inspection-persistence.ts';
 import {instrumentRigMount} from './helpers/mount-probe.ts';
+import type {readPlayCoverageFrame} from './helpers/play-camera-coverage.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {compareSceneCameraPixels, displayPixels, near, readSceneCameraInputs, sha256, writeSceneCameraPackage,
   type Point, type Rect, type Sample, type Stage} from './helpers/scene-camera-evidence.ts';
@@ -38,6 +39,7 @@ type Reading = {
 };
 type SavedMark = {id: string; comment: unknown};
 type Wrap = {before: Reading; after: Reading};
+type PlayCoverageFrame = Awaited<ReturnType<typeof readPlayCoverageFrame>>;
 const key = 'window.__reviewSceneCamera';
 const probe = `
 const readSceneCameraEvidence = () => {
@@ -66,6 +68,7 @@ tickPlaying = (now, useReference) => {
   }
 };
 Object.assign(window, {__reviewSceneCamera: {
+  playCoverage: readPlayCoverageFrame,
   read: readSceneCameraEvidence,
   ready: () => !!player?.current && !!comments && !persistence?.restoring() && el('rig-empty').hidden,
   comment: summary => {
@@ -300,12 +303,50 @@ async function checkComment(page: InputCdpSession, language: 'en' | 'ko', stage:
   await writeFile(join(out, `${language}-pin-replay.png`), await page.screenshot());
 }
 
+async function checkPlayFixedFallback(page: InputCdpSession, language: 'en' | 'ko', stage: Stage, sample: Sample, origin: string) {
+  const state = await scrub(page, sample.authored_time);
+  assert.ok(state.canvas);
+  const figure = state.slots.map(row => row.slot).filter(slot => slot.startsWith('actor:'));
+  const source = [`${origin}/assets/skeleton.model.json`, `${origin}/assets/report.json`, figure,
+    stage.width, stage.height, sample.compiled_time] as const;
+  const mount = (mode: 'fixed' | 'pan', excursion: number) =>
+    page.evaluate<PlayCoverageFrame>(`${key}.playCoverage(...${JSON.stringify([...source, mode, excursion])})`);
+  const fixed = await mount('fixed', 14);
+  const admitted = await mount('pan', 13);
+  const fallback = await mount('pan', 14);
+  const pixels = ({png}: PlayCoverageFrame) => PNG.sync.read(Buffer.from(png.split(',')[1]!, 'base64'));
+  const evidence = ({png: _png, ...metadata}: PlayCoverageFrame) => ({...metadata, pngSha256: sha256(Buffer.from(_png.split(',')[1]!, 'base64'))});
+  await json(`${language}-play-coverage.json`, {sample: sample.authored_time, fixed: evidence(fixed),
+    admitted: evidence(admitted), fallback: evidence(fallback)});
+  for (const [label, frame] of [['fixed', fixed], ['pan-admitted', admitted], ['pan-fallback', fallback]] as const) {
+    assert.deepEqual(frame.backing, [stage.width, stage.height], 'one authored output pixel per backing pixel');
+    near(frame.compiledSeconds ?? NaN, sample.compiled_time, 1e-9, label + ' Play phase');
+    await writeFile(join(out, `${language}-play-${label}.png`), Buffer.from(frame.png.split(',')[1]!, 'base64'));
+  }
+  assert.deepEqual([fixed.mode, fixed.refusal, admitted.mode, admitted.refusal, fallback.mode, fallback.refusal],
+    ['fixed', null, 'pan', null, 'fixed', 'COMPOSED_BACKDROP_COVERAGE']);
+  const guardDetail = /sample 14.*edge margin (\S+) scene px, required excursion (\S+) scene px, edge guard (\S+) scene px/.exec(fallback.detail ?? '');
+  assert.ok(guardDetail, fallback.detail ?? 'missing Play coverage diagnostic');
+  const [margin, excursion, guard] = guardDetail.slice(1).map(Number) as [number, number, number];
+  assert.ok(guard > 0 && excursion <= margin && margin < excursion + guard, 'the backing-pixel guard is the reason for the refusal');
+  const fixedPixels = pixels(fixed), fallbackPixels = pixels(fallback);
+  assert.ok(!pixels(admitted).data.equals(fixedPixels.data), 'the admitted pointer control must visibly move');
+  assert.ok(fallbackPixels.data.equals(fixedPixels.data), 'refused Pan paints exactly the held Fixed frame');
+
+  const actual = displayPixels(PNG.sync.read(await page.screenshot()), state.canvas, stage.width, stage.height);
+  const {difference, ...comparison} = compareSceneCameraPixels(actual, fallbackPixels);
+  await writeFile(join(out, `${language}-play-fallback-diff.png`), PNG.sync.write(difference));
+  assert.ok(comparison.stable > 1000 && comparison.matching / comparison.stable >= .98, 'Review must display the Fixed fallback frame');
+  observations.push({operation, phase: sample.authored_time, comparison, margin, excursion, guard, fallback: evidence(fallback)});
+}
+
 try {
   const input = await readSceneCameraInputs(fixture, producerPngs);
   const bundle = await Bun.build({entrypoints: ['web/main.ts'], target: 'browser', format: 'esm',
     conditions: playBuildConditions(), plugins: [{name: 'scene-camera-observation', setup(build) {
       build.onLoad({filter: /web[/\\]main\.ts$/}, async ({path}) => ({
-        loader: 'ts', contents: instrumentRigMount(await readFile(path, 'utf8'), probe),
+        loader: 'ts', contents: "import {readPlayCoverageFrame} from '../tests/helpers/play-camera-coverage.ts';\n" +
+          instrumentRigMount(await readFile(path, 'utf8'), probe),
       }));
     }}],
   });
@@ -374,8 +415,11 @@ try {
           assert.ok(wrap.before.phase && wrap.after.phase && wrap.before.trackTime !== null && wrap.after.trackTime !== null);
           assert.ok(wrap.before.phase.authored > 3.8 && wrap.after.phase.authored < .2);
           assert.ok(wrap.after.trackTime > wrap.before.trackTime, 'live repeat keeps the unwrapped compiled transport');
-          operation = `${language} pin/crop/replay`;
-          await checkComment(page, language, stage, input.frames[1]!.sample, pkg.sourceHash, origin, stateDir);
+          const evidenceFrame = input.frames[1]!.sample;
+          operation = `${language} Play Fixed fallback frame`;
+          await checkPlayFixedFallback(page, language, stage, evidenceFrame, origin);
+          operation = `${language} pin/crop/replay on the Fixed frame`;
+          await checkComment(page, language, stage, evidenceFrame, pkg.sourceHash, origin, stateDir);
         } else {
           if (kind === 'rig') {
             for (const label of ['moving-model-key', 'named-open-between-rows', 'unwrapped-end']) {
