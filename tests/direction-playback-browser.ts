@@ -63,6 +63,7 @@ async function servePackage(pkg:string,state:string,initialAnimation?:string){
  const context=await createReviewRequestContext(await loadReview(pkg),{port:0,bundle:built.outputs[0]!,viewOnly:true,stateDir:join(root,state),initialAnimation});
  const server=Bun.serve({hostname:'127.0.0.1',port:0,websocket:context.live.websocket,async fetch(req,srv){return (await context.handle(req,srv.port,srv))!;}});
  servers.push({stop(){context.stop();server.stop(true);}});
+ assert.ok(server.port);
  return server.port;
 }
 

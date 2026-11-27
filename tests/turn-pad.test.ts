@@ -18,6 +18,26 @@ test('shared values use the common range; absent axes are never applied to anoth
  const a=discoverTurnDials(model([slider('yaw_dial'),slider('pitch_dial')])),b=discoverTurnDials(model([slider('yaw_dial','turn',{from:-5,scale:.1})]));
  expect(sharedTurnDials(a,b).map(d=>[d.axis,d.min,d.max])).toEqual([['yaw',-5,5]]);
 });
+test('#1283 Compare shares steering and releases each pane to its own clip',()=>{
+ const a=discoverTurnDials(model([slider('yaw_dial'),slider('pitch_dial')]));
+ const b=discoverTurnDials(model([slider('yaw_dial','turn',{from:-5,scale:.1})]));
+ const state=new TurnState(sharedTurnDials(a,b));
+ const posed=(dials:TurnDial[],clip:number)=>{
+  const yaw={rotation:clip,x:0,y:0,scaleX:1,scaleY:1,shearX:0,shearY:0};
+  state.adjust(dials.filter(d=>state.dials.some(shared=>shared.axis===d.axis)))(
+   {names:['yaw_dial'],bone:()=>yaw},{animation:'idle',trackTime:0,globalTime:0},
+  );
+  return yaw.rotation;
+ };
+ expect([posed(a,-6),posed(b,3)]).toEqual([-6,3]);
+ state.restore({schema:'rig-review-turn/1',values:{yaw:4},held:false,smoothing:20});
+ expect([posed(a,-6),posed(b,3)]).toEqual([4,4]);
+ state.leave();state.step(.05);
+ expect(posed(a,-6)).toBeCloseTo(-6+20/Math.E);
+ expect(posed(b,3)).toBeCloseTo(3+2/Math.E);
+ state.step(1);
+ expect([posed(a,-6),posed(b,3)]).toEqual([-6,3]);
+});
 test('exact entry holds, reset is exact zero, snapshot copies, restoration validates the current model',()=>{
  const state=new TurnState(discoverTurnDials(model([slider('yaw_dial')])));state.pointer(-1,0);state.step(.05);expect(state.values.yaw).toBeLessThan(0);state.exact('yaw',7.125);state.pointer(-1,0);state.step(1);expect(state.values.yaw).toBe(7.125);expect(state.held).toBe(true);
  const snapshot=state.snapshot();snapshot.values.yaw=100;expect(state.values.yaw).toBe(7.125);expect(()=>state.restore(snapshot)).toThrow();expect(()=>parseTurnSnapshot({schema:'rig-review-turn/1',values:{yaw:Infinity},held:true,smoothing:20})).toThrow();state.reset();expect(state.values.yaw).toBe(0);
