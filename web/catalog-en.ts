@@ -1809,7 +1809,6 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Strip of {0} on {1} settled: {2} passing.": "Strip of {0} on {1} settled: {2} passing.",
   "Strip {0}…: {1} of {2} settled · {3} s": "Strip {0}…: {1} of {2} settled · {3} s",
   "Submission failed: {0}": "Submission failed: {0}",
-  "Submit review": "Submit review",
   "Submits server-verified file hashes and tool versions.": "Submits server-verified file hashes and tool versions.",
   "Submitted": "Submitted",
   "Saves locally. The producer receives no feedback.": "Saves locally. The producer receives no feedback.",

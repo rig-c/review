@@ -1809,7 +1809,6 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Strip of {0} on {1} settled: {2} passing.": "{1}의 {0} 스트립 완료됨: 통과 {2}개.",
   "Strip {0}…: {1} of {2} settled · {3} s": "스트립 {0}…: {2}개 중 {1}개 완료 · {3}초",
   "Submission failed: {0}": "제출 실패: {0}",
-  "Submit review": "리뷰 제출",
   "Submits server-verified file hashes and tool versions.": "서버에서 검증된 파일 해시와 도구 버전을 제출해요.",
   "Submitted": "제출됨",
   "Saves locally. The producer receives no feedback.": "여기에만 저장돼요. 제작 도구에는 전달되지 않아요.",
