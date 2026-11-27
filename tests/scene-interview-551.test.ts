@@ -5,9 +5,11 @@
  * Every project/scene mutation below is an explicitly SYNTHETIC UNIT CONTROL,
  * never producer provenance. No Create implementation is imported by this test.
  */
-import {afterEach, expect, test} from 'bun:test';
+import {afterAll, afterEach, expect, test} from 'bun:test';
 import {cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
-import {join, resolve} from 'node:path';
+import {mkdtemp, realpath, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {digest, readProject} from '../src/interview-project.ts';
 import {captureJobRoot, prepareJobSource} from '../src/job-source.ts';
@@ -19,7 +21,7 @@ import {JOB_API_SCHEMA, type JobPublishRequest} from '../src/job-contract.ts';
 import {verifyInterviewDiagnosticsFixtureDryRun} from './helpers/job-interview-browser.ts';
 
 const fixtureDir=join(import.meta.dir,'fixtures/scene-interview-551');
-const runtime=resolve(import.meta.dir,'../.review-551-result/phase1/runtime');
+const runtime=await realpath(await mkdtemp(join(tmpdir(),'review-551-phase1-')));
 const NOW=Date.parse('2026-11-08T12:00:10Z'), DRAFT=Date.parse('2026-11-08T12:00:01Z');
 const SINCE=Date.parse('2026-11-08T00:00:00Z');
 const roots:string[]=[];
@@ -27,6 +29,7 @@ const iso=(t:number)=>new Date(t).toISOString();
 const json=(root:string,path:string)=>JSON.parse(readFileSync(join(root,path),'utf8'));
 const save=(root:string,path:string,value:unknown)=>writeFileSync(join(root,path),JSON.stringify(value,null,2)+'\n');
 afterEach(()=>{for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
+afterAll(async()=>{await rm(runtime,{recursive:true,force:true});});
 function fixture(name='writer-current') {
  mkdirSync(runtime,{recursive:true});const root=mkdtempSync(join(runtime,'case-'));roots.push(root);
  const archive=join(fixtureDir,name+'.tar.gz');

@@ -3,15 +3,17 @@
  * Extraction, answer selection and later-scene/answer mutations below are
  * labelled SYNTHETIC controls, not new producer or human-review evidence.
  */
-import {afterEach, expect, test} from 'bun:test';
+import {afterAll, afterEach, expect, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
-import {join, resolve} from 'node:path';
+import {mkdtemp, realpath, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {digest, readProject} from '../src/interview-project.ts';
 import {interviewRoutes} from '../src/interview-routes.ts';
 
 const fixtures = join(import.meta.dir, 'fixtures/scene-interview-551');
-const results = resolve(import.meta.dir, '../.review-551-result/ai-p2');
+const results = await realpath(await mkdtemp(join(tmpdir(), 'review-551-ai-p2-')));
 const origin = 'http://127.0.0.1:19484';
 const setPath = 'evidence/interview/review551-scene-current.json';
 const output = 'synthetic-ai-p2-picks';
@@ -33,6 +35,10 @@ function seal(root: string, prefix = ''): Record<string, string> {
 
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
+});
+
+afterAll(async () => {
+  await rm(results, {recursive: true, force: true});
 });
 
 function historyFixture(name: string) {
