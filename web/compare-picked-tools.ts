@@ -37,6 +37,7 @@ import { IDLE_READOUT_BARS, type LocalChannel } from '../src/idle-tracks.ts';
 import { bindRigFieldsPanel, type RigFieldsPanel } from './rig-fields-panel.ts';
 import { assertRigFieldOps, RIG_FIELDS_READOUT_BARS, TURN_BONE } from '../src/rig-fields.ts';
 import { bindReadingsPanel, readingsContext as buildReadingsContext, type ReadingsJobView, type ReadingsPanel, type ReadingsRefusal } from './readings-panel.ts';
+import { formatSeconds } from './format-seconds.ts';
 import { readingSeekTime, worstLine, type ReadingsContext } from '../src/readings.ts';
 import { bindRequirementsPanel, runRequirementsRequest, type RequirementsCatalogView, type RequirementsJobView, type RequirementsPanel, type RequirementsRefusal } from './requirements-panel.ts';
 import type { RequirementsRequest } from '../src/requirements.ts';
@@ -1865,8 +1866,17 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   function seekReading(clip: string, frame: number, exact: number | null, label: string): void {
     if (exact === null) { host.message(`${label}: F${frame} has no time; no seek was performed.`, true); return; }
-    const at = readingSeekTime(exact, clipDuration(clip));
-    void host.seekTo(Math.min(at, host.duration())).then(() => host.message(`Reading · ${label} → F${frame} · ${exact.toFixed(4)} s`));
+    const at = readingSeekTime(exact, clipDuration(clip)), duration = host.duration();
+    if (!Number.isFinite(at) || at < 0 || at > duration) {
+      host.pause();
+      host.message(`Explicit time ${formatSeconds(at)} s is outside the current range of ${formatSeconds(duration)} s. No substitute time was used.`, true);
+      return;
+    }
+    void host.seekTo(at).then(() => {
+      if (!document.getElementById('message')?.classList.contains('error')) {
+        host.message(`Reading · ${label} → F${frame} · ${exact.toFixed(4)} s`);
+      }
+    });
   }
 
   function sampleLocals(bone: string, dt: number, n: number) {

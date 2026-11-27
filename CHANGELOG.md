@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+* Compare refuses a reading seek past the shared clip instead of seeking to a different time (#1302).
+
 ## 4.24.0
 
 The turn pad now leaves the animation alone until you use it. While you have not touched the pad, the clip drives the dials. When the pointer leaves the viewport, an unheld pad eases back to the clip. Hold still keeps the angle you steered to. A `current` direction publication now takes Create's `rig-create/direction@4`. Compare in the owner workspace uses the same shell as the other owner screens.
