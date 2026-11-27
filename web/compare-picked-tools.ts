@@ -16,7 +16,7 @@ import type { AnimationSourceOp } from '../src/animation-ops.ts';
 import { partBounds, type PartExplorer } from './part-selection.ts';
 import { bindInspectorBlocks, activeBlocksUI, restoreActiveBlocksUI, type InspectorBlocks } from './inspector-blocks.ts';
 import { sourceTextContent, tr } from './i18n.ts';
-import { bindChestEditor, canvasToCrop, bustLabel, bustSides, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, rowShape, type ChestEditor, type LandmarkKey } from './chest-editor.ts';
+import { bindChestEditor, canvasToCrop, bustLabel, bustSides, chestField, chestMarkers as readChestMarkers, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, rowShape, type ChestEditor } from './chest-editor.ts';
 import { chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from './chest-regions-tool.ts';
 import { chestRegionsBinding, cropWorldMapping, type CropWorldMapping } from '../src/chest-regions.ts';
 import { bindMeshEditor, meshEditSource, sha256Hex, type MeshEditor } from './mesh-editor.ts';
@@ -58,20 +58,13 @@ import { compareSeekStep } from '../src/compare-playhead.ts';
 import { composeAdjust, PhysicsPreview } from './preview.ts';
 import {
   createWindModel, environmentFor, windReadout, RUNTIME_START_READOUT, joltPacket, dueJolts,
-  loadModelDocument, environmentContext, environmentJson, type JoltStep, type WindSnapshot, type WindState,
+  loadModelDocument, environmentContext, environmentJson, type JoltStep, type WindSnapshot,
 } from '../src/environment.ts';
-import { environmentCheckRows, restartsWindClock, scheduleContext, worldExport, type ClipMove, type EnvironmentCheckView, type WorldExport } from './environment-world.ts';
+import { bindEnvironmentInputs, environmentCheckRows, restartsWindClock, scheduleContext, worldExport, type ClipMove, type EnvironmentCheckView, type StageWorld, type WorldExport } from './environment-world.ts';
 import type { OverlayCircle, OverlayMarker, OverlayRegion, OverlaySnapshot } from './rig-overlays.ts';
 import type { PatchOp } from '../src/config-patch.ts';
 
 export type Side = 'a' | 'b';
-
-interface StageWorld {
-  wind: WindState;
-  jolts: JoltStep[];
-  applied: boolean;
-  gravity: number;
-}
 
 interface SideBuildState {
   inspectedModel: { url: string; prefix: string; sha256: string } | null;
@@ -276,6 +269,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   const wind = createWindModel();
   let joltQueue: JoltStep[] = [];
+  const { environmentApplied, gravityValue, useWorld, stageWorld, syncEnvironmentInputs } =
+    bindEnvironmentInputs(input, wind, () => joltQueue, renderEnvironment);
   let environmentNote = '';
   let steppedLive = false;
   const physicsPreview = new PhysicsPreview();
@@ -591,11 +586,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     }
   }
 
-  function chestField(id: string) {
-    const node = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
-    return node ? { value: node.value, ...(node instanceof HTMLInputElement && node.type === 'checkbox' ? { checked: node.checked } : {}) } : undefined;
-  }
-
   function chestEvaluation() {
     return evaluateChestForm(chestField, currentState().chestMapping, currentSideData()?.feedbackCatalog.bones);
   }
@@ -685,21 +675,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     return [];
   }
 
-  function chestMarkers(): OverlayMarker[] {
-    const mapping = activeChestMapping();
-    if (!mapping.available || !chestEditor?.active() || chestEditor.mode() !== 'landmarks') return [];
-    const style = getComputedStyle(document.documentElement), token = (name: string) => style.getPropertyValue(name).trim(), armed = chestEditor.armed();
-    const at = (key: LandmarkKey) => {
-      const x = Number(input(landmarkInputId(key, 'x')).value.trim() || NaN), y = Number(input(landmarkInputId(key, 'y')).value.trim() || NaN);
-      return Number.isFinite(x) && Number.isFinite(y) ? mapping.toWorld(x, y) : null;
-    };
-    const apexes = [at('apex_r'), at('apex_l')].filter((p): p is { x: number; y: number } => !!p);
-    return LANDMARKS.flatMap(({ key, tag }) => {
-      const p = at(key); if (!p) return [];
-      const stroke = token(key === 'apex_r' ? '--rv-bust-r' : key === 'apex_l' ? '--rv-bust-l' : '--rv-landmark');
-      return [{ at: p, tag, active: armed === key, colors: { stroke, fill: stroke, ink: token('--rv-landmark-ink'), labelBg: token('--rv-bust-label-bg') }, ...(key === 'cleavage' ? { guideTo: apexes } : {}) }];
-    });
-  }
+  function chestMarkers() { return readChestMarkers(activeChestMapping(), chestEditor, input); }
 
   async function exportChest(): Promise<void> {
     const value = chestEvaluation();
@@ -1007,22 +983,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     }
   }
 
-  function environmentApplied(): boolean {
-    return input('environment-applied').checked;
-  }
-
-  function gravityValue(): number {
-    return Number(input('gravity').value);
-  }
-
-  function stageWorld(): StageWorld {
-    return { wind: wind.state(), jolts: joltQueue.map(step => ({ ...step })), applied: environmentApplied(), gravity: gravityValue() };
-  }
-
-  function useWorld(): boolean {
-    return input('environment-use').checked && environmentApplied();
-  }
-
   function checkAnimation(side: Side = pickedSide): string {
     const sideAssets = host.assets[side];
     return sideAssets?.animations.some(item => item.name === 'idle') ? 'idle' : host.data().animation;
@@ -1094,16 +1054,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       restartWindClock();
       applyEnvironment();
     }
-  }
-
-  function syncEnvironmentInputs(): void {
-    const s = wind.snapshot();
-    input('wind-base').value = String(s.base);
-    input('wind-breeze').checked = s.breeze;
-    input('wind-repeat').checked = s.repeat;
-    input('wind-gust-peak').value = String(s.gustPeak);
-    input('wind-gust-duration').value = String(s.gustDuration);
-    renderEnvironment();
   }
 
   function resetPhysics(): void {

@@ -4,9 +4,42 @@
  * "Check under this world" rows (each readout bar under the default world beside the same bar under this one).
  */
 import { scheduleSummary, scheduleText, sha256Hex, SCHEDULE_CONTEXT_SCHEMA, windSchedule, ScheduleError, type EnvironmentSchedule, type ScheduleContext, type WindScheduleExport } from '../src/environment-schedule.ts';
-import type { WindSnapshot } from '../src/environment.ts';
+import type { JoltStep, WindModel, WindSnapshot, WindState } from '../src/environment.ts';
 import type { CheckSummary } from '../src/applied-context.ts';
 import { READOUT_BARS } from '../src/physics-tuning.ts';
+
+/** The world an Apply's reload resumes: wind (clock and active pulse), pending jolts, whether the controls are engaged, gravity. */
+export interface StageWorld { wind: WindState; jolts: JoltStep[]; applied: boolean; gravity: number }
+
+export function bindEnvironmentInputs(
+  input: (id: string) => Pick<HTMLInputElement, 'checked' | 'value'>,
+  wind: Pick<WindModel, 'snapshot' | 'state'>,
+  readJolts: () => readonly JoltStep[],
+  renderEnvironment: () => void,
+) {
+  const environmentApplied = (): boolean => input('environment-applied').checked;
+  const gravityValue = (): number => Number(input('gravity').value);
+  /**
+   * #112 · Use for readings: the controls as the exported `rigc-environment/1` schedule (src/environment-schedule.ts). While
+   * on, readings send the drawn clip's schedule, Apply's check reads the checked clip's (`idle` when the rig has one, as
+   * `rig-parts check` renders it), and the wind clock restarts with the clip so the person watches the world rigc reads.
+   */
+  const useWorld = (): boolean => input('environment-use').checked && environmentApplied();
+  /** The world as it stands now: what a physics Apply's reload resumes. */
+  const stageWorld = (): StageWorld => ({
+    wind: wind.state(), jolts: readJolts().map(step => ({ ...step })), applied: environmentApplied(), gravity: gravityValue(),
+  });
+  function syncEnvironmentInputs(): void {
+    const s = wind.snapshot();
+    input('wind-base').value = String(s.base);
+    input('wind-breeze').checked = s.breeze;
+    input('wind-repeat').checked = s.repeat;
+    input('wind-gust-peak').value = String(s.gustPeak);
+    input('wind-gust-duration').value = String(s.gustDuration);
+    renderEnvironment();
+  }
+  return { environmentApplied, gravityValue, useWorld, stageWorld, syncEnvironmentInputs };
+}
 
 export const ENVIRONMENT_NOT_APPLIED = 'ENVIRONMENT_NOT_APPLIED: the player stands at the runtime start values (wind [1, 0], gravity [0, 1]), which check and render read without --environment; move a control first';
 export interface WorldExport { export: WindScheduleExport; schedule: EnvironmentSchedule; text: string; sha256: string; summary: string; animation: string }

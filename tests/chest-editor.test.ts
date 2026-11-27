@@ -1,12 +1,61 @@
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
-import {bindChestEditor,bustInputId,bustLabel,canvasToCrop,chestEditVisible,chestPoseOffset,circleFields,dragBust,editorStatus,hitBustHandle,mirrorBust,posedChestMapping,rowCircle,settleBust,type BustDrag} from '../web/chest-editor.ts';
+import {bindChestEditor,bustInputId,bustLabel,canvasToCrop,chestEditVisible,chestField,chestMarkers,chestPoseOffset,circleFields,dragBust,editorStatus,hitBustHandle,mirrorBust,posedChestMapping,rowCircle,settleBust,type BustDrag} from '../web/chest-editor.ts';
 import {chestRowId,type ChestFieldValue} from '../web/chest-regions-tool.ts';
 import {seedFields} from '../web/rebuild-client.ts';
 
 const html=()=>(rigWorkspaceMarkup.replace('<div data-workspace-view-tools></div>',sharedViewToolsMarkup)+rigReviewDialogMarkup);
 const between=(text:string,start:string,end:string)=>{const a=text.indexOf(start),b=text.indexOf(end,a);if(a<0||b<a)throw new Error(`missing ${start} … ${end}`);return text.slice(a,b+end.length);};
+
+test('#1285 slice 3: landmark markers use the supplied mapping and retain apex guides',()=>{
+ const values:Record<string,string>={
+  'lm-apex_r-x':' 1 ','lm-apex_r-y':'2','lm-apex_l-x':'3','lm-apex_l-y':'4','lm-cleavage-x':'5','lm-cleavage-y':'6',
+ };
+ const input=(id:string)=>({value:values[id]!});
+ const editor={active:()=>true,mode:()=>'landmarks' as const,armed:()=>'cleavage' as const};
+ const mapping={available:true as const,crop:{w:10,h:10},basis:'test',toWorld:(x:number,y:number)=>({x:x-5,y:10-y})};
+ expect(chestMarkers(mapping,null,input)).toEqual([]);
+ const globals=globalThis as Record<string,unknown>;
+ const previousDocument=globals.document,previousStyle=globals.getComputedStyle;
+ globals.document={documentElement:{}};
+ globals.getComputedStyle=()=>({getPropertyValue:(name:string)=>` ${name} `});
+ try{
+  const [right,left,cleavage]=chestMarkers(mapping,editor,input);
+  expect(right?.colors.stroke).toBe('--rv-bust-r');
+  expect(left?.colors.stroke).toBe('--rv-bust-l');
+  expect(cleavage).toMatchObject({at:{x:0,y:4},active:true,guideTo:[{x:-4,y:8},{x:-2,y:6}]});
+  values['lm-apex_l-x']=' ';
+  expect(chestMarkers(mapping,editor,input).at(-1)?.guideTo).toEqual([{x:-4,y:8}]);
+ }finally{
+  globals.document=previousDocument;
+  globals.getComputedStyle=previousStyle;
+ }
+});
+
+test('#1285 slice 3: chest fields preserve values and expose checked only for checkboxes',()=>{
+ class Input {
+  constructor(readonly value:string,readonly type:string,readonly checked:boolean){}
+ }
+ const fields=new Map<string,{value:string}>([
+  ['chest-bridges',new Input('on','checkbox',false)],
+  ['chest-0-cx',new Input('105','number',false)],
+  ['chest-0-bone',{value:'torso'}],
+ ]);
+ const globals=globalThis as Record<string,unknown>;
+ const previousDocument=globals.document,previousInput=globals.HTMLInputElement;
+ globals.document={getElementById:(id:string)=>fields.get(id)??null};
+ globals.HTMLInputElement=Input;
+ try{
+  expect(chestField('chest-bridges')).toEqual({value:'on',checked:false});
+  expect(chestField('chest-0-cx')).toEqual({value:'105'});
+  expect(chestField('chest-0-bone')).toEqual({value:'torso'});
+  expect(chestField('missing')).toBeUndefined();
+ }finally{
+  globals.document=previousDocument;
+  globals.HTMLInputElement=previousInput;
+ }
+});
 
 test('the three drag modes turn pointer deltas into source pixels through the camera scale',()=>{
  const from={cx:296,cy:650,r:26,band:42},base:Omit<BustDrag,'mode'>={side:'r',start:{x:100,y:100},centre:{x:100,y:100},from};
