@@ -243,9 +243,8 @@ try{
  const archive=join(import.meta.dir,'fixtures/create-reopened-v2/project.tar.gz');
  const extract=Bun.spawnSync(['tar','-xzf',archive,'-C',root]);
  assert.equal(extract.exitCode,0,extract.stderr.toString());
- await mkdir(join(root,'reviewer-picks'));
  const opened=await loadOpenPackage(parseOpenInputs([join(root,'derived/review/v2/out'),
-  '--project',root,'--project-version','2','--picks-dir','reviewer-picks']));
+  '--project',root,'--project-version','2']));
  assert.equal(opened.mode,'single');
  assert.ok(opened.joined&&opened.p.manifest.model);
  for(const language of ['en','ko'] as const){

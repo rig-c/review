@@ -790,7 +790,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));
   const {loadOpenPackage}=await import('../src/open.ts');
   const contourLoaded=await loadOpenPackage({
    input:join(contourRoot,'derived/drafts/chain/out/check'),
-   project:{root:contourRoot,draftId:'chain',picksDir:'reviewer-picks',partsVerdictDir:'reviewer-verdicts'},
+   project:{root:contourRoot,draftId:'chain',partsVerdictDir:'reviewer-verdicts'},
   });
   if(contourLoaded.mode!=='single')throw new Error('Expected single contour package');
   const contourJoined=contourLoaded.joined!;

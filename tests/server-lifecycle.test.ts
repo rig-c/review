@@ -1054,7 +1054,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`,
     await writeFile(projectPath, JSON.stringify(lockedDoc));
     const lockedOpen = await loadOpenPackage({
       input: f.input,
-      project: { root: projectRoot, draftId: f.project.draftId, picksDir: f.project.picksDir },
+      project: { root: projectRoot, draftId: f.project.draftId },
     });
     if (lockedOpen.mode !== 'single' || !lockedOpen.joined?.draft) throw new Error('Expected locked draft');
     const lockedCtx = await createReviewRequestContext(lockedOpen.p, {

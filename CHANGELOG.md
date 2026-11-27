@@ -22,6 +22,7 @@
 
 ### Removed
 
+* **BREAKING.** Removed `--picks-dir`, `POST /api/interview/picks`, the `interviewPicksRecord` export and the per-question `saved` field in `GET /api/interview`. Historical `rig-review/interview-picks@1` files still parse. Legacy workspace state accepts and ignores `picksDir`, and new state omits it (#1225).
 * **BREAKING in 5.0.0.** The job API removes `ask` and `ask-batch`, their request and response types, and the `askBatch` capability. The CLI removes `session ask`. Stored asks and acts remain readable through history and act retrieval (#1225).
 * Fresh `parts-verdict` and `review-verdict` job submissions refuse with `JOB_ACT_KIND_DISABLED`. A committed submission still replays its stored act (#1233).
 * Retired standalone parts verdict and package session writes, including the parts CLI's durable save notifications. Send comments saves feedback locally, and existing verdicts and sessions remain readable (#1233).

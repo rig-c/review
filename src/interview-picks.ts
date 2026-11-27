@@ -1,6 +1,5 @@
-import { closeSync, lstatSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual as equal } from 'node:util';
 import { checkedPath, invalid, jsonObject, object, readRegular, type InterviewQuestion, type SetRef } from './interview-project.ts';
 
@@ -68,22 +67,4 @@ export function readPicks(directory: string, question: InterviewQuestion): Picks
   }
   try { return validatePicks(jsonObject(readRegular(path, picksLimit)), question); }
   catch {throw new Error('INTERVIEW_PICKS_OUTPUT: Existing file is not a valid picks record for this set');}
-}
-
-export function savePicks(directory: string, question: InterviewQuestion, input: unknown): Picks {
-  const picks = validatePicks(input, question);
-  readPicks(directory, question);
-  const bytes = JSON.stringify(picks) + '\n';
-  if (Buffer.byteLength(bytes) > picksLimit) return invalid('Picks file exceeds size limit');
-  const temp = join(directory, '.interview-' + randomUUID() + '.tmp');
-  const fd = openSync(temp, 'wx', 0o600);
-  try {
-    try {writeFileSync(fd, bytes);}
-    finally {closeSync(fd);}
-    renameSync(temp, target(directory, question));
-  } catch (error) {
-    unlinkSync(temp);
-    throw error;
-  }
-  return picks;
 }
