@@ -93,6 +93,9 @@ test('real Create v2 joins existing Stage 1 and 2 without changing the feedback 
     const interview = await response.json();
     expect(interview.binding).toEqual({projectHash:digest(rawProject),sourceHash:old.contentHash,version:2});
     expect(interview.questions).toHaveLength(11);
+    expect(interview.questions.map(({set}: {set: unknown}) => set)).toEqual(
+      connected.joined.opened.questions.map(({set}) => Object.fromEntries(Object.entries(set).filter(([key]) => key !== 'context'))),
+    );
     expect(interview.questions.every((q:{editable:boolean}) => !q.editable && !Object.hasOwn(q,'saved'))).toBe(true);
     expect(interview.historical.map((answer:{verbatim:string}) => answer.verbatim)).toEqual(connected.joined.opened.historical.map(answer=>answer.verbatim));
     const parts = await (await get('/api/stage-parts')).json();

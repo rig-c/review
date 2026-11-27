@@ -92,6 +92,9 @@ test('#725 existing server context exposes the interview and refuses model APIs 
   for(const key of ['manifest','model','session','reviewedSource'])expect(metadata).not.toHaveProperty(key);
   expect(metadata.capabilities).toEqual({interview:true,playback:false,modeling:false,motion:false,feedback:false,audio:false});
   const interview=await (await get('/api/interview'))!.json();expect(interview).not.toHaveProperty('binding');expect(interview.questions).toHaveLength(1);
+  const sourceSet: Record<string, unknown> = JSON.parse(await readFile(join(f.root,'evidence/options.json'),'utf8'));
+  expect(sourceSet).toHaveProperty('context');
+  expect(interview.questions[0].set).toEqual(Object.fromEntries(Object.entries(sourceSet).filter(([key]) => key !== 'context')));
   const image=await get(interview.questions[0].images[0].url);expect(image!.status).toBe(200);expect(image!.headers.get('Content-Security-Policy')).toContain('sandbox');
   for(const path of ['/api/session','/api/stage-parts','/api/rebuild','/api/requirements','/api/readings']){
    const result=await get(path);expect(result!.status).toBe(409);expect(await result!.json()).toEqual({error:'MODEL_UNAVAILABLE'});
