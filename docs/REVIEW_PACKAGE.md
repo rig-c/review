@@ -287,7 +287,7 @@ Edit Mesh's **Download JSON** (#80, setup space since #100) saves two files; nei
 
 `mesh-edit.binding.json` (`rig-review-mesh-edit-binding/1`) binds the delta: `file {name, sha256}`, the package source hash, the model and motion SHA-256, `attachment {slot, skin, name, sha256}` (the same `hash`), `exportedAt`, the viewer and runtime versions, `mapping` (the crop mapping's basis) and an evidence note. Apply · Rebuild (#135) sends the same document as `{part, delta, configHash}` (bounded to 64 KiB, same-origin); the server writes it with the download's bytes and runs `rig-parts remesh --delta mesh-edit.json --part <part>` over the handoff rig (`@rig-c/parts` 1.43.0 or later, else `MODELING_PRODUCER_TOO_OLD <found> 1.43.0`). The producer computes `source.hash` from its own rigc build of the input and refuses a mismatch (`REMESH_DELTA_SOURCE`), a non-setup basis (`REMESH_DELTA_BASIS`) and an op that does not replay (`REMESH_DELTA_OP`); each line is shown verbatim. A built revision's `context.applied` is `rig-review-applied/3`: `{schema, buildId, part, delta, deltaSha256, configHash, producer, compiler, line, op: "remesh", files, mesh?, modelHash}`. `deltaSha256` is the SHA-256 of the bytes written, which equal the download's `mesh-edit.json`.
 
-The live-job handoff uses [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8) and [Chest landmarks on Request changes (act@9)](#chest-landmarks-on-request-changes-act9). Standalone `--delta` and its download format remain available for legacy callers.
+In a live job, **Send comments** carries pending mesh edits and chest landmarks in `value.carriers` of [Comment-only act (act@10)](#comment-only-act-act10) (#1243); until 4.22.0 (#1243, and the 5.0.0 verdict retirement in #1314 and #1321), live-job Request changes carried them on [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8) and [Chest landmarks on Request changes (act@9)](#chest-landmarks-on-request-changes-act9), which remain readable as historical records. Standalone `--delta` and its download format remain available for legacy callers.
 
 ## Historical feedback retrieval
 
@@ -2024,24 +2024,16 @@ Each key reuses the decoder of the shape it copies. A `reopen` act is read only
 (old records parse, Review neither asks nor renders it) and has no ask
 subject, so its comments cannot carry `context.subject`.
 
-Starting in 4.8.0, the rig verdict writer takes top-level `context` from pinned
-stage-comment evidence and the bound ask and source. It uses @7 when at least
-one comment carries that context and @6 when none does. A rig verdict carrying
-mesh edits uses @8 as described below.
+From 4.8.0 until 5.0.0 (#1314, #1321), the rig verdict writer took top-level
+`context` from pinned stage-comment evidence and the bound ask and source, using
+@7 when at least one comment carried that context and @6 when none did; before
+#1243 moved live Edit Mesh drafts onto [act@10](#comment-only-act-act10)
+carriers, a rig verdict carrying mesh edits used @8 as described below.
 See [Create compatibility](STABILITY.md#mesh-edit-act-compatibility).
 
 ### Mesh edits on Request changes (act@8)
 
-With a pending `review-verdict` ask at `stage: "rig-review"`, the existing
-**Request changes** control carries pending Edit Mesh operations with any review
-comments. `rig-review/act@8` extends the act@7 envelope and its validation with
-optional `value.meshEdits`, permitted only for `kind: "review-verdict"`,
-`stage: "rig-review"` and `verdict: "changes-requested"`. An act@8 request for
-changes may have `comments: []` when it carries a mesh edit. A request with
-neither a comment nor an edit refuses `JOB_ACT_INVALID`. Review emits @8 only
-when it carries edits. Rig verdicts without edits keep their act@6 or act@7
-format and rules. Edit Mesh remains unavailable for a `parts-verdict` subject
-without a compiled rig (`PARTS_RIG_UNAVAILABLE`).
+**Historical verdict format (live handoff is [act@10](#comment-only-act-act10) since 4.22.0, #1243; verdict writer retired before 5.0.0 in #1314 and #1321).** From 4.8.0 until #1243 moved Edit Mesh drafts onto `rig-review/act@10` `value.carriers` (and until 5.0.0, #1314 and #1321, retired fresh `review-verdict` asks and submissions), a pending `review-verdict` ask at `stage: "rig-review"` carried pending Edit Mesh operations on **Request changes** alongside any review comments. Stored `rig-review/act@8` acts remain readable and replayable, and `act@10` `mesh-edits` carriers reuse the `meshEdits` payload and validation rules below. `rig-review/act@8` extends the act@7 envelope and its validation with optional `value.meshEdits`, permitted only for `kind: "review-verdict"`, `stage: "rig-review"` and `verdict: "changes-requested"`. An act@8 request for changes could have `comments: []` when it carried a mesh edit; a request with neither a comment nor an edit refused `JOB_ACT_INVALID`. Historical rig verdicts without edits kept their act@6 or act@7 format and rules. Edit Mesh remains unavailable for a parts-only subject without a compiled rig (`PARTS_RIG_UNAVAILABLE`).
 
 `meshEdits` is a nonempty array of exact `{edit, sha256}` objects, ordered by the
 string `skin/slot/attachment` with at most one entry per `(skin, slot, attachment)`.
@@ -2106,12 +2098,13 @@ duplicate identity, ineligible kind, stage or verdict, counts that differ from
 the stored entry, or an op that cannot replay over the stored topology. An
 attachment hash that differs from the retained displayed model refuses
 `JOB_ACT_SOURCE_STALE`. Existing browser `MESH_EDIT_*` refusals still apply.
-Starting in 4.8.0, eligible submissions carrying edits emit act@8. Review
-decoders older than 4.7.0 refuse act@8 with `JOB_ACT_INVALID`. The review page
-no longer puts edits on a verdict: it sends them as
-[act@10 carriers](#comment-only-act-act10) ([Review #1231](https://github.com/rig-c/review/issues/1231)).
-The writer still accepts them on a verdict, and historical act@8 and act@9 read
-unchanged. See
+From 4.8.0 until 5.0.0 (#1243, #1314, #1321), eligible verdict submissions
+carrying edits emitted act@8; fresh `review-verdict` submissions now refuse
+with `JOB_ACT_KIND_DISABLED` while committed acts replay unchanged. Review
+decoders older than 4.7.0 refuse act@8 with `JOB_ACT_INVALID`. The live review
+page sends edits as [act@10 carriers](#comment-only-act-act10) (#1243,
+[Review #1231](https://github.com/rig-c/review/issues/1231)), and historical
+act@8 and act@9 acts read unchanged. See
 [Create compatibility](STABILITY.md#mesh-edit-act-compatibility).
 Review refuses `JOB_BODY_LIMIT` if the canonical UTF-8 JSON of
 `value.meshEdits` exceeds 256 KiB. Rig stills and inline comment images
@@ -2130,6 +2123,8 @@ approves nothing. [HQ sign on Review #952](https://github.com/rig-c/review/issue
 
 ### Chest landmarks on Request changes (act@9)
 
+**Historical verdict format; publication seeding below remains active for [act@10](#comment-only-act-act10) `chest-landmarks` carriers (#1243; verdict writer retired before 5.0.0 in #1314 and #1321).**
+
 The trusted package `readPublished` adapter can return
 `JobPublishedContext.chestLandmarks` for a `rig` selector. Review exposes those
 rows as `publication.chestLandmarks` in the publication receipt and pinned
@@ -2146,7 +2141,8 @@ publication's `source.sourceHash`; a config-only change gets a new binding.
 Omit the field when the draft has no published spec. Only a seeded attachment
 can be edited in a job.
 
-The UI sends `value.chestLandmarks`, an array of one to four exact
+In act@9 (and in the [act@10](#comment-only-act-act10) `chest-landmarks`
+carrier, #1243), `chestLandmarks` is an array of one to four exact
 `{edit, sha256}` rows. Both arrays sort by the UTF-16 string
 `skin/slot/attachment` and permit each identity tuple once. Each
 `JobChestLandmarkValue` edit carries:
@@ -2172,10 +2168,14 @@ attachment and clearance refusals use `JOB_ACT_INVALID`. A stale model or
 attachment hash uses `JOB_ACT_SOURCE_STALE`. The request and delivery limits
 still apply. The producer validates the edit before rebuilding.
 
-`rig-review/act@9` is a `review-verdict` at `stage: "rig-review"` with
-`verdict: "changes-requested"` and at least one chest edit. It can also carry
-`meshEdits` and @7 comment context. Its comments array can be empty. Mesh-only
-edits use @8, and verdicts without edits keep their existing schemas.
+Historical `rig-review/act@9` is a `review-verdict` at `stage: "rig-review"` with
+`verdict: "changes-requested"` and at least one chest edit (emitted until #1243
+moved live chest landmark drafts onto [act@10](#comment-only-act-act10) carriers,
+and before #1314 and #1321 retired fresh verdict asks and submissions before
+5.0.0; stored act@9 acts remain readable and replayable). It could also carry
+`meshEdits` and @7 comment context, with an empty comments array allowed;
+mesh-only verdict edits used @8, and verdicts without edits kept their existing
+schemas.
 
 Consumers use the authorized finalized-act fetch and verify the act's
 `source.sourceHash`, `source.model.sha256`, the attachment SHA-256 and the

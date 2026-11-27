@@ -18,12 +18,16 @@ selection while exposing the **Editing Build A / Build B** picker so the shared
 Setup and Animate panels operate on the picked build only. Setup is the
 mesh-review composition (selected part, part presets, modeling-review
 proposals) and holds nothing that seeks or plays; the angle inspection, the
-transport and frame navigation are in Animate. **Write review** at the top
-right opens the review dialog, a modal holding the review status, reviewed
-source, selected checkpoint, structured feedback and frame-strip export, with
-its own **Submit review**. Escape or Close dismisses it and returns focus to
-**Write review**; the draft keeps saving whether the dialog is open or not,
-and the footer and the dialog both show its state.
+transport and frame navigation are in Animate. **Comment · C (n)** in the main
+toolbar opens the right-hand Comments panel (holding the comment list, reviewed
+source provenance and frame-strip export) and enters pin mode; **Send comments**
+in the act row beneath the top bar saves standalone comments locally
+([Local comment sends](REVIEW_PACKAGE.md#local-comment-sends)) or sends a
+comment-only act in a live job (#1239, #1314). Escape or turning **Comment · C (n)**
+off leaves comment mode; the local draft keeps saving as you edit, and the act
+row and footer show its state. (Until #835 and #1041, **Write review** opened a
+modal `#review-dialog`, and until 5.0.0, #1314 and #1321, **Submit review**
+wrote a package review decision.)
 The left column's header (Parts title and search) stays fixed at the top;
 the checkpoint strip, the part list and Settings scroll beneath it as one
 body. A drawer keeps its title and close button in place while its body
@@ -501,12 +505,18 @@ Reset returns to the inspected revision. New scratch reads and made-mesh feedbac
 submissions recheck pinned producer inputs, revision files and compiled files.
 A changed scratch input cannot inherit clean checked evidence.
 
-The compiled inspection embedding is read-only: original verdicts and comments are never copied onto
-scratch geometry or saved by navigating. Use the standalone `parts` command for
-its separate explicit original-parts sign-off. Parts-only inputs remain
-inspectable and name `STAGE_DRAFT_UNAVAILABLE` for direct correction. A missing
-handoff keeps the inspected atlas available where supplied. Compare retains its
-read-only, side-specific inspected atlas. Neither flow guesses a sibling draft. A [joined Create draft](WORKFLOWS.md#open-a-recorded-draft-before-rig-review) displays its recorded parts and mesh without a production rig package. A pending parts review with an explicit output directory can save a separate verdict here.
+The compiled inspection embedding is read-only for historical parts verdicts: original verdicts and comments are never copied onto
+scratch geometry or saved by navigating. Use the standalone `parts` command with
+**Send comments** to save separate local comments on original parts (until 5.0.0,
+#1314 and #1321, standalone `parts` wrote an explicit original-parts sign-off).
+Parts-only inputs remain inspectable and name `STAGE_DRAFT_UNAVAILABLE` for
+direct correction. A missing handoff keeps the inspected atlas available where
+supplied. Compare retains its read-only, side-specific inspected atlas. Neither
+flow guesses a sibling draft. A [joined Create draft](WORKFLOWS.md#open-a-recorded-draft-before-rig-review)
+displays its recorded parts and mesh without a production rig package and reads
+source-bound historical verdicts when `--parts-verdict-dir` is supplied (until
+5.0.0, #1314, #1321 and #1324, a pending parts review with `--parts-verdict-dir`
+could also save a separate verdict here).
 
 Named draft boundaries are `STAGE_DRAFT_UNAVAILABLE`, `STAGE_DRAFT_MISMATCH`,
 `STAGE_DRAFT_STALE`, `STAGE_DRAFT_CHANGED`, `STAGE_DRAFT_UNCHECKED` and
@@ -521,5 +531,6 @@ Animate and Compare switch, its instruments, DOM and mode IDs are retained.
 Existing bookmarks, Apply/Reset provenance, selected slot, compare side, time,
 pending edits and applied build stay owned by those original tools. Choosing a
 chip never applies or submits.
-The parts-only entry retains its part selection, geometry and pending verdict
-while visiting unavailable stages; it needs no compiled model.
+The parts-only entry retains its part selection, geometry and local comment
+draft (and, until 5.0.0, #1314 and #1321, its pending verdict) while visiting
+unavailable modes; it needs no compiled model.

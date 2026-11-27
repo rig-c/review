@@ -9,7 +9,7 @@ The person uses the existing inspection workspace. The header **Setup · Animate
 ## Core UI rules (owner, 2026-11-11)
 
 These rules govern every Review view and all job kinds, including parts, interview,
-plan, checkpoint, rig, direction, image review and signoff.
+plan, checkpoint, rig and direction (until 5.0.0, also image review, #1326, and signoff, #1244 and #1246).
 
 These are requirements, not a claim that every legacy host has migrated.
 [Screen specification](https://github.com/rig-c/review/blob/main/docs/SCREENS.md) separates shipped behavior at main `22d824f`
@@ -23,10 +23,14 @@ change adds no screen, behavior or public contract.
   screens, gates, input fields, toolbars, panels and owner checkpoints, including
   Create-side changes that make Review render new owner content, gates or
   checkpoints. Nonvisual bug fixes are exempt.
-- **Pending asks** The full question leads the act bar. The control that answers
-  the pending ask is the only emphasised control; with no pending ask none is
-  emphasised. Verdict buttons submit directly. Signoff follows the verdict when
-  both are pending. Dialog saves close the dialog and show saved. A draft restore
+- **Act row and comment sends** The act row leads with the collaborative prompt
+  or live progress line, and **Send comments** is the sole primary action when
+  unsent comments or draft carriers are ready (#1239, #1243, #1314). Until 5.0.0,
+  a pending ask led the act bar with its answer as the only emphasised control,
+  verdict buttons submitted directly, signoff followed the verdict when both were
+  pending, and dialog saves closed the dialog and showed saved (#833; signoff
+  removed in #1244 and #1246, interview answer forms in #1251, checkpoint
+  Pass/Fail in #1252, verdict writers in #1314 and #1321). A draft restore
   failure leads the bar and blocks every submission until download or discard.
 - **R1** Every review view separates its main toolbar and secondary toolbar into
   distinct areas. Group primary inspection actions in the main area and auxiliary
@@ -158,8 +162,8 @@ The single review page is one inspection workspace: a left column, the stage, th
 - **Cloth.** In Setup, after Cuts: `#cloth-panel` (#111). One form per cloth tag the installed reader accepts (`bottomwear`, `back hair`, `front hair`, `handwear-r`, `handwear-l` — resolved from its `package.json` `exports["./cloth-targets.json"]`, schema `rig-parts/cloth-targets@1`, since `@rig-c/parts` 2.51.0, refused as `CLOTH_TARGETS_INVALID` when malformed or outside the package; when that export key is absent on an older producer, it falls back to the tags the config already declares with `read: false` and refuses adding a new tag as `CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts <version> has no cloth-targets export (needs 2.51.0)`), holding the recipe's fields as the config states them; each change is a patch op at `/cloth/<tag>/…` (`src/cloth-recipe.ts`, `web/cloth-panel.ts`). **Show links** draws, in rig px of the setup pose, every chain the tag's parts are meshed on from the config's `points` and `tip`, and after an Apply the chains of the config the producer wrote (one label per set). Apply runs `rig-parts propose --cloth --write-config` on the declared parts, painting and keypoints, then builds the written config (`build` when the config declares `limbs`, else `rig --config`) and reloads it under the stage's Environment. Review never merges the producer's draft: it reads only the written config, lists where it differs from its input and refuses one that differs outside the drafted sections. Hand-editing the drafted constraints is the physics block's, after the draft.
 - **Mesh edit.** In Setup only, the view bar's **Edit mesh** toggle (`#mesh-edit`, `aria-pressed`) opens `#mesh-editor-bar`: sub-modes Modify / Create / Delete / Edges (keys `V` / `C` / `X` / `E`, one pressed), Undo, Redo, Reset, Download JSON and **Apply · Rebuild** (#135: `rig-parts remesh --delta` through the shared runner, the revision loaded in place, the producer's refusal verbatim; while a delta revision is on the stage Reset returns to the inspected build). A package without the compiled model document refuses `MESH_EDIT_MODEL_UNAVAILABLE` and does not open; whole rig refuses `MESH_EDIT_SELECT_SLOT`; a non-mesh or linked-mesh slot `MESH_EDIT_NO_MESH <slot>`. It edits in setup space (#100): the attachment's stored provenance in the model document (`src/setup-mesh.ts`) and geometry from Play's public `readSetupMesh` (`web/setup-pose.ts`, shared with Weights) and drawn over the paused stage with the stage camera. It records a typed delta (`src/mesh-edit.ts`, `basis: "setup"`, the shape `rig-parts remesh --delta` reads) and previews it over the original triangulation on the overlay; Delete removes only constraint edges the delta added (the triangulation is the producer's); it is not a mesher and never retriangulates, writes the package or runs a producer. The chest editor and mesh edit are exclusive: turning one on turns the other off.
 - **Inspector.** The shared bottom panel sits directly under the main view, with saved height and a resizable separator. Header mode selects its content; its tab row remains reachable when content is collapsed (#741). Setup has Part · Modeling · Chest · Mesh · Weights · Bones · Fields · Cuts · Cloth; Animate has Transport · Sound · Environment · Physics · Idle tracks · Readings · Requirements · Retarget · Report and the existing timeline. The bottom tab row has no Comments or Question tab (#835, #1041): both live in the communication panel. Live-job act controls sit in `#workspace-act-row` beneath the top bar (#845; standalone package inspection keeps the act bar in the bottom heading). Parts use Part; rig-only blocks are disabled with a missing-rig reason. When no controller block is left (a record or interview job without a picture), the bottom panel collapses to nothing, heading and separator included, and the stage takes the height. `mountRigInspector`, `bindInspectorBlocks` and `mountBottomPanel` reuse the existing blocks and preserve their state. Block navigation does not apply or submit.
-- **Communication panel.** The right panel (`#workspace-communication`, #1041) holds communication with the AI: the pending question (`#workspace-interview-answer`) on top, the record forms (`#job-record-asks`: checkpoint, signoff and plan approval, under **Checkpoint** or **Sign-off**) next, and Comments (`#inspector-feedback`) below, each under a one-line heading, with the comment rows above the provenance block. It is single-column by container query. Its width is the saved `communicationWidth` (280–640 px, default 360) with the shared width separator. It is laid out only while something is pending (a question, a record form or a comment) or after **Comment · C** or a pending ask opens it; otherwise the stage keeps the full width. Opening it never changes the bottom panel's state, and it lays the workspace out at once, before pin capture arms, so a pin placed right after `C` lands on the final stage. Below the stage minimum it becomes a right-side drawer that is non-modal while it holds a question.
-- **Review dialog.** This label is historical for rig feedback: `mountRigInspector` moves its existing source context, comments, frame range, category, typed target, correction request, provenance, strip downloads and warnings into the Comments section of the communication panel (opened from the top **Comment · C** entry, #835, #1041) and removes `#review-dialog`. The decision, submit and save state live in the act bar — in `#workspace-act-row` directly beneath the top bar on live jobs (#845), or in the bottom heading on standalone package screens. Record publications separately reuse existing checkpoint, signoff, reopen and interview forms in a native dialog over this same screen (#754), including an explicitly empty workspace when no picture is supplied. That hosting has shipped; remaining interview-modal work B (#722), record-modal memo-to-Comments work C (#715), and legacy job-window owner-surface removal (#756) have not.
+- **Communication panel.** The right panel (`#workspace-communication`, #1041) holds communication with the AI: Comments (`#inspector-feedback`), under a one-line heading with the comment rows above the provenance block (until 5.0.0, it also held the pending interview question `#workspace-interview-answer` on top, removed in #1251, and `#job-record-asks` for checkpoint, signoff and plan approval in between, removed in #1246 and #1252). It is single-column by container query. Its width is the saved `communicationWidth` (280–640 px, default 360) with the shared width separator. It is laid out while comments are open or after **Comment · C** opens it; otherwise the stage keeps the full width. Opening it never changes the bottom panel's state, and it lays the workspace out at once, before pin capture arms, so a pin placed right after `C` lands on the final stage. Below the stage minimum it becomes a right-side drawer.
+- **Review dialog.** This label is historical for rig feedback: `mountRigInspector` moves its existing source context, comments, frame range, category, typed target, correction request, provenance, strip downloads and warnings into the Comments section of the communication panel (opened from the top **Comment · C** entry, #835, #1041; pinned-comment fields moved onto the comment in #1257) and removes `#review-dialog`. **Send comments** and the save state live in `#workspace-act-row` directly beneath the top bar (#845, #1040, #1239, #1314; until 5.0.0, verdict decisions and Submit also lived there, retired in #1314 and #1321). Record publications render over this same inspection screen (#754), including an explicitly empty workspace when no picture is supplied, and send feedback through **Send comments** (#1247); until 5.0.0, they also hosted checkpoint, signoff, reopen and interview forms (#989, #1246, #1251, #1252).
 - **Footer.** Message (truncated, full text as tooltip) on the left; player, effective layout, renderer, layers, idle, remote control and draft state in the middle; the numeric view region (behind **View region**) and the source hash on the right. The View region body is a `position:fixed` popover above the 40px footer, right-aligned, its width and height clamped to the viewport and its content scrolling inside, so the footer's clipping never hides it and opening it never scrolls the page.
 
 ### Status ownership
@@ -170,9 +174,9 @@ Three places show status text, and each one has a single producer. A change that
 | --- | --- | --- | --- |
 | Act save state (act bar, plus its copy in the top bar or the footer's middle) | `#review-draft-state`, copied to `#dirty` (top bar, `web/workspace-ui.ts`) or `#draft-state` | `setSaveState` of `mountActBar` (`web/inspector-blocks.ts`) is the one renderer. `web/main.ts` calls it from `renderDraftState`, the edit handler and Submit | The act's state as a kind (`read-only`, `saving`, `failed`, `unsaved`, `saved`) with its text, such as *Not submitted*, *Unsubmitted changes*, *Saving…* or *Answer saved*. "Not submitted" belongs here. |
 | Footer message (left end of the footer) | `#message`, repeated into `#review-message` unless the call is footer-only | `message()` in `web/main.ts` | The latest message: refusals and failures (with the `error` class and a diagnostic title), view readouts (footer-only), and the lines below. |
-| Live job host lines | the same `#message`, through `screen.message` | `changed()` of the live job host (`web/job-rig-screen.ts`) | On a live job page: a refusal, a failure, *closed*, or else the displayed **publication label** (with *updated* or *incompatible* when they apply). So on a pending rig or parts verdict page, the footer's left end shows the publication label, and "Not submitted" shows only in the act save state. |
+| Live job host lines | the same `#message`, through `screen.message` | `changed()` of the live job host (`web/job-rig-screen.ts`) | On a live job page: a refusal, a failure, *closed*, or else the displayed **publication label** (with *updated* or *incompatible* when they apply). So on a live rig or parts page, the footer's left end shows the publication label, and "Not submitted" shows only in the act save state. |
 
-On an interview-only job, once every pending subject is `interview-picks` and the answer is saved, `renderDraftState` sets the footer message to the act save state's text (#851). The footer then agrees with the top bar instead of showing a stale line. Verdict pages are untouched by this.
+Historically (from #851 until #1251 retired `interview-picks` before 5.0.0), on an interview-only job once every pending subject was `interview-picks` and the answer was saved, `renderDraftState` copied the act save state's text into the footer message.
 
 **Source text and rendered text.** `setSourceText` stores the English source string, and the catalog renders it in the page language. `sourceTextContent` reads the source string back, not what is on screen. The source key, the English catalog value and the rendered text can differ: the EN catalog maps *Answer saved* to *Saved*. A test that checks two status nodes agree compares their rendered text against each other, in both languages. It does not compare either node to a source literal or a catalog value.
 
@@ -303,13 +307,18 @@ beside the act bar. Selecting a mode never applies, approves or submits.
 
 The standing Review window hosts published subjects on the existing inspection
 screen. Rig and parts use its shared viewport and bottom panel. Record
-checkpoint, signoff and interview asks use existing forms in the right
-communication panel (#754, #1041). A record without a picture keeps that absence explicit; it does not
-manufacture a model or package. Remaining B (#722), C (#715), F (#734) and #756
-work is tracked in [the screen specification](https://github.com/rig-c/review/blob/main/docs/SCREENS.md#4-migration-order).
+publications (plan pictures, option-set pictures and declared checkpoint pairs)
+use the same inspection screen and send feedback through **Send comments**
+(#1239, #1247); until 5.0.0, record checkpoint, signoff and interview asks also
+rendered forms in the right communication panel (#754, #1041; removed in #1246,
+#1251 and #1252). A record without a picture keeps that absence explicit; it
+does not manufacture a model or package. Historical migration status is tracked
+in [the screen specification](https://github.com/rig-c/review/blob/main/docs/SCREENS.md#4-migration-order).
 
-People submit decisions through Review's UI; agents use semantic `publish`,
-`ask`, `next` and `close`, and consumer writers fetch finalized acts directly.
+People send comments through Review's UI (`rig-review/act@10`, #1239, #1314;
+until 5.0.0, also verdicts and stage decisions, #1244, #1251, #1252, #1314,
+#1321); agents use semantic `publish`, `ask`, `next` and `close`, and consumer
+writers fetch finalized acts directly.
 Opening or navigating never approves. Preserve reviewer authority, exact
 source binding, publication freeze, generation checks, replay and recorded text.
 A UI requirement does not authorize changing those public contracts or carrying
@@ -337,8 +346,11 @@ mesh painting. The optional protected `--painting` input supplies the real refer
 Side by side and adjustable-opacity Overlay share the original painting
 transform from declared rig/source canvas geometry, with exact fractional placement. This is a visual
 comparison using browser interpolation, not native pixel parity with the producer's resampled raster.
-The Reference crop follows the selected part (#749). Parts verdicts are
-comments-based (#751): no issues approves; issues request changes.
+The Reference crop follows the selected part (#749). **Send comments** saves
+general or pointed comments locally on a standalone parts folder (#1314) and
+sends `rig-review/act@10` in a live job (#1247); until 5.0.0 (#1314, #1321),
+parts submitted a comments-based verdict (#751: no issues approved; issues
+requested changes).
 **Historical:** the old parts page, producer flags and mesh-numbers panel were
 deleted (#745). Mesh edges provides visual mesh inspection; agent readers retain
 the numbers. The rig Mesh precision instrument remains separate.
