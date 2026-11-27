@@ -33,10 +33,13 @@ test('#1273: docs/REVIEW_PACKAGE.md error codes bullet matches src/job-contract.
   expect(docCodes).toEqual([...JOB_ERROR_CODES]);
 });
 
-test('#1316 direction take refusal preserves its code and artifact details in both languages', () => {
-  const detail = 'DIRECTION_TAKE_MISMATCH: direction.json take.loop differs from idle in producer/scene.json';
+test.each([
+  ['loop', 'false', 'true'],
+  ['duration', '0.7500000000000001', '0.75'],
+])('#1316 direction take refusal shows both compared %s values in EN and KO', (field, found, required) => {
+  const detail = `DIRECTION_TAKE_MISMATCH: direction.json take.${field} is ${found}; the idle track in producer/scene.json has ${field} ${required}.`;
   expect(tr(detail, 'en')).toBe(detail);
-  expect(tr(detail, 'ko')).toBe('DIRECTION_TAKE_MISMATCH: direction.json의 take.loop 값이 producer/scene.json의 idle 트랙과 달라요.');
+  expect(tr(detail, 'ko')).toBe(`DIRECTION_TAKE_MISMATCH: direction.json의 take.${field} 값은 ${found}인데, producer/scene.json의 idle 트랙은 ${required}예요.`);
 });
 
 test('#1316 the Rig and Comments refusals name the renderer or the actual numeric limit in EN and KO', () => {
@@ -66,11 +69,11 @@ test('#1316 the Rig and Comments refusals name the renderer or the actual numeri
     const evaluate = new Function('scope', `with(scope){${refusal};return {rig:()=>{${rigGuard}},commentCaptureRefusal,sceneCameraError};}`)(scope);
     expect(evaluate.rig).toThrow(language === 'en'
       ? 'SCENE_CAMERA_VIEW_INVALID: Found the DOM renderer. Authored playback requires the Rig viewport canvas. Reopen the review to restore that canvas.'
-      : 'SCENE_CAMERA_VIEW_INVALID: DOM 렌더러가 감지됐어요. 제작 카메라로 재생하려면 리그 뷰포트 캔버스가 필요해요. 리뷰를 다시 열어 캔버스를 복구하세요.');
+      : 'SCENE_CAMERA_VIEW_INVALID: DOM 렌더러가 감지됐어요. 작성된 카메라로 재생하려면 리그 뷰포트 캔버스가 필요해요. 리뷰를 다시 열어 캔버스를 복구하세요.');
     const {value, min, max} = authored.violation!;
     expect(evaluate.commentCaptureRefusal()).toBe(language === 'en'
       ? `SCENE_CAMERA_VIEW_INVALID: camera.json · Projected world coordinate is ${value}. It must be between ${min} and ${max} to save a pinned comment. Select Fit to reset the view.`
-      : `SCENE_CAMERA_VIEW_INVALID: camera.json · 투영된 월드 좌표의 현재 값은 ${value}이에요. 핀 댓글을 저장하려면 ${min} 이상 ${max} 이하여야 해요. 맞춤을 눌러 뷰를 초기화하세요.`);
+      : `SCENE_CAMERA_VIEW_INVALID: camera.json · 투영된 월드 좌표의 현재 값은 ${value}이에요. 핀 코멘트를 저장하려면 ${min} 이상 ${max} 이하여야 해요. 맞춤을 눌러 뷰를 초기화하세요.`);
     try {
       bindSceneCamera(Uint8Array.of(0xff), {sha256: '', stage: null, animations: []});
       throw new Error('Malformed UTF-8 was accepted');

@@ -243,10 +243,13 @@ async function admitSceneReport(bytes: Uint8Array, path: string, root: string, m
     if (!direction?.composed || !bound) return bound;
     const idle = bound.sample('idle', {endpoint: 'terminal'});
     if (!idle) return bound;
-    const field = direction.take.duration !== idle.authoredSeconds ? 'take.duration' :
-      direction.take.loop !== idle.loop ? 'take.loop' : undefined;
-    if (field) throw new JobError('DIRECTION_TAKE_MISMATCH',
-      `DIRECTION_TAKE_MISMATCH: ${direction.file.path} ${field} differs from idle in ${path}`);
+    const field = direction.take.duration !== idle.authoredSeconds ? 'duration' :
+      direction.take.loop !== idle.loop ? 'loop' : undefined;
+    if (field) {
+      const required = field === 'duration' ? idle.authoredSeconds : idle.loop;
+      throw new JobError('DIRECTION_TAKE_MISMATCH',
+        `DIRECTION_TAKE_MISMATCH: ${direction.file.path} take.${field} is ${direction.take[field]}; the idle track in ${path} has ${field} ${required}.`);
+    }
     return bound;
   } catch (error) {
     if (error instanceof ComposedTakeError && (error.code === 'SCENE_CAMERA_REPORT_INVALID' || error.code === 'SCENE_CAMERA_REPORT_TOO_LARGE' ||

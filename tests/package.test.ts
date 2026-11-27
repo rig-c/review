@@ -122,7 +122,18 @@ test.each([
    model: {path: model, sha256: sha(modelBytes)}, rig: {version: 1}, take: {duration, loop}}));
  await writeFile(f.path, JSON.stringify({...f.input, model, direction, sceneReport}));
  const selector = version === 4 ? {kind: 'current', output: 'direction', record: '0'.repeat(64)} as const : undefined;
- if (refusal) await expect(loadReview(f.path, {selector})).rejects.toMatchObject({code: refusal});
+ if (refusal === 'DIRECTION_TAKE_MISMATCH') {
+   const isLoop = kind === '@4 loop';
+   const field = isLoop ? 'loop' : 'duration';
+   const found = isLoop ? loop : duration;
+   const track = JSON.parse(bytes).camera.tracks.idle;
+   expect(found).not.toBe(track[field]);
+   await expect(loadReview(f.path, {selector})).rejects.toMatchObject({
+     code: refusal,
+     message: `DIRECTION_TAKE_MISMATCH: ${direction} take.${field} is ${found}; the idle track in ${sceneReport.path} has ${field} ${track[field]}.`,
+   });
+ }
+ else if (refusal) await expect(loadReview(f.path, {selector})).rejects.toMatchObject({code: refusal});
  else {
    const p = await loadReview(f.path, {selector});
    expect(p.direction?.take).toEqual({duration, loop});
