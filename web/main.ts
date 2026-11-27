@@ -77,7 +77,7 @@ import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPac
 import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {bindReadingsPanel,readingsContext as buildReadingsContext,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
 import {readingSeekTime,type ReadingsContext} from '../src/readings.ts';
-import {bindEnvironmentInputs,checkAnimation as selectCheckAnimation,windClockOnMove,type ClipMove,bindEnvironmentCheck,scheduleContext,worldExport,type StageWorld,type WorldExport} from './environment-world.ts';
+import {bindEnvironmentInputs,checkAnimation as selectCheckAnimation,windClockOnMove,resetWindClock,type ClipMove,bindEnvironmentCheck,scheduleContext,worldExport,type StageWorld,type WorldExport} from './environment-world.ts';
 import {bindRequirementsPanel,runRequirementsRequest,type RequirementsCatalogView,type RequirementsJobView,type RequirementsPanel,type RequirementsRefusal} from './requirements-panel.ts';
 import type {RequirementsRequest} from '../src/requirements.ts';
 import {patchRoute} from '../src/retune-route.ts';
@@ -2729,7 +2729,7 @@ function worldFor(name:string):WorldExport|{error:string} {
  return worldCache.value;
 }
 /** A fresh wind clock at the same settings (a repeating gust restarts at 0), advanced to `at`; pending jolts keep their distance in time. */
-function restartWindClock(at=0):void {const now=wind.read().time;wind.restore(wind.snapshot());if(at>0)wind.advance(at);joltQueue=joltQueue.map(step=>({...step,at:Math.max(0,step.at-now)+at}));}
+function restartWindClock(at=0):void {joltQueue=resetWindClock(wind,joltQueue,at);}
 /** #183: every clip restart restarts the wind clock while the schedule is watched. #935: a paused seek sets it to the seek's time. */
 function clipMoved(move:ClipMove):void {const at=player?windClockOnMove(move,useWorld(),playing):null;if(at!==null){restartWindClock(at);applyEnvironment();}}
 let scheduleShown='';

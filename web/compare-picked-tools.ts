@@ -59,7 +59,7 @@ import {
   createWindModel, environmentFor, windReadout, RUNTIME_START_READOUT, joltPacket,
   loadModelDocument, environmentContext, environmentJson, type JoltStep, type WindSnapshot,
 } from '../src/environment.ts';
-import { bindEnvironmentInputs, checkAnimation as selectCheckAnimation, bindEnvironmentCheck, restartsWindClock, scheduleContext, worldExport, type ClipMove, type StageWorld, type WorldExport } from './environment-world.ts';
+import { bindEnvironmentInputs, checkAnimation as selectCheckAnimation, bindEnvironmentCheck, resetWindClock, windClockOnMove, scheduleContext, worldExport, type ClipMove, type StageWorld, type WorldExport } from './environment-world.ts';
 import type { OverlayCircle, OverlayMarker, OverlayRegion, OverlaySnapshot } from './rig-overlays.ts';
 import type { PatchOp } from '../src/config-patch.ts';
 
@@ -941,15 +941,14 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     renderSchedule();
   }
 
-  function restartWindClock(): void {
-    const now = wind.read().time;
-    wind.restore(wind.snapshot());
-    joltQueue = joltQueue.map(step => ({ ...step, at: Math.max(0, step.at - now) }));
+  function restartWindClock(at = 0): void {
+    joltQueue = resetWindClock(wind, joltQueue, at);
   }
 
   function clipMoved(move: ClipMove): void {
-    if (currentPlayer() && restartsWindClock(move, useWorld())) {
-      restartWindClock();
+    const at = currentPlayer() ? windClockOnMove(move, useWorld(), host.playing()) : null;
+    if (at !== null) {
+      restartWindClock(at);
       applyEnvironment();
     }
   }
