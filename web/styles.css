@@ -559,7 +559,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-act-ask:disabled{opacity:1;cursor:default}
 
 /* Retained hosts keep main's header, row and frame geometry on the shared entry. */
-#app[data-retained-workspace]{height:100%;grid-template:auto 1fr/minmax(12rem,18rem) minmax(0,1fr);color:var(--fg);background:var(--bg)}
+#app[data-retained-workspace]{height:100%;grid-template-columns:minmax(0,1fr);color:var(--fg);background:var(--bg)}
 [data-retained-workspace=owner]>.topbar>#package-title{min-width:0;overflow-wrap:anywhere}
 [data-retained-workspace=owner]>.topbar>#settings-language{width:auto;min-width:6rem;max-width:12rem;flex:0 0 auto;margin-left:auto}
 .owner-targets-header{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2)}
