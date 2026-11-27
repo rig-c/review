@@ -77,6 +77,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "rig-review-target/1": "rig-review-target/1",
   "Review workspace": "검토 작업 공간",
   "Review targets": "검토 대상",
+  "Targets · {count}": "대상 · {count}",
   "Inspection only": "살펴보기 전용",
   "Review target": "검토 대상",
   "Select a target. Drafts stay with their original source.": "대상을 선택해 주세요. 초안은 원래 소스에 보관돼요.",

@@ -77,6 +77,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "rig-review-target/1": "rig-review-target/1",
   "Review workspace": "Review workspace",
   "Review targets": "Review targets",
+  "Targets · {count}": "Targets · {count}",
   "Inspection only": "Inspection only",
   "Review target": "Review target",
   "Select a target. Drafts stay with their original source.": "Select a target. Drafts stay with their original source.",

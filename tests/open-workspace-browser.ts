@@ -297,11 +297,21 @@ try {
   await wait(`document.querySelectorAll('.owner-list button').length===9`, 'nine rows');
   const rows = await page.evaluate<string[]>(`[...document.querySelectorAll('.owner-target-status')].map(node=>node.textContent)`);
   assert.ok(rows.every(value => value === localized('Inspection only')));
-  assert.equal(await page.evaluate(`document.querySelector('.owner-header select').getAttribute('aria-label')`), localized('Language'));
-  assert.equal(await page.evaluate(`document.querySelector('.owner-header h1').textContent`), localized('Review workspace'));
+  assert.equal(await page.evaluate(`document.querySelector('#app>.topbar select').getAttribute('aria-label')`), localized('Language'));
+  assert.equal(await page.evaluate(`document.querySelector('#app #workspace-left h2').textContent`), language === 'ko' ? '대상 · 9' : 'Targets · 9');
+  assert.deepEqual(await page.evaluate(`({headers:document.querySelectorAll('#app>header').length,
+    languages:[...document.querySelectorAll('#app select')].map(select=>[...select.options].map(option=>option.textContent)),
+    footer:document.querySelector('#app>footer [role=status]').textContent})`), {headers:1, languages:[['En','Kr']],
+    footer:localized('Select a target. Drafts stay with their original source.')});
   await record('nine-inspection-rows', rows);
   for (let index = 0; index < (singleEntry ? 2 : 9); index++) {
     await choose(index, index + 1); await ready(index, 'synthetic-animation-' + (index + 1));
+    assert.equal(await page.evaluate(`document.querySelector('#app>.topbar #package-title').textContent`),
+      await page.evaluate(`document.querySelector('.owner-list button[aria-pressed=true] .owner-target-title').textContent`));
+    assert.ok(await inside(index, `document.querySelector('#app>.topbar').hidden &&
+      window.getComputedStyle(document.querySelector('#app>.topbar')).display==='none' &&
+      !document.querySelector('#settings-language').getClientRects().length &&
+      !new URLSearchParams(window.location.search).has('stageEmbed')`));
     const rendered = await inside<any>(index, `(async()=>{const response=await fetch(new URL('api/review',window.location.href));const source=await response.json();return {animation:document.querySelector('#animation-select').value,renderer:document.querySelector('#renderer-state').textContent,canvasCount:document.querySelectorAll('#rig-root canvas').length,sourceHash:source.sourceHash,rigHash:source.reviewedSource.rig.sha256};})()`);
     const modelHash = createHash('sha256').update(await readFile(join(inputs[index]!, 'build/skeleton.model.json'))).digest('hex');
     assert.equal(rendered.rigHash, modelHash);
@@ -313,10 +323,11 @@ try {
     const entry = await fetch(navigationURL().split('#')[0]);
     assert.equal(await entry.text(), await readFile(new URL('../web/index.html', import.meta.url), 'utf8'));
     const layout = await page.evaluate<any>(`(()=>{const app=document.getElementById('app'),stage=document.querySelector('.owner-stage').getBoundingClientRect();return {
-      viewport:[innerWidth,innerHeight],children:[...app.children].map(n=>n.tagName),statuses:document.querySelectorAll('.owner-header [role=status]').length,
-      footers:app.querySelectorAll('footer').length,bottom:stage.bottom,animations:[...document.querySelectorAll('.owner-target-animation')].map(n=>n.textContent)};})()`);
-    assert.deepEqual(layout.viewport, [1600, 1000]);assert.deepEqual(layout.children, ['HEADER','NAV','MAIN']);
-    assert.equal(layout.statuses, 1);assert.equal(layout.footers, 0);assert.equal(layout.bottom, 1000);
+      viewport:[innerWidth,innerHeight],children:[...app.children].map(n=>n.tagName),statuses:document.querySelectorAll('#app>footer [role=status]').length,
+      footers:app.querySelectorAll('footer').length,bottom:stage.bottom,footerTop:app.querySelector('footer').getBoundingClientRect().top,
+      footerBottom:app.querySelector('footer').getBoundingClientRect().bottom,animations:[...document.querySelectorAll('.owner-target-animation')].map(n=>n.textContent)};})()`);
+    assert.deepEqual(layout.viewport, [1600, 1000]);assert.deepEqual(layout.children, ['HEADER','DIV','FOOTER']);
+    assert.equal(layout.statuses, 1);assert.equal(layout.footers, 1);assert.equal(layout.bottom, layout.footerTop);assert.equal(layout.footerBottom, 1000);
     assert.deepEqual(layout.animations, Array.from({length:9},(_,i)=>'synthetic-animation-'+(i+1)));
     await choose(0, 2);await clickInside(0,'#zoom-in');
     await inside(0, 'window.__owner734Document=document');
@@ -330,7 +341,31 @@ try {
     await record('verdict',{status:'PASS',sample:'#734 single entry',language,viewport:[1600,1000],mainRigs:2,retainedFrameIdentity:true,cameraRetained:true,inputHashesUnchanged:true,
       boundary:'synthetic source CLI owner composition; legacy acceptance suite not run'});
   } else {
+  const sidePanel = `document.querySelector('#workspace-left')`;
+  const separator = `document.querySelector('.workspace-side-left[role=separator]')`;
+  const panelWidth = await page.evaluate<number>(`${sidePanel}.getBoundingClientRect().width`);
+  const stageWidth = await page.evaluate<number>(`document.querySelector('.owner-stage').clientWidth`);
+  await page.evaluate(`${separator}.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',shiftKey:true,bubbles:true,cancelable:true}))`);
+  await wait(`${sidePanel}.getBoundingClientRect().width>${panelWidth}`, 'shared target separator grows the panel');
+  const expandedWidth = await page.evaluate<number>(`${sidePanel}.getBoundingClientRect().width`);
+  await page.evaluate(`${sidePanel}.querySelector('.left-header button').click()`);
+  await wait(`${separator}.hidden && !!document.querySelector('#workspace-drawer-leftWidth .owner-list') &&
+    document.querySelector('.owner-stage').clientWidth>${stageWidth}`, 'shared target panel collapses');
+  await page.evaluate(`document.querySelector('.workspace-drawer-triggers [aria-controls=workspace-drawer-leftWidth]').click()`);
+  await wait(`!${separator}.hidden && ${sidePanel}.getBoundingClientRect().width===${expandedWidth}`, 'target panel restores its resized width');
+  await page.evaluate(`${separator}.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',shiftKey:true,bubbles:true,cancelable:true}))`);
+  await wait(`${sidePanel}.getBoundingClientRect().width===${panelWidth}`, 'target panel restores initial geometry');
+  await record('owner-target-panel', {initialWidth:panelWidth, expandedWidth, collapses:true});
+  for (const locale of [language === 'en' ? 'ko' : 'en', language]) {
+    await page.evaluate(`(()=>{const picker=document.querySelector('#app>.topbar select');picker.value='${locale}';picker.dispatchEvent(new Event('change'));})()`);
+    await wait(`[...document.querySelectorAll('.owner-stage>iframe')].every(frame=>frame.contentDocument.documentElement.lang==='${locale}')`, 'picker reaches all nine frames in ' + locale);
+  }
   await choose(0, 9);
+  await wait(`!document.querySelector('#app>.topbar [data-mode=playback]').disabled`, 'outer Animate enabled');
+  await page.evaluate(`document.querySelector('#app>.topbar [data-mode=playback]').click()`);
+  await wait(frameExpression(0, `document.querySelector('[data-mode=playback]').getAttribute('aria-pressed')==='true'`), 'outer Animate activated in frame');
+  await clickInside(0, '[data-mode="rig"]');
+  await wait(`document.querySelector('#app>.topbar [data-mode=rig]').getAttribute('aria-pressed')==='true'`, 'frame Setup reflected outside');
   await clickInside(0, '[data-inspector="playback"]');
   await inside(0, `(()=>{const node=document.querySelector('#scrub');node.value='0.25';node.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
   await clickInside(0, '[data-part-list] button');
@@ -388,10 +423,11 @@ try {
         scrollWidth:element.scrollWidth,clientWidth:element.clientWidth,
         scrollHeight:element.scrollHeight,clientHeight:element.clientHeight};
     };
-    const controlStyle=getComputedStyle(document.querySelector('.owner-header select'));
+    const controlStyle=getComputedStyle(document.querySelector('#app>.topbar select'));
     return {rootFontPx:parseFloat(getComputedStyle(document.documentElement).fontSize),
-      viewport:{width:innerWidth,height:innerHeight},header:rect('.owner-header'),
-      title:rect('.owner-header h1'),hint:rect('.owner-status'),language:rect('.owner-header select'),
+      viewport:{width:innerWidth,height:innerHeight},header:rect('#app>.topbar'),footer:rect('#app>footer'),
+      title:rect('#app>.topbar #package-title'),hint:rect('#app>footer .status-message'),
+      modes:rect('#app>.topbar .mode-switch'),language:rect('#app>.topbar select'),
       controlStyle:{minWidth:controlStyle.minWidth,maxWidth:controlStyle.maxWidth,
         height:controlStyle.height,boxSizing:controlStyle.boxSizing}};
   })()`);
@@ -402,15 +438,16 @@ try {
   assert.ok(Math.abs(parseFloat(geometry.controlStyle.maxWidth) - maximumWidth) < 0.1);
   assert.ok(geometry.language.width >= minimumWidth - 0.5 && geometry.language.width <= maximumWidth + 0.5);
   assert.ok(geometry.language.height >= 24 && geometry.language.height <= 64);
-  for (const name of ['title', 'hint', 'language']) {
+  for (const name of ['title', 'modes', 'hint', 'language']) {
     const box = geometry[name];
+    const region = name === 'hint' ? geometry.footer : geometry.header;
     assert.ok(box.width > 0 && box.height > 0, name + ' has visible geometry');
-    assert.ok(box.x >= geometry.header.x && box.right <= geometry.header.right, name + ' inside header');
-    assert.ok(box.y >= geometry.header.y && box.bottom <= geometry.header.bottom, name + ' vertically inside header');
+    assert.ok(box.x >= region.x && box.right <= region.right, name + ' inside its bar');
+    assert.ok(box.y >= region.y && box.bottom <= region.bottom, name + ' vertically inside its bar');
     assert.ok(box.x >= 0 && box.right <= geometry.viewport.width && box.y >= 0 && box.bottom <= geometry.viewport.height,
       name + ' inside viewport');
   }
-  assert.ok(geometry.title.right <= geometry.hint.x && geometry.hint.right <= geometry.language.x, 'header controls do not overlap');
+  assert.ok(geometry.title.right <= geometry.modes.x && geometry.modes.right <= geometry.language.x, 'header controls do not overlap');
   for (const name of ['title', 'hint']) {
     assert.ok(geometry[name].scrollWidth <= geometry[name].clientWidth + 1, name + ' has no horizontal clipping');
     assert.ok(geometry[name].scrollHeight <= geometry[name].clientHeight + 1, name + ' has no vertical clipping');
@@ -506,6 +543,28 @@ try {
   })()`);
   assert.equal(renderObservations.language, language);
   assert.ok(renderObservations.renderers.every((renderer: any) => ['fresh', 'cached'].includes(renderer.kind)));
+  assert.ok(await page.evaluate(`document.querySelector('#app>.topbar .mode-switch').hidden &&
+    document.querySelector('#app>.topbar #package-title').textContent===document.querySelector('.owner-target-title').textContent &&
+    document.querySelector('#app>.topbar #settings-language').getClientRects().length>0`));
+  assert.ok(await inside(0, `!!document.querySelector('header #export-json')?.getClientRects().length &&
+    !!document.querySelector('header #export-markdown')?.getClientRects().length`));
+  const compareSettingsCollapsed = await inside<boolean>(0, `document.querySelector('#settings-body').hidden`);
+  if (compareSettingsCollapsed) await clickInside(0, '#settings-toggle');
+  assert.ok(await inside(0, `document.querySelector('#settings-language').getClientRects().length>0`));
+  if (compareSettingsCollapsed) await clickInside(0, '#settings-toggle');
+  const otherLocale = language === 'en' ? 'ko' : 'en';
+  const compareLocaleAgrees = (locale: 'en' | 'ko') => `(()=>{
+    const compare=document.querySelector('.owner-stage>iframe').contentDocument;
+    return document.documentElement.lang==='${locale}' && document.querySelector('#app>.topbar select').value==='${locale}' &&
+      compare.documentElement.lang==='${locale}' && compare.querySelector('#settings-language').value==='${locale}' &&
+      compare.querySelector('header [data-mode=rig]').textContent.trim()===${JSON.stringify((locale === 'ko' ? koCatalog : enCatalog).Setup)};
+  })()`;
+  for (const locale of [otherLocale, language] as const) {
+    await page.evaluate(`(()=>{const picker=document.querySelector('#app>.topbar select');picker.value='${locale}';picker.dispatchEvent(new Event('change'));})()`);
+    await wait(compareLocaleAgrees(locale), 'outer picker agrees with legacy Compare in ' + locale);
+    await inside(0, `document.dispatchEvent(new window.Event('visibilitychange'))`);
+    assert.ok(await page.evaluate(compareLocaleAgrees(locale)), 'Compare Settings refresh preserves the owner language');
+  }
   await record('compare-render-observations', renderObservations);
   const pair = await inside<any>(0, `({animation:document.querySelector('#animation').textContent,reference:{readyState:document.querySelector('#reference-video').readyState,width:document.querySelector('#reference-video').videoWidth,height:document.querySelector('#reference-video').videoHeight,time:document.querySelector('#reference-video').currentTime},trace:JSON.parse(document.querySelector('#trace').textContent)})`);
   assert.ok(pair.animation.includes('pair-inspect'));
@@ -515,12 +574,27 @@ try {
   await clickInside(0, '[data-mode="rig"]');
   for (const side of ['a', 'b']) {
     await clickInside(0, '[data-mode="rig"]');
+    assert.ok(await inside(0, `!!document.querySelector('header #mode-build-picker [data-build-side="${side}"]').getClientRects().length`));
     await clickInside(0, '#mode-build-picker [data-build-side="' + side + '"]');
     await wait(frameExpression(0, `document.querySelector('#stage-layout').dataset.pickedSide===${JSON.stringify(side)}`), 'picked compare side ' + side);
     await clickInside(0, '[data-mode="playback"]');
     // Main pairPaint above retains both actual source canvas pixel checks (#735:8-11 / #741).
   }
   await writeFile(join(output, 'owner-compare-' + language + '.png'), await page.screenshot());
+  await open([0]);
+  await wait(`document.querySelectorAll('.owner-list button').length===2`, 'Compare and single rig share the workspace');
+  await choose(1, 2); await ready(1, 'synthetic-animation-1');
+  await choose(0, 2);
+  if (compareSettingsCollapsed) await clickInside(0, '#settings-toggle');
+  assert.ok(await inside(0, `document.querySelector('#settings-language').getClientRects().length>0`));
+  for (const locale of [otherLocale, language] as const) {
+    await inside(0, `(()=>{const picker=document.querySelector('#settings-language');picker.value='${locale}';
+      picker.dispatchEvent(new window.Event('change',{bubbles:true}));})()`);
+    await wait(`${compareLocaleAgrees(locale)} && ${frameExpression(1, `document.documentElement.lang==='${locale}'`)}`,
+      'inner Compare picker updates the owner and retained rig in ' + locale);
+  }
+  if (compareSettingsCollapsed) await clickInside(0, '#settings-toggle');
+  await record('compare-language-agreement', {outerPicker: true, innerPicker: true, settingsRefresh: true, retainedRig: true});
   assert.deepEqual(await Promise.all(inputs.map(jobInputHashes)), before);
   await record('input-immutability', {unchanged: true, targets: inputs.length});
   assert.equal(events.length, 0, 'unexpected browser exceptions');

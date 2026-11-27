@@ -33,7 +33,7 @@ export function mountStatusBar(options:WorkspaceStatusBarOptions|{placement:'inl
  return {footer,message};
 }
 
-export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyOwnerStep6';
+export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'owner';
 export interface WorkspaceHeaderOptions {
  compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;
  /** Only the stopped compare host supplies its existing domain controls and actions. */
@@ -46,10 +46,10 @@ export interface WorkspaceHeader {
 }
 /** One C1 construction path; the finite legacy choices expire at their named screen migrations. */
 export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHeader {
- const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',owner=kind==='legacyOwnerStep6';
- const branded=rig||compare;
+ const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',owner=kind==='owner';
+ const branded=rig||compare||owner;
  const header=panelMake('header');
- const headerClass=rig?'topbar':owner?'owner-header':null;
+ const headerClass=rig||owner?'topbar':null;
  if(headerClass)header.className=headerClass;
  if(branded){
   const brand=panelMake('div',{className:'brand'});
@@ -57,34 +57,33 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
   if(compare)brand.append('rig review ',mark);else brand.append(mark,'rig review');
   header.append(brand);
  }
- const title=panelMake(rig?'strong':'h1');
- const titleId=rig?'package-title':compare?'title':null;
+ const title=panelMake(rig||owner?'strong':'h1');
+ const titleId=rig||owner?'package-title':compare?'title':null;
  if(titleId)title.id=titleId;
  title.textContent=options.title??(rig?'Review package':compare?'A / B comparison':'');
  let subtitle:HTMLElement|null=null;
- if(branded){
+ if(rig||compare){
   subtitle=panelMake('span',{id:rig?'revision':'animation',className:rig?'subtle':'hint',textContent:options.revision??''});
   const identity=panelMake('div',{},title,subtitle);header.append(identity);
  }else header.append(title);
  let modeSwitch:HTMLElement|null=null,dirty:HTMLElement|null=null;
- if(rig||compare){
+ if(branded){
   modeSwitch=compare?options.compare!.modeSwitch:panelMake('div',{className:'mode-switch'});
-  if(rig){
+  if(rig||owner){
    modeSwitch.setAttribute('role','group');modeSwitch.setAttribute('aria-label','Mode');
    for(const [mode,label] of [['rig','Setup'],['playback','Animate'],['compare','Compare']] as const){
     const button=actionButton(label,null);button.dataset.mode=mode;button.setAttribute('aria-pressed',String(mode==='rig'));
     if(mode==='compare'){button.disabled=true;button.title='No second build supplied: reopen with --compare <built> --reference <video>';}
-    else{button.dataset.inspector=mode;button.setAttribute('aria-controls','inspector-'+mode);}
+    else if(rig){button.dataset.inspector=mode;button.setAttribute('aria-controls','inspector-'+mode);}
     modeSwitch.append(button);
    }
   }
   header.append(modeSwitch);
   if(compare)header.append(options.compare!.buildPicker,options.compare!.actions);
-  else{dirty=panelMake('span',{id:'dirty',className:'subtle',textContent:'Loading…'});header.append(panelMake('div',{className:'top-actions'},dirty));}
+  else if(rig){dirty=panelMake('span',{id:'dirty',className:'subtle',textContent:'Loading…'});header.append(panelMake('div',{className:'top-actions'},dirty));}
  }
  let stages:HTMLElement|null=null,status:HTMLParagraphElement|null=null;
 
- if(owner){status=panelMake('p',{className:'owner-status'});status.setAttribute('role','status');header.append(status);}
  const language=panelMake('select');
  let languageLabel:HTMLLabelElement|null=null;
  if(branded){language.id='settings-language';language.dataset.appPreference='';}
@@ -93,7 +92,7 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
   const text=branded?(value==='en'?'En':'Kr'):'';
   language.append(panelMake('option',{value,textContent:text}));
  }
- if(rig){language.setAttribute('aria-label','Language');header.append(language);}
+ if(rig||owner){language.setAttribute('aria-label','Language');header.append(language);}
  else if(compare)languageLabel=labelledControl('Language ',language);
  else header.append(language);
  if(options.embedded&&rig)header.hidden=true;
@@ -131,7 +130,7 @@ export interface WorkspaceUI {
 }
 /** Caller-owned shell regions. The left preference may retain a migrated screen's saved width. */
 export interface WorkspaceRegions {
- layout:HTMLElement;left:HTMLElement;main:HTMLElement;stage:HTMLElement;bottom:HTMLElement;right?:HTMLElement;
+ layout:HTMLElement;left:HTMLElement;main:HTMLElement;stage:HTMLElement;bottom?:HTMLElement;right?:HTMLElement;
  columns?:WorkspaceColumns;
  /** With `columns.right` = `communicationWidth`, the right region is the communication panel (#1041): it is laid out
   * only while this returns true, or after `revealCommunication`, and otherwise the stage takes its width. */
@@ -156,12 +155,14 @@ function measureToolbar(toolbar:HTMLElement,zoom:HTMLElement|null|undefined) {
  finally{toolbar.removeAttribute('data-measure-one-row');}
 }
 /** `currentTheme`, when given, is the appearance the Settings theme select shows; otherwise it shows the saved default. */
-export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceRegions;changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{kind:string;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
+export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceRegions;changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;leftCollapse?:HTMLButtonElement;bottomPanel?:{kind:string;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
  const scope=options.root??document,dialogs={} as Record<WorkspacePanel,HTMLDialogElement>;
  const require=<T extends HTMLElement=HTMLElement>(id:string,optional=false)=>{const selector='#'+id,node=(options.root?.id===id?options.root:scope.querySelector<HTMLElement>(selector))??Object.values(dialogs).map(dialog=>dialog.id===id?dialog:dialog.querySelector<HTMLElement>(selector)).find(Boolean)??null;if(!node&&!optional)throw new Error('Missing workspace element: '+id);return node as T;};
- const regions=options.regions,layout=regions?.layout??document.querySelector<HTMLElement>('.layout')!,main=regions?.main??layout.querySelector<HTMLElement>('main')!,stage=regions?.stage??require('stage-layout'),inspector=regions?.bottom??document.querySelector<HTMLElement>('.inspector')!,explorer=regions?regions.right:document.getElementById('parts-explorer');
+ const regions=options.regions,layout=regions?.layout??document.querySelector<HTMLElement>('.layout')!,main=regions?.main??layout.querySelector<HTMLElement>('main')!,stage=regions?.stage??require('stage-layout'),inspector=regions?regions.bottom:document.querySelector<HTMLElement>('.inspector')!,explorer=regions?regions.right:document.getElementById('parts-explorer');
+ const leftCollapse=options.leftCollapse;
+ let leftCollapsed=false;
  layout.classList.add('workspace-layout');
- let left=regions?.left??layout.querySelector<HTMLElement>('.left-panel');if(!left){left=document.createElement('aside');left.className='left-panel';left.innerHTML='<h2>INPUTS</h2><p class="hint">A and B retain their fixed source bindings. The reference video and shared animation are named above the stage.</p>';layout.prepend(left);}left.id='workspace-left';inspector.id='workspace-inspector';
+ let left=regions?.left??layout.querySelector<HTMLElement>('.left-panel');if(!left){left=document.createElement('aside');left.className='left-panel';left.innerHTML='<h2>INPUTS</h2><p class="hint">A and B retain their fixed source bindings. The reference video and shared animation are named above the stage.</p>';layout.prepend(left);}left.id='workspace-left';if(inspector)inspector.id='workspace-inspector';
  // A parts explorer placed inside the left column makes that column the explorer: it keeps the explorer's
  // saved width and the page has no right column. Otherwise sources stay left and the explorer stays right.
  const explorerLeft=regions?regions.columns?.left==='rightWidth'&&!regions.right:!!explorer&&left.contains(explorer),columns:WorkspaceColumns=regions?.columns??(explorerLeft?{left:'rightWidth',right:null}:explorer?defaultWorkspaceColumns:{left:'leftWidth',right:null});
@@ -172,16 +173,22 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  // body holding everything else, Settings included: the body is the column's only scroll container.
  const header=[...left.children].find(node=>node.className.split(' ').includes('left-header'))??null;
  const sourceList=document.createElement('div');sourceList.className='workspace-sources';sourceList.append(...[...left.childNodes].filter(node=>node!==header));left.append(sourceList);
- const settings=document.createElement('section');settings.className='workspace-settings';settings.setAttribute('aria-label','Settings');
+ const settings=leftCollapse?null:document.createElement('section');
  // The header holds the expand/collapse control; the body is hidden while collapsed (a workspace preference, default collapsed).
- const settingsHeader=document.createElement('h2'),settingsToggle=document.createElement('button'),settingsBody=document.createElement('div');settingsHeader.className='sticky-header settings-header';settingsToggle.type='button';settingsToggle.id='settings-toggle';settingsToggle.className='settings-toggle';settingsToggle.textContent='Settings';settingsToggle.setAttribute('aria-controls','settings-body');settingsBody.id='settings-body';settingsBody.className='settings-body';settingsHeader.append(settingsToggle);settings.append(settingsHeader,settingsBody);
+ const settingsToggle=settings&&document.createElement('button'),settingsBody=settings&&document.createElement('div');
+ if(settings&&settingsToggle&&settingsBody){
+ settings.className='workspace-settings';settings.setAttribute('aria-label','Settings');
+ const settingsHeader=document.createElement('h2');settingsHeader.className='sticky-header settings-header';settingsToggle.type='button';settingsToggle.id='settings-toggle';settingsToggle.className='settings-toggle';settingsToggle.textContent='Settings';settingsToggle.setAttribute('aria-controls','settings-body');settingsBody.id='settings-body';settingsBody.className='settings-body';settingsHeader.append(settingsToggle);settings.append(settingsHeader,settingsBody);
  settingsBody.innerHTML='<label>Theme <select id="settings-theme" data-app-preference><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><label><input id="settings-sync" data-app-preference type="checkbox">Sync cameras by default</label><label><input id="settings-idle" data-app-preference type="checkbox">Repeat</label><button id="settings-reset" type="button">Reset layout</button><p class="hint">Defaults apply to new inspections. Links and source drafts retain their explicit view.</p><p id="settings-state" class="hint" role="status"></p>';
  const sharedLanguage=options.language??require<HTMLSelectElement>('settings-language');
  if(!sharedLanguage.closest('header'))settingsBody.firstElementChild!.after(sharedLanguage.parentElement!);
  sourceList.append(settings);
- const theme=require<HTMLSelectElement>('settings-theme'),language=sharedLanguage,sync=require<HTMLInputElement>('settings-sync'),idle=require<HTMLInputElement>('settings-idle'),status=require('settings-state');
+ }
+ const status=settings?require('settings-state'):null;
+ const language=settings?(options.language??require<HTMLSelectElement>('settings-language')):null;
+ const theme=settings?require<HTMLSelectElement>('settings-theme'):null,sync=settings?require<HTMLInputElement>('settings-sync'):null,idle=settings?require<HTMLInputElement>('settings-idle'):null;
  let languageMigrated=false;
- const store=new WorkspacePreferenceStore({onStatus:value=>{status.textContent=tr(value.detail);}});let desired={...store.get().panels};
+ const store=new WorkspacePreferenceStore({onStatus:value=>{if(status)status.textContent=tr(value.detail);}});let desired={...store.get().panels};
  const stack=document.createElement('div');stack.className='workspace-stage-stack';for(const child of [...main.children])if(child!==inspector)stack.append(child);main.prepend(stack);
  const toolbar=stack.querySelector<HTMLElement>('.workspace-main-toolbar'),zoom=toolbar?.querySelector<HTMLElement>('#zoom-value');
  const rigPane=stage.querySelector<HTMLElement>('#rig-pane');
@@ -193,12 +200,12 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
   stage.style.gridTemplateRows=stacked&&rigPaneFloor!==undefined?`minmax(0,1fr) minmax(${rigPaneFloor}px,1fr)`:'';
  };
  const triggers=document.createElement('div');triggers.className='workspace-drawer-triggers';triggers.setAttribute('aria-label','Workspace panels');stack.prepend(triggers);
- const panels:Partial<Record<WorkspacePanel,HTMLElement>>={};if(columns.left)panels[columns.left]=left;if(columns.right&&explorer)panels[columns.right]=explorer;panels.inspectorHeight=inspector;
+ const panels:Partial<Record<WorkspacePanel,HTMLElement>>={};if(columns.left)panels[columns.left]=left;if(columns.right&&explorer)panels[columns.right]=explorer;if(inspector)panels.inspectorHeight=inspector;
  const sides:Partial<Record<WorkspacePanel,'left'|'right'>>={};if(columns.left)sides[columns.left]='left';if(columns.right&&explorer)sides[columns.right]='right';
- const labels:Record<WorkspacePanel,string>={leftWidth:'Sources and settings',rightWidth:explorerLeft||columns.left==='rightWidth'?'Parts and settings':'Parts explorer',inspectorHeight:'Inspector',communicationWidth:'Communication'};
+ const labels:Record<WorkspacePanel,string>={leftWidth:leftCollapse?'Review targets':'Sources and settings',rightWidth:explorerLeft||columns.left==='rightWidth'?'Parts and settings':'Parts explorer',inspectorHeight:'Inspector',communicationWidth:'Communication'};
  const handles={} as Record<WorkspacePanel,HTMLElement>,buttons={} as Record<WorkspacePanel,HTMLButtonElement>,disposers:(()=>void)[]=[];
  const present=Object.keys(panels) as WorkspacePanel[],node=(panel:WorkspacePanel)=>panels[panel]!;
- const bottom=options.bottomPanel,bottomBody=bottom?inspector.querySelector<HTMLElement>('.inspector-body')!:null,bottomHeading=bottom?bottom.strip.parentElement!:null;
+ const bottom=options.bottomPanel,bottomBody=bottom?inspector!.querySelector<HTMLElement>('.inspector-body')!:null,bottomHeading=bottom?bottom.strip.parentElement!:null;
  // The communication panel: present while something is pending or after an explicit reveal (C, a pending ask).
  const communicationKey=columns.right==='communicationWidth'&&explorer?'communicationWidth' as const:null;let communicationRevealed=false;
  const communicationShown=()=>!!communicationKey&&(communicationRevealed||!!regions?.rightPending?.());
@@ -209,11 +216,20 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  const bottomEmpty=()=>!!bottom&&regions?.bottomBound?.()!==false&&!controls(bottom.strip);
  for(const panel of present){
   const handle=document.createElement('div');handle.className='workspace-separator workspace-'+panel+(sides[panel]?' workspace-side-'+sides[panel]:'');handles[panel]=handle;
-  if(sides[panel]==='left')node(panel).after(handle);else if(sides[panel]==='right')node(panel).before(handle);else inspector.before(handle);
+  if(sides[panel]==='left')node(panel).after(handle);else if(sides[panel]==='right')node(panel).before(handle);else inspector!.before(handle);
   const trigger=document.createElement('button');trigger.type='button';trigger.textContent=labels[panel];trigger.hidden=true;triggers.append(trigger);buttons[panel]=trigger;
-  const dialog=document.createElement('dialog');dialog.className='workspace-drawer';dialog.id='workspace-drawer-'+panel;dialog.dataset.panel=panel;const close=document.createElement('button');close.type='button';close.textContent='Close '+labels[panel];close.className='workspace-drawer-close';
+  const targetPanel=leftCollapse&&panel===columns.left;
+  const dialog=document.createElement('dialog');dialog.className='workspace-drawer';dialog.id='workspace-drawer-'+panel;dialog.dataset.panel=panel;const close=document.createElement('button');close.type='button';close.textContent=targetPanel?'Close':'Close '+labels[panel];close.className='workspace-drawer-close';
   // The drawer's header stays above its scrolling panel: title and the close action.
   const header=document.createElement('div');header.className='sticky-header workspace-drawer-header';const title=document.createElement('span');title.textContent=labels[panel];header.append(title,close);dialog.append(header);document.body.append(dialog);dialogs[panel]=dialog;
+  if(leftCollapse&&targetPanel){
+   const redock=(event:Event)=>{
+    if(!leftCollapsed||allocateWorkspaceLayout(available,desired,columns).leftMode!=='panel')return;
+    event.stopImmediatePropagation();leftCollapsed=false;layoutNow();leftCollapse.focus({preventScroll:true});
+   };
+   trigger.addEventListener('click',redock);
+   disposers.push(()=>trigger.removeEventListener('click',redock));
+  }
   disposers.push(bindWorkspaceDrawer({trigger,drawer:dialog,label:labels[panel],close,modal:()=>panel!==communicationKey||!hasInterviewForm()}));
  }
  const bottomCollapseKey=bottom?`rig-review-bottom-collapsed/${bottom.kind}`:'';
@@ -237,16 +253,16 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
   if(bottom&&panel==='inspectorHeight'){
    trigger.hidden=true;handles[panel].hidden=drawer||collapsed;
    if(!drawer&&dialog.open)dialog.close();
-   const target=drawer?dialog:inspector;if(bottomBody!.parentElement!==target)target.append(bottomBody!);return;
+   const target=drawer?dialog:inspector!;if(bottomBody!.parentElement!==target)target.append(bottomBody!);return;
   }
   if(drawer&&element.parentElement!==dialog){const focus=element.contains(document.activeElement);dialog.append(element);if(focus)trigger.focus({preventScroll:true});}
   if(!drawer&&element.parentElement===dialog){const focused=element.contains(document.activeElement)||document.activeElement===trigger;if(dialog.open)dialog.close();trigger.setAttribute('aria-expanded','false');if(sides[panel]==='left')layout.prepend(element);else if(sides[panel]==='right')layout.append(element);else main.append(element);if(focused){element.tabIndex=-1;element.focus({preventScroll:true});}}
  };
- const bindings=present.map(panel=>bindWorkspaceSeparator({element:handles[panel],panel,...(sides[panel]?{side:sides[panel]}:{}),controls:node(panel).id,label:'Resize '+labels[panel],range:()=>workspaceResizeRange(available,desired,panel,shownColumns),resolveDesired:value=>workspaceResizeTarget(available,desired,panel,value,shownColumns),desired:()=>desired[panel],resize:value=>{desired={...desired,[panel]:value};apply();},commit:value=>store.update({panels:{[panel]:value}})}));
+ const bindings=present.map(panel=>bindWorkspaceSeparator({element:handles[panel],panel,...(sides[panel]?{side:sides[panel]}:{}),controls:node(panel).id,label:leftCollapse&&panel===columns.left?labels[panel]:'Resize '+labels[panel],range:()=>workspaceResizeRange(available,desired,panel,shownColumns),resolveDesired:value=>workspaceResizeTarget(available,desired,panel,value,shownColumns),desired:()=>desired[panel],resize:value=>{desired={...desired,[panel]:value};apply();},commit:value=>store.update({panels:{[panel]:value}})}));
  function apply():void {
   if(disposed||applying)return;applying=true;
   try{
-   const quiet=!!communicationKey&&!communicationShown(),shown:WorkspaceColumns=quiet?{...columns,right:null}:columns;
+   const quiet=!!communicationKey&&!communicationShown(),shown:WorkspaceColumns={left:leftCollapsed?null:columns.left,right:quiet?null:columns.right};
    if(communicationKey){explorer!.hidden=quiet;handles[communicationKey].hidden=quiet;if(quiet){buttons[communicationKey].hidden=true;if(dialogs[communicationKey].open)dialogs[communicationKey].close();}}
    const width=Math.max(0,layout.clientWidth),height=layout.clientHeight;
    if(width!==available.width||height!==lastHeight||desired!==lastDesired||shown.right!==shownColumns.right)zoomFit=undefined;
@@ -261,10 +277,11 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
    if(measurement)available.toolbarWidth=preferredToolbarWidth(measurement);
    effective=allocateWorkspaceLayout(available,desired,shown);
    const mode=(panel:WorkspacePanel)=>effective[panel==='leftWidth'?'leftMode':panel==='rightWidth'?'rightMode':panel==='communicationWidth'?'communicationMode':'inspectorMode'];
-   for(const panel of present)if(panel!=='inspectorHeight'&&!(quiet&&panel===communicationKey))dock(panel,mode(panel)==='drawer');
+   for(const panel of present)if(panel!=='inspectorHeight'&&!(quiet&&panel===communicationKey))dock(panel,mode(panel)!=='panel');
+   if(leftCollapse){leftCollapse.hidden=mode(columns.left!)!=='panel';leftCollapse.setAttribute('aria-expanded','true');}
    const gap=workspaceMinimums.separator,side=(key:WorkspaceColumns['left'])=>key&&mode(key)==='panel'?{width:effective[key],separator:gap}:{width:0,separator:0},l=side(shown.left),r=side(shown.right);
    layout.style.setProperty('--workspace-columns',`${l.width}px ${l.separator}px minmax(0,1fr) ${r.separator}px ${r.width}px`);
-   const empty=bottomEmpty();inspector.hidden=empty;
+   const empty=!inspector||bottomEmpty();if(inspector)inspector.hidden=empty;
    let stackMinimum=0;
    if(rigStage){
     // Measure wrapped chrome at the new width after opening or closing Comments.
@@ -290,7 +307,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
      const compactHeight=boxHeight(bottomHeading);
      const legacyDirection=Math.min(directionHeight,Math.max(0,height-compactHeight)*directionMaxFraction);
      const legacyInspectorRoom=height-fixedChrome-legacyDirection-workspaceMinimums.stageHeight-gap;
-     available.keepInspectorDocked=legacyInspectorRoom>=nominalInspectorMin&&inspectorRoom>compactHeight+blockBorders(getComputedStyle(inspector));
+     available.keepInspectorDocked=legacyInspectorRoom>=nominalInspectorMin&&inspectorRoom>compactHeight+blockBorders(getComputedStyle(inspector!));
     }
     stack.dataset.rigStageFloor='true';
    }else if(stack.dataset.rigStageFloor){
@@ -303,16 +320,16 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
    // The toolbar and drawer triggers can change height once the new columns are in place.
    if(!rigStage)available.height=Math.max(0,height-chrome.reduce((sum,node)=>sum+boxHeight(node),0));
    effective=allocateWorkspaceLayout(available,desired,shown);
-   dock('inspectorHeight',effective.inspectorMode==='drawer');
-   let bottomHeight=effective.inspectorHeight;
+   if(inspector)dock('inspectorHeight',effective.inspectorMode==='drawer');
+   let bottomHeight=inspector?effective.inspectorHeight:0;
    if(bottom){
     const compact=collapsed||effective.inspectorMode==='drawer';bottomBody!.hidden=collapsed;
     if(bottom.act.parentElement!==bottom.actHome)bottom.actHome.append(bottom.act);
     const collapseLabel=tr(collapsed?'Expand bottom panel':'Collapse bottom panel');
-    inspector.dataset.collapsed=String(compact);bottom.collapse.setAttribute('aria-expanded',String(!collapsed));bottom.collapse.textContent=collapsed?'⌃':'⌄';bottom.collapse.setAttribute('aria-label',collapseLabel);bottom.collapse.setAttribute('title',collapseLabel);
+    inspector!.dataset.collapsed=String(compact);bottom.collapse.setAttribute('aria-expanded',String(!collapsed));bottom.collapse.textContent=collapsed?'⌃':'⌄';bottom.collapse.setAttribute('aria-label',collapseLabel);bottom.collapse.setAttribute('title',collapseLabel);
     if(compact)bottomHeight=boxHeight(bottomHeading!);
    }
-   if(empty){handles.inspectorHeight.hidden=true;bottomHeight=0;}
+   if(empty&&inspector){handles.inspectorHeight.hidden=true;bottomHeight=0;}
    const bottomGap=effective.inspectorMode==='panel'&&!collapsed&&!empty?gap:0;
    // A compact heading still occupies a grid row. Its actual height sets the space available for scrolling chrome.
    if(rigStage)stack.dataset.stageChromeScroll=String(!bottomGap&&height-bottomHeight<stackMinimum);
@@ -340,11 +357,13 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
   }finally{applying=false;}
  }
  const renderSettings=()=>{const value=store.get();
+  if(!settings||!settingsToggle||!settingsBody||!status||!language||!theme||!sync||!idle)return;
   // A stored or default 'system' becomes the browser's language once (ko → ko, else en) and is kept (#873).
   const shown=value.language==='system'?resolveLanguage('system'):value.language;
   if(value.language==='system'&&!languageMigrated){languageMigrated=true;store.update({language:shown});}
   setLanguagePreference(shown);settingsToggle.setAttribute('aria-expanded',String(!value.settingsCollapsed));settingsBody.hidden=value.settingsCollapsed;settings.dataset.collapsed=String(value.settingsCollapsed);theme.value=options.currentTheme?.()??value.theme;language.value=getLinkLanguage()??shown;sync.checked=value.defaultCameraSync;idle.checked=value.defaultIdleRepeat;status.textContent=tr(store.status().detail);};
  const revealInspector=()=>{
+  if(!inspector)return;
   if(bottom&&collapsed){collapsed=false;try{localStorage.setItem(bottomCollapseKey,'false');}catch{}apply();}
   if(effective.inspectorMode==='drawer'&&!dialogs.inspectorHeight.open){for(const dialog of Object.values(dialogs))if(dialog.open)dialog.close();buttons.inspectorHeight.click();if(bottom)apply();}
  };
@@ -363,7 +382,15 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
   bottom.collapse.onclick=()=>{capture();collapsed=!collapsed;try{localStorage.setItem(bottomCollapseKey,String(collapsed));}catch{}if(dialogs.inspectorHeight.open)dialogs.inspectorHeight.close();apply();if(!collapsed)revealInspector();};
   disposers.push(()=>{bottom.collapse.onclick=null;dialogs.inspectorHeight.removeEventListener('close',closed);});
  }
- theme.onchange=()=>{store.update({theme:theme.value as WorkspaceTheme});options.defaultTheme(store.get().theme);};language.onchange=()=>{setLinkLanguage(null);store.update({language:language.value as WorkspaceLanguage});setLanguagePreference(store.get().language);};sync.onchange=()=>{store.update({defaultCameraSync:sync.checked});};idle.onchange=()=>{store.update({defaultIdleRepeat:idle.checked});};require<HTMLButtonElement>('settings-reset').onclick=()=>store.resetLayout();settingsToggle.onclick=()=>{store.update({settingsCollapsed:!store.get().settingsCollapsed});};
+ if(leftCollapse&&columns.left){
+  const trigger=buttons[columns.left];
+  leftCollapse.setAttribute('aria-controls',sourceList.id='workspace-left-body');
+  leftCollapse.onclick=()=>{leftCollapsed=true;layoutNow();trigger.focus({preventScroll:true});};
+  disposers.push(()=>{leftCollapse.onclick=null;});
+ }
+ if(theme&&language&&sync&&idle&&settingsToggle){
+  theme.onchange=()=>{store.update({theme:theme.value as WorkspaceTheme});options.defaultTheme(store.get().theme);};language.onchange=()=>{setLinkLanguage(null);store.update({language:language.value as WorkspaceLanguage});setLanguagePreference(store.get().language);};sync.onchange=()=>{store.update({defaultCameraSync:sync.checked});};idle.onchange=()=>{store.update({defaultIdleRepeat:idle.checked});};require<HTMLButtonElement>('settings-reset').onclick=()=>store.resetLayout();settingsToggle.onclick=()=>{store.update({settingsCollapsed:!store.get().settingsCollapsed});};
+ }
  bindDomI18n(document);const unsubscribe=store.subscribe(value=>{desired={...value.panels};renderSettings();schedule();});renderSettings();
  for(const tab of tabs){
   const panel=panelFor(tab);let timer:ReturnType<typeof setTimeout>|undefined;

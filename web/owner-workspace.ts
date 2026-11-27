@@ -4,21 +4,24 @@ import {WORKSPACE_TARGET_LIMIT, WORKSPACE_READY_SCHEMA, WORKSPACE_SCHEMA, WORKSP
   type WorkspaceList, type WorkspaceTargetView} from '../src/open-workspace-contract.ts';
 import {getLanguage, onLanguageChange, setLanguagePreference, setLinkLanguage, tr} from './i18n.ts';
 import {connectLiveWindow} from './live-connection.ts';
+import {WORKSPACE_LANGUAGE_CHOICE_SCHEMA, WORKSPACE_MODE_REQUEST_SCHEMA, WORKSPACE_MODE_STATE_SCHEMA, workspaceModes, type WorkspaceModeState} from './workspace-visibility.ts';
 
 export function mountOwnerWorkspace(root: HTMLElement): () => void {
   const workspace = mountRetainedWorkspace({root, kind: 'owner'});
   const {stage, language, message: status} = workspace;
-  let current: WorkspaceList | null = null, disposed = false;
+  let current: WorkspaceList | null = null, disposed = false, notice = '';
   let timer: ReturnType<typeof setTimeout> | undefined;
   const cancellation = new AbortController();
-  const retained = createRetainedFrameStage<{frame: HTMLIFrameElement; target: WorkspaceTargetView}>({
+  const identity = (target: WorkspaceTargetView) => ({incarnation: current?.incarnation, key: target.key, sourceHash: target.contentHash});
+  const retained = createRetainedFrameStage<{frame: HTMLIFrameElement; target: WorkspaceTargetView; modes?: WorkspaceModeState[]}>({
     stage, limit: () => WORKSPACE_TARGET_LIMIT, key: entry => entry.target.key,
-    message: entry => ({schema: WORKSPACE_VISIBILITY_SCHEMA,
-      incarnation: current?.incarnation, key: entry.target.key, sourceHash: entry.target.contentHash}),
+    message: entry => ({schema: WORKSPACE_VISIBILITY_SCHEMA, ...identity(entry.target)}),
     language: getLanguage, origin: location.origin, visibilityOrder: 'before-state', languageChange: 'visibility',
   });
   const capability = hashCapabilityAccess(new URL(location.href), 'rig-review-owner-workspace/1:' + location.origin,
     () => sessionStorage, href => history.replaceState(history.state, '', href), {strip: 'always-after-storage', storedValue: 'preserve', fallback: ''});
+  const hint = 'Select a target. Drafts stay with their original source.';
+  const showNotice = (message: string) => {notice = message; status.textContent = tr(message);};
 
   async function grant(key: string) {
     const encoder = new TextEncoder();
@@ -28,68 +31,105 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
   }
 
   async function select(target: WorkspaceTargetView) {
+    if (disposed) return;
     const intent = retained.beginSelection();
-    if (target.unavailable) {status.textContent = tr(target.unavailable); return;}
+    if (target.unavailable) {showNotice(target.unavailable); return;}
     let entry = retained.get(target.key);
     if (!entry) {
-      if (retained.atLimit()) {status.textContent = tr('WORKSPACE_TARGET_LIMIT'); return;}
+      if (retained.atLimit()) {showNotice('WORKSPACE_TARGET_LIMIT'); return;}
       const token = await grant(target.key);
       if (!retained.isCurrent(intent)) return;
       const frame = retained.createFrame(target.title, target.entry + '&lang=' + getLanguage() + '#cap=' + token);
+      // #655 slice 4 / #1213 owns legacy Compare chrome, including its build picker and feedback actions.
+      if (target.mode === 'compare') frame.dataset.workspaceLocale = 'legacy-compare';
+      else frame.dataset.stageEmbed = 'owner';
       entry = {frame, target}; retained.retain(entry);
     }
     retained.select(target.key);
+    showNotice(hint);
     render();
   }
 
+  const selected = () => retained.get(retained.selected ?? '');
+  function renderModes() {
+    const entry = selected();
+    workspace.renderModes(entry?.frame.dataset.stageEmbed === 'owner', entry?.modes);
+  }
   function render() {
+    renderModes();
+    status.textContent = tr(notice);
     workspace.render({
-      lang: getLanguage(), heading: tr('Review workspace'), listLabel: tr('Review targets'),
-      languageLabel: tr('Language'), englishLabel: tr('English'), koreanLabel: tr('Korean'),
+      lang: getLanguage(), heading: selected()?.target.title ?? '', listLabel: tr('Review targets'),
       selected: retained.selected,
       items: (current?.targets ?? []).map(target => ({
         key: target.key, dataset: {targetKey: target.key}, label: target.title,
         state: tr(target.unavailable ?? (target.viewOnly ? 'Inspection only' : 'Review target')),
         detail: target.animation,
-        onSelect: () => {void select(target).catch(() => {status.textContent = tr('WORKSPACE_REQUEST_REFUSED');});},
+        onSelect: () => {void select(target).catch(() => {showNotice('WORKSPACE_REQUEST_REFUSED');});},
       })),
     });
   }
 
   async function refresh() {
     try {
-      if (!capability) {status.textContent = tr('WORKSPACE_CAPABILITY_REQUIRED'); return;}
+      if (!capability) {showNotice('WORKSPACE_CAPABILITY_REQUIRED'); return;}
       const response = await fetch('/workspace/api/targets', {
         headers: {'X-Review-Capability': capability}, signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(5000)]),
       });
       const value = await response.json() as WorkspaceList & {error?: string};
-      if (!response.ok) {status.textContent = tr(value.error ?? 'WORKSPACE_REQUEST_REFUSED'); return;}
+      if (!response.ok) {showNotice(value.error ?? 'WORKSPACE_REQUEST_REFUSED'); return;}
       if (value.schema !== WORKSPACE_SCHEMA || !Array.isArray(value.targets) || value.targets.length > WORKSPACE_TARGET_LIMIT ||
-          current && current.incarnation !== value.incarnation) {status.textContent = tr('WORKSPACE_HOST_MISMATCH'); return;}
+          current && current.incarnation !== value.incarnation) {showNotice('WORKSPACE_HOST_MISMATCH'); return;}
       const changed = JSON.stringify(value) !== JSON.stringify(current);
-      if (!current) status.textContent = tr('Select a target. Drafts stay with their original source.');
+      if (!current) showNotice(hint);
       current = value;
       if (changed) render();
       if (!retained.selected && value.targets[0]) await select(value.targets[0]);
-    } catch {if (!disposed) status.textContent = tr('WORKSPACE_REQUEST_REFUSED');}
+    } catch {if (!disposed) showNotice('WORKSPACE_REQUEST_REFUSED');}
     finally {if (!disposed) timer = setTimeout(() => {void refresh();}, 1000);}
   }
 
-  function ready(event: MessageEvent) {
+  const chooseLanguage = (value: 'en' | 'ko') => {setLinkLanguage(null); setLanguagePreference(value);};
+  function receive(event: MessageEvent) {
     if (event.origin !== location.origin || !current || !event.data || typeof event.data !== 'object') return;
     const value = event.data;
-    if (value.schema !== WORKSPACE_READY_SCHEMA || value.incarnation !== current.incarnation) return;
+    if (value.incarnation !== current.incarnation || typeof value.key !== 'string') return;
     const entry = retained.get(value.key);
-    if (entry && entry.frame.contentWindow === event.source && entry.target.contentHash === value.sourceHash) retained.visibility(entry);
+    if (!entry || !event.source || entry.frame.contentWindow !== event.source || entry.target.contentHash !== value.sourceHash) return;
+    if (value.schema === WORKSPACE_READY_SCHEMA) {retained.visibility(entry); return;}
+    if (value.schema === WORKSPACE_LANGUAGE_CHOICE_SCHEMA) {
+      if (entry === selected() && entry.target.mode === 'compare' && (value.language === 'en' || value.language === 'ko')) {
+        chooseLanguage(value.language);
+      }
+      return;
+    }
+    const modes: unknown = value.modes;
+    if (value.schema !== WORKSPACE_MODE_STATE_SCHEMA || entry.frame.dataset.stageEmbed !== 'owner' ||
+        !Array.isArray(modes) || modes.length !== workspaceModes.length ||
+        !workspaceModes.every((_, index) => {
+          const mode = modes[index];
+          return mode && typeof mode.pressed === 'boolean' && typeof mode.disabled === 'boolean' &&
+            (mode.title === null || typeof mode.title === 'string' && mode.title.length <= 512);
+        }) ||
+        modes.filter(mode => mode.pressed).length > 1) return;
+    entry.modes = modes;
+    if (entry === selected()) renderModes();
   }
-  window.addEventListener('message', ready);
-  language.onchange = () => {setLinkLanguage(null); setLanguagePreference(language.value === 'ko' ? 'ko' : 'en');};
+  window.addEventListener('message', receive);
+  workspace.onMode(mode => {
+    const entry = selected();
+    if (entry?.modes?.[workspaceModes.indexOf(mode)]?.disabled === false) {
+      entry.frame.contentWindow?.postMessage({schema: WORKSPACE_MODE_REQUEST_SCHEMA, ...identity(entry.target), mode}, location.origin);
+    }
+  });
+  language.onchange = () => chooseLanguage(language.value === 'ko' ? 'ko' : 'en');
   const unlocalize = onLanguageChange(() => {render(); retained.languageChanged();});
   const disconnect = connectLiveWindow({route: () => '/workspace/live'});
   const stop = () => {
     if (disposed) return;
-    disposed = true; retained.dispose(); clearTimeout(timer); cancellation.abort(); disconnect(); unlocalize();
-    window.removeEventListener('message', ready); window.removeEventListener('pagehide', stop);
+    disposed = true; retained.dispose(); workspace.dispose(); clearTimeout(timer); cancellation.abort(); disconnect(); unlocalize();
+    language.onchange = null;
+    window.removeEventListener('message', receive); window.removeEventListener('pagehide', stop);
   };
   window.addEventListener('pagehide', stop, {once: true});
   render();

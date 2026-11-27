@@ -119,6 +119,8 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 // Capability is consumed before shell composition or any URL-dependent binding.
 // A live job (#709) hosts this screen for a rig subject: its routes, its session and its submit.
 let host:JobRigMeshHost|null=rigHost(),access=host?.access??pageInstanceAccess();
+const entryParams=new URLSearchParams(location.search);
+const ownerStage=!!access.capability&&access.base!=='/'&&entryParams.has('workspace')&&window.parent!==window&&window.frameElement?.getAttribute('data-stage-embed')==='owner';
 let partsOnly=host?.subject==='parts'||screenRoot.dataset.reviewScreen==='parts';
 let firstPublicationPrompt=!!host?.waiting;
 const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
@@ -148,7 +150,11 @@ const rigStatusBar=mountStatusBar({
 app.querySelector<HTMLElement>('[data-workspace-status]')!.replaceWith(rigStatusBar.footer);
 for(const id of ['layout-state','idle-state','control-state','draft-state'])el(id).setAttribute('role','status');
 el('layout-state').setAttribute('aria-label','Effective layout');el('renderer-state').setAttribute('aria-label','Last draw backend');el('draft-state').setAttribute('aria-live','polite');el('view-coordinates').setAttribute('aria-label','Current numeric inspection region');
-const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearchParams(location.search).has('stageEmbed')});app.prepend(shell.header,...shell.actRow?[shell.actRow]:[]);
+const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:entryParams.has('stageEmbed')||ownerStage});app.prepend(shell.header,...shell.actRow?[shell.actRow]:[]);
+function bindOwnerStage(sourceHash:string):void {
+ const stop=bindWorkspaceVisibility({key:access.key,sourceHash,pause,...ownerStage?{modeSwitch:shell.modeSwitch!}:{}});
+ if(stop)viewDisposers.push(stop);
+}
 el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.append(createRigLayerControls());
 el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;
@@ -1585,7 +1591,11 @@ async function start(): Promise<void> {
     if(host?.record&&!host.record.hasPicture){await startRecord();return;}
     let writes: { capabilityRequired: boolean; control?: boolean };
     const opened=await api<ReviewResponse|PartsSubjectEntry|InterviewSubjectEntry>('/api/review');
-    if('subject' in opened&&opened.subject==='interview'){await startRecord(opened);return;}
+    if('subject' in opened&&opened.subject==='interview'){
+      await startRecord(opened);
+      if(ownerStage&&!disposed)bindOwnerStage(opened.sourceHash);
+      return;
+    }
     const [saved,accessState]=await Promise.all([api<ReviewSession|PartsSubjectSession>('/api/session'),api<{capabilityRequired:boolean;control?:boolean}>('/api/access')]);
     if('subject' in opened&&opened.subject==='parts'){await startParts(opened,saved as PartsSubjectSession,accessState);return;}
     data=opened as ReviewResponse;session=saved as ReviewSession;writes=accessState;
@@ -1631,7 +1641,7 @@ async function start(): Promise<void> {
     const restored=await setupPersistence();setupComments();renderPendingSubjects(host?.pendingSubjects?.()??(data.capabilities.preRig?[]:[{kind:'review-verdict',stage:'rig-review'}]));if(host?.direction)showRecordComments(true);else if(host?.record&&!data.manifest.model)showRecordComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
-    bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause});
+    bindOwnerStage(data.sourceHash);
     if(host){
       if(!player&&video){
         await waitReferenceMetadata(video,lifecycle.signal);
@@ -1768,6 +1778,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
  if(host){await restorePublicationNavigation();hostAttached=true;host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,pendingSubjects:renderPendingSubjects,progress:setJobProgress,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
 
+ if(ownerStage)bindOwnerStage(subject.sourceHash);
  document.body.dataset.ready='true';
 }
 /** Use the existing Comments-only presentation for subjects without rig capabilities. */
