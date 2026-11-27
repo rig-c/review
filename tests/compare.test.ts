@@ -25,7 +25,7 @@ test('comparison session requires side and exact complete immutable provenance o
  for(const binding of [{...p.response.binding,a:{...p.response.binding.a,sourceHash:'forged'}},{...p.response.binding,b:{...p.response.binding.b,reviewedSource:{...p.response.binding.b.reviewedSource,motion:null}}},{...p.response.binding,reference:{...p.response.binding.reference,sha256:'forged'}},{...p.response.binding,animation:'other'}])expect(()=>parseCompareSession({...input,binding},p)).toThrow('session.binding');
  expect(()=>parseCompareSession({...input,feedback:[note(),note()]},p)).toThrow('duplicate ids');
 });
-test('compare session omits status on save, ignores status in PUT, reads historical status and keeps compare-session/2 pinned',async()=>{
+test('compare session omits status on save, ignores status in PUT, preserves historical status on re-save and keeps compare-session/2 pinned',async()=>{
  const f=await fixture(),p=await loadCompare(f.inputs),state=join(f.root,'state'),file=compareSessionFile(p,state);
  const saved=await saveCompareSession(p,{...freshCompareSession(p),feedback:[note()]},state);
  expect(saved.status).toBe('pending');
@@ -34,16 +34,15 @@ test('compare session omits status on save, ignores status in PUT, reads histori
  expect((await readCompareSession(p,state)).status).toBe('pending');
  expect((await readFeedbackCompareSession(p,state)).status).toBe('pending');
 
- for(const historicalStatus of ['approved','changes-requested'] as const){
-  await writeFile(file,JSON.stringify({...written,status:historicalStatus},null,2)+'\n');
-  expect((await readCompareSession(p,state)).status).toBe(historicalStatus);
-  expect((await readFeedbackCompareSession(p,state)).status).toBe(historicalStatus);
- }
+ // Re-saving a statusless file keeps it statusless on disk even if input supplies status.
+ const secondNote={...note(),id:'two',summary:'Second note'};
+ const resavedStatusless=await saveCompareSession(p,{...freshCompareSession(p),status:'approved',feedback:[note(),secondNote]},state);
+ expect(resavedStatusless.status).toBe('pending');
+ expect(Object.hasOwn(JSON.parse(await readFile(file,'utf8')),'status')).toBe(false);
 
  const server=await startCompareServer(p,{port:0,stateDir:state}),base=`http://127.0.0.1:${server.port}`,headers={Origin:base,'Content-Type':'application/json'};
  try{
   const {status:_drop,...baseBody}=freshCompareSession(p);
-  const secondNote={...note(),id:'two',summary:'Second note'};
   for(const candidate of ['approved','changes-requested','bogus-status',123,null,{nested:true}]){
    const res=await fetch(base+'/api/compare/session',{method:'PUT',headers,body:JSON.stringify({...baseBody,status:candidate,feedback:[note(),secondNote]})});
    expect(res.status).toBe(200);
@@ -52,6 +51,27 @@ test('compare session omits status on save, ignores status in PUT, reads histori
    const disk=JSON.parse(await readFile(file,'utf8'));
    expect(Object.hasOwn(disk,'status')).toBe(false);
    expect((await (await fetch(base+'/api/compare/session')).json()).status).toBe('pending');
+  }
+
+  // An old file carrying a historical status keeps that exact stored status on disk across re-saves while ignoring input.status.
+  const thirdNote={...note(),id:'three',summary:'Third note after historical status'};
+  for(const historicalStatus of ['approved','changes-requested'] as const){
+   await writeFile(file,JSON.stringify({...written,status:historicalStatus},null,2)+'\n');
+   expect((await readCompareSession(p,state)).status).toBe(historicalStatus);
+   expect((await readFeedbackCompareSession(p,state)).status).toBe(historicalStatus);
+
+   const resaved=await saveCompareSession(p,{...baseBody,status:'bogus-ignored',feedback:[note(),thirdNote]},state);
+   expect(resaved.status).toBe(historicalStatus);
+   const diskAfterFn=JSON.parse(await readFile(file,'utf8'));
+   expect(diskAfterFn.status).toBe(historicalStatus);
+   expect((await readCompareSession(p,state)).status).toBe(historicalStatus);
+   expect((await readFeedbackCompareSession(p,state)).status).toBe(historicalStatus);
+
+   const putRes=await fetch(base+'/api/compare/session',{method:'PUT',headers,body:JSON.stringify({...baseBody,feedback:[note(),secondNote,thirdNote]})});
+   expect(putRes.status).toBe(200);
+   expect((await putRes.json()).status).toBe(historicalStatus);
+   expect(JSON.parse(await readFile(file,'utf8')).status).toBe(historicalStatus);
+   expect((await (await fetch(base+'/api/compare/session')).json()).status).toBe(historicalStatus);
   }
  }finally{await server.stop(true);}
 

@@ -69,15 +69,29 @@ export function parseCompareSession(input:unknown,p:ComparePackage,strict=true):
 export function compareSessionFile(p:ComparePackage,stateDir=join(homedir(),'.local','state','rig-c-review')):string {const key=createHash('sha256').update(JSON.stringify(['compare',p.response.sourceHash,p.response.binding])).digest('hex');return join(stateDir,key+'.json');}
 export async function readCompareSession(p:ComparePackage,stateDir?:string):Promise<CompareSession>{await assertCompareUnchanged(p);try{const value=JSON.parse(await readFile(compareSessionFile(p,stateDir),'utf8'));return {...parseCompareSession(value,p,false),updatedAt:value.updatedAt};}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return freshCompareSession(p);throw e;}}
 export async function saveCompareSession(p:ComparePackage,input:unknown,stateDir?:string):Promise<CompareSession>{
-  const stored=await readCompareSession(p,stateDir);
+  await assertCompareUnchanged(p);
+  const file=compareSessionFile(p,stateDir);
+  let stored:CompareSession,historicalStatus:CompareSession['status']|undefined;
+  try{
+    const raw=JSON.parse(await readFile(file,'utf8'));
+    const parsed=parseCompareSession(raw,p,false);
+    stored={...parsed,updatedAt:raw.updatedAt};
+    if(raw&&typeof raw==='object'&&!Array.isArray(raw)&&Object.hasOwn(raw,'status')&&raw.status!==undefined){
+      historicalStatus=parsed.status;
+    }
+  }catch(e){
+    if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;
+    stored=freshCompareSession(p);
+  }
   const value=parseCompareSession(input,p,true);
   assertSubmittedComments(stored.feedback,value.feedback);
   await saveCommentCrops(value.feedback,stateDir);
-  const {status:_status,...persisted}=value;
-  const file=compareSessionFile(p,stateDir);
+  const {status:_status,...withoutStatus}=value;
+  const persisted=historicalStatus!==undefined?{...withoutStatus,status:historicalStatus}:withoutStatus;
+  const returned:CompareSession=historicalStatus!==undefined?{...value,status:historicalStatus}:value;
   await mkdir(join(file,'..'),{recursive:true,mode:0o700});
   const tmp=file+'.'+crypto.randomUUID()+'.tmp';
   await writeFile(tmp,JSON.stringify(persisted,null,2)+'\n',{mode:0o600});
   await rename(tmp,file);
-  return value;
+  return returned;
 }
