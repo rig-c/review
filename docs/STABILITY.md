@@ -44,17 +44,15 @@ See the [comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract)
 [mesh-edit compatibility](#mesh-edit-act-compatibility) and
 [chest landmark compatibility](#chest-landmark-act-compatibility).
 
-| Ask request schema | Accepted form |
-| --- | --- |
-| `rig-review/job-api@2` | `ask` with one `JobSubject`. A record-and-package listener also accepts the @2 request envelope. |
-| `rig-review/job-api@3` | `ask` with one package or record subject. `ask-batch` requires a record publication. |
+Review 5.0.0 removes the CLI's `session ask`, API v2 and v3's `ask`, API v3's
+`ask-batch`, and the `askBatch` capability (#1225). The API returns HTTP 400
+with `JOB_REQUEST_INVALID` and names each unknown verb.
 
-Fresh record asks and fresh image-review, reopen, signoff (including
-`plan-approved`), checkpoint, interview-picks, parts-verdict and review-verdict
-asks are refused.
-The verdict kinds refuse a fresh submission with `JOB_ACT_KIND_DISABLED` and still replay a committed one.
-Publications with a `current` selector accept no asks (`JOB_ASK_INVALID`) and receive feedback through
-comment-only acts (`rig-review/act@10`). See [Act kinds, plan identity and parts identity](REVIEW_PACKAGE.md#act-kinds-plan-identity-and-parts-identity),
+Historical `JobSubject`, `JobPendingAsk`, `PendingAskV3` and record-subject
+schemas remain readable. History and `next` retain their pending events.
+Consumers use `fetch-act` for stored acts. Previously committed UI submissions
+still replay their stored acts. Publications with a `current` selector receive
+feedback through comment-only acts (`rig-review/act@10`). See [Act kinds, plan identity and parts identity](REVIEW_PACKAGE.md#act-kinds-plan-identity-and-parts-identity),
 [Current output selector](REVIEW_PACKAGE.md#current-output-selector)
 and [the record contract](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
 
@@ -90,6 +88,7 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | `--picks-dir`'s UI | #1230 | Now the `INTERVIEW_PICKS_DISABLED` refusal on the workspace; CLI and file readers still read `rig-review/interview-picks@1`. |
 | Historical interview answer display | #1230 | A person can no longer see an old interview answer or its note on a Review screen; agents and the CLI read them byte for byte. |
 | Fresh `review-verdict` and `parts-verdict` asks | #1232 | Fresh asks refuse with `JOB_ASK_INVALID`. Send comments on the displayed publication produces an act@10. |
+| CLI `session ask`, API `ask` and `ask-batch`, and `capabilities.askBatch` | 5.0.0 (#1225, breaking) | Request and response types for these verbs are removed. Readers retain recorded asks, events and acts. |
 | Fresh verdict submissions | #1233 | Stored verdict acts retain their readers and replay behavior. |
 | Standalone parts verdict and package session writers | #1233 | `POST /api/parts/verdict`, `PUT /api/session` and the parts CLI's `RIG_REVIEW_PARTS_SAVED` stdout records are retired. Send comments writes local feedback. Historical verdict and session exports remain supported. |
 | Joined Stage 1 parts verdict writer | #1318 | `POST /api/stage-parts/verdict` is retired. Stage 1 inspection and source-bound historical verdict reads remain supported. |
@@ -519,7 +518,7 @@ ends a job and revokes its writer grant. `stop()` disposes this host handle and
 stops its owned listener. A reused handle (including strict `reuseOnly` with
 `reused === true` and non-null `attachment`) disposes only its local session and leaves
 the owner listener running. On a strict attached handle, reads use the read-only
-SQLite connection. A later semantic write (`publish`, `ask`, `close`, `ackDisplayed`,
+SQLite connection. A later semantic write (`publish`, `close`, `ackDisplayed`,
 `commitUIAct`) lazily reopens the same existing `jobs.sqlite` file with
 `SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOFOLLOW` (omitting `SQLITE_OPEN_CREATE`) and
 rechecks storage and exact job identity in the first `IMMEDIATE` transaction.
@@ -640,8 +639,7 @@ before publishing `current` outputs.
 
 Numbered selectors (`draft`, `rig`, `post`) keep their parsing, screens, asks,
 verdicts, act shapes `@2`–`@10`, replay, stored bytes and send-time
-`JOB_RECORD_MOVED` check unchanged. On a `current` publication, every `ask` and
-`ask-batch` subject refuses `JOB_ASK_INVALID`, and `rig-review/act@10` send
+`JOB_RECORD_MOVED` check unchanged. On a `current` publication, `rig-review/act@10` send
 checks verify that the publication is still the job's head, that every seal
 except `project.json` is unchanged on disk (`JOB_ACT_SOURCE_STALE`), and that
 the snapshot is intact, without re-hashing `project.json` on disk. See the
@@ -920,10 +918,6 @@ without aliases or copied wire shapes.
 - `JobPublishRequest`
 - `JobPublishRequestV3`
 - `JobPublishResultV3`
-- `JobAskRequest`
-- `JobAskRequestV3`
-- `JobAskBatchRequestV3`
-- `JobAskBatchValueV3`
 - `JobProgressRequestV3`
 - `JobProgressValueV3`
 - `JobProgressV3`
@@ -1029,13 +1023,10 @@ A consumer checks the thirty-seven runtime exports and the existing managed-host
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and
 the comments decoder types and the record-mode `JobRecordAct` / `JobActV3` / `JobPlanSource` /
-`JobFetchActRequestV3` / `JobRecordHostHooks` / `JobCapabilitiesV3` / `JobAskBatchRequestV3` /
-`JobAskBatchValueV3` surface, through `@rig-c/review/job-host`. The consumer also
-proves that `JobCapabilitiesV3` carries `askBatch: true`. In `JobCapabilitiesV3`,
-`recordPublication`, `recordActSchema` and `askBatch` describe the host rather
-than the current head: `ask-batch` applies only to a record-retained head
-publication and a package head refuses `JOB_REQUEST_INVALID`, so a consumer
-checks the publication's mode as well as the flag.
+`JobFetchActRequestV3` / `JobRecordHostHooks` / `JobCapabilitiesV3` surface
+through `@rig-c/review/job-host`. In `JobCapabilitiesV3`, `recordPublication`,
+`recordActSchema` and `progress` describe the host. In 5.0.0 the installed
+consumer check verifies that this type omits `askBatch`.
 The #987 contract tests cover the progress capability and the owner page stream
 against an attached publisher sharing the persisted job.
 TypeScript checks the installed consumer and the runtime checks the full owner

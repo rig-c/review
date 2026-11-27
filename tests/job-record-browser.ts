@@ -188,10 +188,11 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
         subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
       }),
     });
-    assert.equal(picksRes.status, 409);
+    assert.equal(picksRes.status, 400);
     const askOpt = (await picksRes.json()) as JobApiResponseV3;
     if (askOpt.ok) throw new Error('Preflight option-set picks ask unexpectedly succeeded');
-    assert.equal(askOpt.error.code, 'JOB_ASK_INVALID');
+    assert.equal(askOpt.error.code, 'JOB_REQUEST_INVALID');
+    assert.equal(askOpt.error.message, 'Unknown job verb: ask');
 
     const pubPlan = await call({
       verb: 'publish',
@@ -201,7 +202,7 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
       freeze: { kind: 'producer-held', holdId: 'preflight-hold-plan', record: { path: 'project.json', sha256: projectSha } },
     });
     if (pubPlan.verb !== 'publish' || !pubPlan.ok) throw new Error('Preflight plan publish failed');
-    // #1229: the declared checkpoint subject parses on publish, while a fresh checkpoint ask refuses JOB_ASK_INVALID.
+    // #1229: the declared checkpoint subject parses on publish, while a fresh checkpoint ask refuses JOB_REQUEST_INVALID.
     const cpRes = await fetch(`${host!.origin}/jobs/${host!.session.jobId}/api`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -216,12 +217,13 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
         subject: { kind: 'checkpoint', checkpointId: 'seethrough' },
       }),
     });
-    assert.equal(cpRes.status, 409);
+    assert.equal(cpRes.status, 400);
     const askCp = (await cpRes.json()) as JobApiResponseV3;
     assert.equal(askCp.schema, JOB_API_V3_SCHEMA);
     assert.equal(askCp.ok, false);
     if (askCp.ok) throw new Error('Preflight checkpoint ask unexpectedly succeeded');
-    assert.equal(askCp.error.code, 'JOB_ASK_INVALID');
+    assert.equal(askCp.error.code, 'JOB_REQUEST_INVALID');
+    assert.equal(askCp.error.message, 'Unknown job verb: ask');
     const signoffRes = await fetch(`${host!.origin}/jobs/${host!.session.jobId}/api`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -236,12 +238,13 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
         subject: { kind: 'signoff', stage: 'rigging-interview' },
       }),
     });
-    assert.equal(signoffRes.status, 409);
+    assert.equal(signoffRes.status, 400);
     const askSignoff = (await signoffRes.json()) as JobApiResponseV3;
     assert.equal(askSignoff.schema, JOB_API_V3_SCHEMA);
     assert.equal(askSignoff.ok, false);
     if (askSignoff.ok) throw new Error('Preflight signoff ask unexpectedly succeeded');
-    assert.equal(askSignoff.error.code, 'JOB_ASK_INVALID');
+    assert.equal(askSignoff.error.code, 'JOB_REQUEST_INVALID');
+    assert.equal(askSignoff.error.message, 'Unknown job verb: ask');
     const reopenRes = await fetch(`${host!.origin}/jobs/${host!.session.jobId}/api`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -256,12 +259,13 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
         subject: { kind: 'reopen', stage: 'plan-approved' },
       }),
     });
-    assert.equal(reopenRes.status, 409);
+    assert.equal(reopenRes.status, 400);
     const askReopen = (await reopenRes.json()) as JobApiResponseV3;
     assert.equal(askReopen.schema, JOB_API_V3_SCHEMA);
     assert.equal(askReopen.ok, false);
     if (askReopen.ok) throw new Error('Preflight reopen ask unexpectedly succeeded');
-    assert.equal(askReopen.error.code, 'JOB_ASK_INVALID');
+    assert.equal(askReopen.error.code, 'JOB_REQUEST_INVALID');
+    assert.equal(askReopen.error.message, 'Unknown job verb: ask');
   } finally {
     try {
       host?.stop();
@@ -500,11 +504,12 @@ try {
       subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
     }),
   });
-  assert.equal(askOptRes.status, 409, '#1230: fresh interview-picks ask returns HTTP 409');
+  assert.equal(askOptRes.status, 400, '#1230: fresh interview-picks ask returns HTTP 400');
   const askOpt = (await askOptRes.json()) as JobApiResponseV3;
   assert.equal(askOpt.ok, false);
   if (askOpt.ok) throw new Error('Expected interview-picks ask to be refused');
-  assert.equal(askOpt.error.code, 'JOB_ASK_INVALID');
+  assert.equal(askOpt.error.code, 'JOB_REQUEST_INVALID');
+  assert.equal(askOpt.error.message, 'Unknown job verb: ask');
 
   await wait(
     `document.body.dataset.ready==='true' &&
@@ -669,7 +674,7 @@ try {
   const planPublication = pubPlan.value as JobPublicationV3;
   assert.equal(planPublication.source.subject, 'plan');
 
-  // #1229: fresh checkpoint asks refuse JOB_ASK_INVALID; the plan record renders in comment mode without a checkpoint form,
+  // #1229: fresh checkpoint asks refuse JOB_REQUEST_INVALID; the plan record renders in comment mode without a checkpoint form,
   // while historical checkpoint acts remain readable via consumer fetch-act and parseRecordAct.
   const askCpRes = await fetch(`${recordHost.origin}/jobs/${recordHost.session.jobId}/api`, {
     method: 'POST',
@@ -790,18 +795,21 @@ try {
   assert.equal(planDom.retiredRecordDomCount, 0, '#1229: retired #job-record-asks and #workspace-pending-record-ask are absent');
   assert.equal(planDom.reopenButtonCount, 0, 'Bar 1: plan publication carrying reopen subjects renders no reopen button');
   assert.equal(planDom.signoffButtonCount, 0, '#1228: plan publication carrying signoff subjects renders no signoff button');
-  assert.equal(askCpRes.status, 409, '#1229: new checkpoint ask returns HTTP 409');
+  assert.equal(askCpRes.status, 400, '#1229: new checkpoint ask returns HTTP 400');
   assert.equal(askCp.ok, false);
   if (askCp.ok) throw new Error('Expected checkpoint ask to be refused');
-  assert.equal(askCp.error.code, 'JOB_ASK_INVALID');
-  assert.equal(askSignoffRes.status, 409, '#1227: new signoff ask returns HTTP 409');
+  assert.equal(askCp.error.code, 'JOB_REQUEST_INVALID');
+  assert.equal(askCp.error.message, 'Unknown job verb: ask');
+  assert.equal(askSignoffRes.status, 400, '#1227: new signoff ask returns HTTP 400');
   assert.equal(askSignoff.ok, false);
   if (askSignoff.ok) throw new Error('Expected signoff ask to be refused');
-  assert.equal(askSignoff.error.code, 'JOB_ASK_INVALID');
-  assert.equal(askReopenRes.status, 409, 'Bar 2: new reopen ask returns HTTP 409');
+  assert.equal(askSignoff.error.code, 'JOB_REQUEST_INVALID');
+  assert.equal(askSignoff.error.message, 'Unknown job verb: ask');
+  assert.equal(askReopenRes.status, 400, 'Bar 2: new reopen ask returns HTTP 400');
   assert.equal(askReopen.ok, false);
   if (askReopen.ok) throw new Error('Expected reopen ask to be refused');
-  assert.equal(askReopen.error.code, 'JOB_ASK_INVALID');
+  assert.equal(askReopen.error.code, 'JOB_REQUEST_INVALID');
+  assert.equal(askReopen.error.message, 'Unknown job verb: ask');
   await runRecordBrowserPreflightSetupCheck();
   const expectedCpStep = planSteps.find(step => step.id === 'seethrough');
   assert.ok(expectedCpStep, 'declared seethrough step exists in planSteps');

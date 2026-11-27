@@ -450,7 +450,8 @@ try{
    // #1227 / #1229: fresh signoff, checkpoint and verdict asks refuse while the same publication remains open for comments.
    for(const retiredSubject of [{kind:'signoff',stage:'plan-approved'},{kind:'checkpoint',checkpointId:'step-one'},verdictSubject] as const){
     const refused=await (await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'ask',expectedGeneration:fixture.host.session.status().generation,idempotencyKey:randomUUID(),publicationId:publication.publicationId,subject:retiredSubject})).json();
-    assert.equal(refused.ok,false,JSON.stringify(refused));assert.equal(refused.error.code,'JOB_ASK_INVALID');
+    assert.equal(refused.ok,false,JSON.stringify(refused));assert.equal(refused.error.code,'JOB_REQUEST_INVALID');
+    assert.equal(refused.error.message, 'Unknown job verb: ask');
    }
    const before=await jobInputHashes(fixture.input.root),url=new URL(fixture.host.ownerUrl);url.searchParams.set('lang',language);
    const displayWatch=mixedDisplay=observeMixedDisplay(url),{publicationId,source:{sourceHash}}=publication;

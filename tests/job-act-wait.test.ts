@@ -4,7 +4,7 @@ import {jobFixture} from './helpers/job-api-fixture.ts';
 import {attachedPair as pair, recordAttachedPair} from './helpers/job-attach-fixture.ts';
 import {rm} from 'node:fs/promises';
 import {jobCommand} from '../src/job-cli.ts';
-import {JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA} from '../src/job-contract.ts';
+import {JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_RECORD_ACT_KINDS} from '../src/job-contract.ts';
 
 // Every UI submission here is an explicitly synthetic test fixture. No real
 // owner's review or producer acceptance is represented by these acts.
@@ -175,14 +175,123 @@ test('#1005 the waiter refuses unbounded deadlines before any request and surfac
     .rejects.toMatchObject({code: 'JOB_CURSOR_INVALID'});
 });
 
-// Driven from the contract constant: a record kind added there without a fixture case fails here.
-// Fresh reopen (#989), signoff (#1227), checkpoint (#1229) and interview-picks (#1230) asks are refused;
-// old acts still parse but no live record ask/act can be committed.
-// #1235: the comment-only act@10 runs the same record attachment path.
-const refusedRecordKinds: readonly string[] = ['reopen', 'signoff', 'checkpoint', 'interview-picks'];
-for (const kind of [...JOB_RECORD_ACT_KINDS.filter(kind => !refusedRecordKinds.includes(kind)), 'comments' as const]) {
-  test(`#1005 a record-and-package attachment resolves a live-committed ${kind} act`, async () => {
-    const {attached, commit, cursor} = await recordAttachedPair(scratches, hosts, kind);
+test('#1005 a display receipt write and a refused save neither wake the waiter nor repeat next in one window', async () => {
+  const {attached, display, act, commit, cursor} = await attachedPair();
+  const {host, requests} = counted(attached);
+  const started = performance.now();
+  const waiting = waitForJobAct(host, {after: cursor, deadlineMs: 1200});
+  await Bun.sleep(100);
+  await display('page-two');
+  const refused = await commit({...act, displayedNonce: '0'.repeat(64), submissionId: 'synthetic-refused'});
+  expect(refused.ok).toBe(false);
+  const outcome = await waiting;
+  expect(performance.now() - started).toBeGreaterThanOrEqual(1150);
+  // The one window either was still open at the deadline or ended empty just before it.
+  expect(outcome.kind === 'timeout' && outcome.code === 'JOB_NEXT_TIMEOUT' && outcome.cursor === cursor).toBe(true);
+  if (outcome.kind === 'timeout' && outcome.next) expect(outcome.next).toMatchObject({events: [], cursor, status: 'timeout'});
+  // The deadline is inside one 30-second server window: exactly one next went out.
+  expect(requests).toHaveLength(1);
+});
+
+test('#1005 a deadline with no write sends one next and names JOB_NEXT_TIMEOUT', async () => {
+  const {attached, cursor} = await attachedPair();
+  const {host, requests} = counted(attached);
+  const outcome = await waitForJobAct(host, {after: cursor, deadlineMs: 300});
+  expect(outcome.kind).toBe('timeout');
+  if (outcome.kind === 'timeout') {
+    expect(outcome.code).toBe('JOB_NEXT_TIMEOUT');
+    expect(outcome.cursor).toBe(cursor);
+  }
+  expect(requests).toHaveLength(1);
+});
+
+test('#1005 an empty window ending under a millisecond before the deadline sends no zero-wait repeat', async () => {
+  const {attached, cursor} = await attachedPair();
+  let clock = 1000;
+  const now = spyOn(performance, 'now').mockImplementation(() => clock);
+  const waits: number[] = [];
+  const host: JobOwnerHost = {...attached, ports: {...attached.ports, async handleJobApi(request) {
+    const body = JSON.parse(await request.text());
+    waits.push(body.waitMs);
+    // The first server window has elapsed: half a millisecond of the deadline is left, then it passes.
+    if (waits.length === 1) {
+      clock = 1299.5;
+      setTimeout(() => {clock = 1300;}, 50);
+    }
+    // A zero-wait spin can starve that timer, so a repeat also ends the deadline.
+    if (waits.length > 3) clock = 1300;
+    return attached.ports.handleJobApi(new Request(request.url, {method: 'POST', headers: request.headers,
+      body: JSON.stringify({...body, waitMs: 0})}));
+  }}};
+  try {
+    const outcome = await waitForJobAct(host, {after: cursor, deadlineMs: 300});
+    expect(outcome).toMatchObject({kind: 'timeout', code: 'JOB_NEXT_TIMEOUT', cursor,
+      next: {events: [], cursor, status: 'timeout'}});
+    expect(waits).toEqual([300]);
+  } finally {now.mockRestore();}
+});
+
+test('#1005 abort cancels the wait with its reason and leaves no timer behind', async () => {
+  const {attached, cursor} = await attachedPair();
+  // Count only the wait's own timers: the waiter loop's (src/job-cli.ts) and those the attached
+  // session's next arms for this request. The live owner host's closure watcher (startJobHost's
+  // session.subscribe loop) re-arms its own 30000 ms window and 250 ms poll when its poll sees the
+  // fixture's display-receipt write, up to 250 ms later. Those timers belong to the owner host until
+  // it stops, and counting them made this bar flaky on #1012.
+  const timers = new Map<unknown, string>();
+  const session = attached.session as unknown as {next: (...args: unknown[]) => Promise<unknown>};
+  const realNext = session.next;
+  let inAttachedNext = false;
+  session.next = function (this: unknown, ...args: unknown[]) {
+    inAttachedNext = true;
+    try { return realNext.apply(this, args); } finally { inAttachedNext = false; }
+  };
+  const owned = () => inAttachedNext || /src\/job-cli\.ts/.test(new Error().stack ?? '');
+  const realSet = globalThis.setTimeout, realClear = globalThis.clearTimeout;
+  const realInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const track = (id: unknown, kind: string) => { if (owned()) timers.set(id, kind); return id; };
+  globalThis.setTimeout = ((handler: () => void, ms?: number) => {
+    const id: ReturnType<typeof setTimeout> = realSet(() => {timers.delete(id); handler();}, ms);
+    return track(id, 'timeout ' + ms);
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((id: ReturnType<typeof setTimeout>) => {timers.delete(id); realClear(id);}) as typeof clearTimeout;
+  globalThis.setInterval = ((handler: () => void, ms?: number) => track(realInterval(handler, ms), 'interval ' + ms)) as typeof setInterval;
+  globalThis.clearInterval = ((id: ReturnType<typeof setInterval>) => {timers.delete(id); realClearInterval(id);}) as typeof clearInterval;
+  try {
+    const controller = new AbortController();
+    const waiting = waitForJobAct(attached, {after: cursor, deadlineMs: 5000, signal: controller.signal});
+    await Bun.sleep(100);
+    // The waiter's 5000 ms deadline, plus the attached next's window (the remaining budget) and its 250 ms revision poll.
+    const live = [...timers.values()];
+    expect(live).toHaveLength(3);
+    expect(live).toContain('timeout 5000');
+    expect(live).toContain('interval 250');
+    controller.abort(new Error('synthetic explicit cancellation'));
+    await expect(waiting).rejects.toThrow('synthetic explicit cancellation');
+    // The waiter clears its deadline in its finally, and the aborted request signal clears the
+    // attached next's window and poll before the rejection is observed: no drain is needed.
+    expect([...timers.values()]).toEqual([]);
+  } finally {
+    session.next = realNext;
+    globalThis.setTimeout = realSet; globalThis.clearTimeout = realClear;
+    globalThis.setInterval = realInterval; globalThis.clearInterval = realClearInterval;
+  }
+});
+
+test('#1005 the waiter refuses unbounded deadlines before any request and surfaces a refused next by code', async () => {
+  const {attached} = await attachedPair();
+  const {host, requests} = counted(attached);
+  for (const deadlineMs of [0, -1, 0.5, 600_001, Number.POSITIVE_INFINITY, Number.NaN]) {
+    await expect(waitForJobAct(host, {after: null, deadlineMs})).rejects.toThrow('JOB_REQUEST_INVALID');
+  }
+  expect(requests).toHaveLength(0);
+  await expect(waitForJobAct(host, {after: '00000000-0000-4000-8000-000000000000', deadlineMs: 100}))
+    .rejects.toMatchObject({code: 'JOB_CURSOR_INVALID'});
+});
+
+test('#1005 a record-and-package attachment resolves a live-committed comment act', async () => {
+    expect(JOB_RECORD_ACT_KINDS).toEqual(['interview-picks', 'checkpoint', 'signoff', 'reopen']);
+    const {attached, commit, cursor} = await recordAttachedPair(scratches, hosts);
     const {host, requests} = counted(attached);
     const sent: string[] = [];
     const probe: JobOwnerHost = {...host, ports: {...host.ports, async handleJobApi(request) {
@@ -200,15 +309,14 @@ for (const kind of [...JOB_RECORD_ACT_KINDS.filter(kind => !refusedRecordKinds.i
     if (outcome.kind !== 'act') throw new Error('unreachable');
     const row = outcome.next.events[0] as {type: string; act: {schema: string; kind: string; actId: string}};
     expect(row.type).toBe('act');
-    expect(row.act).toMatchObject({schema: kind === 'comments' ? JOB_COMMENT_ONLY_ACT_SCHEMA : JOB_RECORD_ACT_SCHEMA,
-      kind, actId: saved.value.actId});
+    expect(row.act).toMatchObject({schema: JOB_COMMENT_ONLY_ACT_SCHEMA,
+      kind: 'comments', actId: saved.value.actId});
     expect(sent).toEqual(['rig-review/job-api@3']);
     expect(requests).toHaveLength(1);
-  });
-}
+});
 
 test('#1005 a display receipt on a record host does not wake the attached waiter', async () => {
-  const {attached, display, cursor} = await recordAttachedPair(scratches, hosts, 'comments');
+  const {attached, display, cursor} = await recordAttachedPair(scratches, hosts);
   const {host, requests} = counted(attached);
   const waiting = waitForJobAct(host, {after: cursor, deadlineMs: 1000});
   await Bun.sleep(100);
@@ -220,7 +328,7 @@ test('#1005 a display receipt on a record host does not wake the attached waiter
 
 test('#1005 a malformed record act and an unknown act schema keep their JOB_ACT_INVALID refusal', async () => {
   // #1235: the record sample act is the comment-only act@10.
-  const {attached, commit, cursor, agentCall} = await recordAttachedPair(scratches, hosts, 'comments');
+  const {attached, commit, cursor, agentCall} = await recordAttachedPair(scratches, hosts);
   expect((await commit()).ok).toBe(true);
   const real = await agentCall(attached, {verb: 'next', after: cursor, waitMs: 0});
   expect(real.value.events[0].act.schema).toBe(JOB_COMMENT_ONLY_ACT_SCHEMA);
@@ -243,7 +351,7 @@ test('#1005 a malformed record act and an unknown act schema keep their JOB_ACT_
 });
 
 test('#1005 job next --until act returns a finalized record act from a record-and-package host', async () => {
-  const {attached, commit, cursor} = await recordAttachedPair(scratches, hosts, 'comments');
+  const {attached, commit, cursor} = await recordAttachedPair(scratches, hosts);
   expect((await commit()).ok).toBe(true);
   const out: string[] = [];
   const fetcher = (async (url: string | URL | Request, init?: RequestInit) =>

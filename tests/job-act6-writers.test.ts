@@ -98,10 +98,10 @@ test('fresh checkpoint and signoff asks/acts refuse while historical act@6 check
   const f = await fixture(), publication = await f.publish();
   const refusedCheckpointAsk = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
     idempotencyKey: 'act6-checkpoint-ask', publicationId: publication.publicationId, subject: {kind: 'checkpoint', checkpointId: 'step-one'}})).json();
-  expect(refusedCheckpointAsk).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  expect(refusedCheckpointAsk).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
   const refusedSignoffAsk = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
     idempotencyKey: 'act6-signoff-ask', publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'plan-approved'}})).json();
-  expect(refusedSignoffAsk).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  expect(refusedSignoffAsk).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
   const page = await f.display(publication);
   const checkpoint = seedHistoricalCheckpointAct(f.session, {...page,
     expectedGeneration: f.session.status().generation, submissionId: 'act6-checkpoint', checkpointId: 'step-one',
@@ -273,7 +273,7 @@ test('#1136 / #1230 a historical picks act keeps Feedback, PartsIssue and anchor
   const subject = {kind: 'interview-picks', questionId: question.set.question, setId: question.set.id};
   const asked = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
     idempotencyKey: 'refused-picks', publicationId: publication.publicationId, subject})).json();
-  expect(asked).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  expect(asked).toMatchObject({ok: false, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
   const page = await f.display(publication);
   const [vendoredIssue, vendoredNote] = vendored.cases.partsIssuesAndNote.comments;
   const camera = {zoom: 1, center: {x: 0, y: 0}, viewport: {width: 100, height: 100}};

@@ -518,7 +518,7 @@ Usage: rig-review session open <root>
        rig-review session close <job-url> --generation <n> --key <id> --reason <words>
 ```
 
-`rig-review session --help` prints this usage (`src/entry.ts` dispatches only the `session` namespace to the live-job CLI and delegates all other argv and exit behavior to `src/cli.ts`). `rig-review session open <root>` requires `RIG_REVIEW_JOB_REVIEWER_ID` and `RIG_REVIEW_JOB_REVIEWER_ROLE` (`owner` or `delegate`; missing or invalid values refuse with `JOB_AUTHORITY_REFUSED`), accepts optional `RIG_REVIEW_JOB_PORT` (`0..65535`), and optionally writes one private `{jobId, origin, agentCapability}` JSON line to an inherited writable descriptor `>= 3` named by `RIG_REVIEW_JOB_AGENT_FD` before printing the standing owner URL on stdout. A standing job survives zero open owner tabs; a later `session open` on the same root reuses the active job/link and exits, while the initial listener stays attached until `SIGINT`/`SIGTERM` or until an explicit `close` event ends the job incarnation. The standalone owner HTML root (`/jobs/<jobId>/`) accepts the default or literal `?lang=en` or `?lang=ko` and refuses other or duplicate queries (`JOB_REQUEST_INVALID`). Agent verbs authenticate with `RIG_REVIEW_JOB_AGENT_CAPABILITY` (`Authorization: Bearer …`) against `<origin>/jobs/<jobId>`. Ordinary non-Create package launch, publish, ask, poll and explicit close example (capabilities stay in private descriptors/env and are never printed in logs or reports):
+`rig-review session --help` prints this usage (`src/entry.ts` dispatches only the `session` namespace to the live-job CLI and delegates all other argv and exit behavior to `src/cli.ts`). `rig-review session open <root>` requires `RIG_REVIEW_JOB_REVIEWER_ID` and `RIG_REVIEW_JOB_REVIEWER_ROLE` (`owner` or `delegate`; missing or invalid values refuse with `JOB_AUTHORITY_REFUSED`), accepts optional `RIG_REVIEW_JOB_PORT` (`0..65535`), and optionally writes one private `{jobId, origin, agentCapability}` JSON line to an inherited writable descriptor `>= 3` named by `RIG_REVIEW_JOB_AGENT_FD` before printing the standing owner URL on stdout. A standing job survives zero open owner tabs; a later `session open` on the same root reuses the active job/link and exits, while the initial listener stays attached until `SIGINT`/`SIGTERM` or until an explicit `close` event ends the job incarnation. The standalone owner HTML root (`/jobs/<jobId>/`) accepts the default or literal `?lang=en` or `?lang=ko` and refuses other or duplicate queries (`JOB_REQUEST_INVALID`). Agent verbs authenticate with `RIG_REVIEW_JOB_AGENT_CAPABILITY` (`Authorization: Bearer …`) against `<origin>/jobs/<jobId>`. Ordinary non-Create package launch, publish, poll and explicit close example (capabilities stay in private descriptors/env and are never printed in logs or reports):
 
 ```sh
 # Terminal 1 — create a private bootstrap directory (umask 077) and keep the new listener in the foreground:
@@ -532,9 +532,7 @@ RIG_REVIEW_JOB_REVIEWER_ID=owner-1 \
 rig-review session publish http://127.0.0.1:<port>/jobs/<job-id> \
   --generation 0 --key pub-1 --result package --freeze-hold hold-1 \
   --selector '{"kind":"rig","version":1}'
-rig-review session ask http://127.0.0.1:<port>/jobs/<job-id> \
-  --generation 1 --key ask-1 --publication <publication-id> \
-  --subject '{"kind":"review-verdict","stage":"rig-review"}'
+# The owner opens the standing link and sends comments on the published rig.
 rig-review session next http://127.0.0.1:<port>/jobs/<job-id> --wait-ms 5000
 # Pass the current generation returned by next (human UI acts advance generation):
 rig-review session close http://127.0.0.1:<port>/jobs/<job-id> \

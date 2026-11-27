@@ -66,8 +66,13 @@ test('invalid opt-in flags, duplicates and conflicting verbs fail before HTTP', 
   let requests = 0;
   const opts = options(async () => {requests++; return Response.json(empty());});
   for (const variant of variants) await expect(jobCommand(['next', locator, ...variant], opts)).rejects.toThrow('JOB_REQUEST_INVALID');
-  for (const verb of ['ask', 'publish', 'close']) {
+  for (const verb of ['publish', 'close']) {
     await expect(jobCommand([verb, locator, '--until', 'act', '--wait-ms', '10'], opts)).rejects.toThrow('JOB_REQUEST_INVALID');
+  }
+  for (const verb of ['ask', 'ask-batch']) {
+    await expect(jobCommand([verb, locator, '--until', 'act', '--wait-ms', '10'], opts)).rejects.toMatchObject({
+      code: 'JOB_REQUEST_INVALID', message: 'Unknown session subcommand: ' + verb,
+    });
   }
   expect(requests).toBe(0);
 });

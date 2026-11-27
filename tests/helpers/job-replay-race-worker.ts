@@ -1,15 +1,14 @@
 import { readSync, writeSync } from 'node:fs';
-import type { JobAskRequest, JobCommentUISubmission, JobPublishRequest, JobUISubmission } from '../../src/job-contract.ts';
+import type { JobCommentUISubmission, JobPublishRequest, JobUISubmission } from '../../src/job-contract.ts';
 import { JobSession, type JobSessionOptions } from '../../src/job-session.ts';
 import type { JobPublishedContext } from '../../src/job-source.ts';
 import { JobError, JobStore } from '../../src/job-store.ts';
-import { seedHistoricalVerdictAsk } from './historical-verdict-ask.ts';
 
 export type ReplayRaceInput = {
   options: Pick<JobSessionOptions, 'root' | 'stateDir' | 'fingerprint' | 'reviewer'>;
   context: JobPublishedContext;
   gated: boolean;
-} & ({ kind: 'agent'; request: JobPublishRequest | JobAskRequest; historicalAsk?: true } |
+} & ({ kind: 'agent'; request: JobPublishRequest } |
   { kind: 'ui'; request: JobUISubmission | JobCommentUISubmission });
 
 export interface ReplayRaceMessage {
@@ -53,16 +52,9 @@ if (import.meta.main) {
     return update.apply(this, args);
   };
   try {
-    let value: unknown;
-    if (input.kind === 'agent' && input.historicalAsk) {
-      const request = input.request;
-      if (request.verb !== 'ask' || request.subject.kind !== 'review-verdict') throw new Error('REPLAY_RACE_VERDICT_REQUIRED');
-      value = seedHistoricalVerdictAsk(session, request.publicationId, request.subject, request.idempotencyKey);
-    } else {
-      value = await (input.kind === 'agent'
-        ? session.execute(input.request, new AbortController().signal)
-        : session.commitUIAct(input.request));
-    }
+    const value = await (input.kind === 'agent'
+      ? session.execute(input.request, new AbortController().signal)
+      : session.commitUIAct(input.request));
     emit({ event: 'result', outcome: { value }, updateCalls, readPublishedCalls, snapshotCalls });
   } catch (error) {
     if (!(error instanceof JobError)) throw error;
