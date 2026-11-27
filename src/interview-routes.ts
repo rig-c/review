@@ -1,5 +1,5 @@
 import { accessGate } from './open-protocol.ts';
-import { boundBytes, readProject } from './interview-project.ts';
+import { boundBytes, interviewSetWithoutContext, readProject } from './interview-project.ts';
 
 export const interviewHeaders = {
   'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff',
@@ -38,7 +38,7 @@ export function interviewRoutes(root: string, capability: string,
       if (req.method === 'GET' && url.pathname === '/api/interview') {
         const validated = await current();
         return json({...(joined && (joined.version!==undefined||joined.draftId!==undefined) ? {binding:{projectHash:opened.hash, sourceHash:joined.sourceHash,  ...(joined.draftId===undefined?{version:joined.version}:{draftId:joined.draftId})}} : {}), historical:validated.historical, diagnostics:validated.diagnostics, questions:validated.questions.map(question => ({
-          ...question,
+          ...question, set:interviewSetWithoutContext(question.set),
           images:question.images.map(({name}, index) => ({name, url:'/api/interview/image/' + question.ref.sha256 + '/' + index})),
         }))});
       }

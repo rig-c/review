@@ -962,7 +962,7 @@ test('#606 closed metadata grammar rejects malformed value/issue entries while r
   ]) {const bad=structuredClone(good);mutate(bad);expect(()=>parseJobPlanTextProjection(bad)).toThrow('PLAN_TEXT_METADATA_INVALID');}
 });
 
-test('#813 publication image projection excludes unrelated option sets without deleting retained history', async () => {
+test('#813 package projection excludes pending and unrelated option-set images and retains history', async () => {
   const f = await fixture();
   await joinedVerdictFixture(f.root, '2-rigging-answers');
   const questions = readProject(f.root).questions;
@@ -982,7 +982,8 @@ test('#813 publication image projection excludes unrelated option sets without d
     expect(body.questions).toHaveLength(questions.length);
     for (const question of body.questions) {
       const original = questions.find(item => item.set.id === question.set.id)!;
-      expect(question.images).toHaveLength(includeInterview && original.set.id === pending.set.id ? original.images.length : 0);
+      expect(question.images).toHaveLength(0);
+      if (original.editable) expect(question.hasParts).toBe(false);
       expect(question.answer).toEqual(original.answer);
     }
     expect(JSON.stringify(retained.questions)).toBe(before);
