@@ -17,7 +17,7 @@ const out=Bun.argv[Bun.argv.indexOf('--out')+1]??'artifacts/act-bar';await mkdir
 const observations:unknown[]=[],failures:string[]=[];
 const flashOnly=Bun.argv.includes('--flash-only');
 const saveRetryOnly=Bun.argv.includes('--save-retry-only');
-type SaveRetrySnapshot={stateKind:string;stateText:string;stateTitle:string;messageText:string;messageError:boolean;messageVisible:boolean;saveDisabled:boolean};
+type SaveRetrySnapshot={stateKind:string;stateText:string;stateTitle:string;messageText:string;messageError:boolean;messageVisible:boolean;footerText:string;saveDisabled:boolean};
 const sampleActBar=`(()=>{
  const samples=[];window.__actFlashSamples=samples;
  const visible=n=>!!n&&!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden'&&!n.closest('dialog:not([open])');
@@ -101,6 +101,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   assert.equal(state.question,catalog["We're looking at the work together. Leave your thoughts as comments."]);
   assert.equal(state.legacyVisible,false);
   assert.notEqual(state.whiteSpace,'nowrap');assert.notEqual(state.overflow,'ellipsis');
+  if(mode==='standalone')assert.equal(await page.evaluate(`document.getElementById('send-comments').disabled`),true);
   if(flashOnly||mode==='standalone')continue;
   await writeFile(join(out,`${mode}-${lang}-pending.png`),await page.screenshot());
   if(mode==='rig'){
@@ -136,7 +137,10 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Retry fixture comment';form.requestSubmit();})()`);
    await until(page,`!document.querySelector('.stage-comment-composer')&&!document.getElementById('send-comments').disabled`);
    if(mode==='rig'||mode==='parts'){
-    const readSaveState=`(()=>{const s=document.getElementById('review-draft-state'),m=document.getElementById('review-message'),v=!!m&&!!m.getClientRects().length&&getComputedStyle(m).display!=='none'&&getComputedStyle(m).visibility!=='hidden';return {stateKind:s?.dataset.saveState??'',stateText:s?.textContent??'',stateTitle:s?.getAttribute('title')??'',messageText:m?.textContent??'',messageError:m?.classList.contains('error')??false,messageVisible:v,saveDisabled:document.getElementById('send-comments')?.disabled??false};})()`;
+    const readSaveState=`(()=>{const s=document.getElementById('review-draft-state'),m=document.getElementById('review-message'),v=!!m&&!!m.getClientRects().length&&getComputedStyle(m).display!=='none'&&getComputedStyle(m).visibility!=='hidden';return {stateKind:s?.dataset.saveState??'',stateText:s?.textContent??'',stateTitle:s?.getAttribute('title')??'',messageText:m?.textContent??'',messageError:m?.classList.contains('error')??false,messageVisible:v,footerText:document.getElementById('message')?.textContent??'',saveDisabled:document.getElementById('send-comments')?.disabled??false};})()`;
+    const clearedRefusal=(attempt:SaveRetrySnapshot,refusal:SaveRetrySnapshot)=>
+     attempt.stateTitle===''&&!attempt.messageError&&!attempt.messageVisible&&
+     attempt.messageText!==refusal.messageText&&(!attempt.messageText||attempt.messageText===attempt.footerText);
     await control('Fetch.enable',{patterns:[{urlPattern:'*ui/acts*',requestStage:'Request'}]});
     const waitHeldAct=async()=>{const end=Date.now()+20000;while(Date.now()<end){if(heldActRequest)return heldActRequest;await Bun.sleep(50);}throw Error('ACT_BAR_WAIT: heldActRequest');};
     const fulfillRefusal=async(requestId:string,code:string,status:number)=>{
@@ -160,7 +164,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
     const retrySaving=await page.evaluate<SaveRetrySnapshot>(readSaveState);
     if(retrySaving.stateKind!=='saving'||retrySaving.stateText!==expectedSaving)
      failures.push(`${mode}/${lang} retry saving expected ${expectedSaving}, got ${retrySaving.stateKind}:${retrySaving.stateText}`);
-    if(retrySaving.stateTitle!==''||retrySaving.messageError||retrySaving.messageText!==''||retrySaving.messageVisible)
+    if(!clearedRefusal(retrySaving,firstFailed))
      failures.push(`${mode}/${lang} stale failure remained during retry: ${JSON.stringify(retrySaving)}`);
     await fulfillRefusal(secondReq,'JOB_BODY_LIMIT',413);
     await until(page,`!document.getElementById('send-comments').disabled&&document.getElementById('review-draft-state')?.dataset.saveState==='failed'`);
@@ -170,14 +174,18 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
     await click(page,'#send-comments');
     const thirdReq=await waitHeldAct();
     const finalSaving=await page.evaluate<SaveRetrySnapshot>(readSaveState);
-    if(finalSaving.stateKind!=='saving'||finalSaving.stateText!==expectedSaving||finalSaving.messageError||finalSaving.messageText!=='')
+    if(finalSaving.stateKind!=='saving'||finalSaving.stateText!==expectedSaving||!clearedRefusal(finalSaving,secondFailed))
      failures.push(`${mode}/${lang} final retry saving mismatch: ${JSON.stringify(finalSaving)}`);
     heldActRequest=undefined;
     await control('Fetch.continueRequest',{requestId:thirdReq});
    }else{
     await click(page,'#send-comments');
    }
-   await until(page,`document.querySelector('#send-comments').hidden&&document.querySelector('#workspace-pending-ask').hidden`);
+   await until(page,`(()=>{
+    const send=document.getElementById('send-comments'),state=document.getElementById('review-draft-state');
+    return send?.checkVisibility()&&send.disabled&&!document.getElementById('workspace-pending-ask')?.checkVisibility()&&
+     state?.dataset.saveState==='saved'&&state.textContent===${JSON.stringify(catalog['Submitted'])};
+   })()`);
    const done=await page.evaluate<any>(`({question:document.querySelector('#workspace-ask-headline').textContent,primary:[...document.querySelectorAll('#workspace-review-act button.primary')].filter(n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])')).map(n=>n.id)})`);
    // #1226 owner ruling: with no ask the live rig row stays, with the no-ask line and Send comments as its one answer.
    // #1242 owner ruling: the direction, parts and record screens hold the same row.

@@ -120,7 +120,7 @@ async function run(lang: 'en' | 'ko') {
         title:document.getElementById('package-title').textContent,
         rigHash:document.getElementById('provenance-rig').textContent,
         fullRigHash:provenance.reviewedSource?.rig?.sha256??null,sourceHash:provenance.sourceHash,
-        sendDisabled:send.disabled,verdictVisible:['save','request-changes','review-status'].some(id=>visible(document.getElementById(id))),
+        sendDisabled:send.disabled,verdictVisible:['save','request-changes','review-status'].some(id=>{const node=document.getElementById(id);return !!node&&visible(node);}),
         actInHeading:!!act?.closest('.inspector-heading'),actInRow:act?.parentElement?.id==='workspace-act-row',actRowDirect:document.getElementById('workspace-act-row')?.previousElementSibling===document.querySelector('.topbar'),actVisible:!!act&&visible(act),
         actRowHidden:document.getElementById('workspace-act-row').hidden,visibleSaveStates:['dirty','review-draft-state','draft-state'].filter(id=>{const node=document.getElementById(id);return node&&visible(node)&&!!node.textContent.trim();}),
         actGeometry:act?geometry(act):null,inspectorHeight:document.querySelector('.inspector').getBoundingClientRect().height,

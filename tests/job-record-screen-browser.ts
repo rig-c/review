@@ -342,30 +342,40 @@ async function boundRigPictureChecks(){
    const url = new URL(fixture.ownerUrl);
    url.searchParams.set('lang',language);
    const capturedActs: Buffer[] = [];
-   const pageIds: string[] = [];
+   const pageIds = new Set<string>();
+   async function openAcknowledgedPage(label: string) {
+    const start = fixture.fake.acknowledgments.length;
+    await page!.goto(url.href);
+    await waitForRecordComments();
+    // The workspace mounts before the acknowledgment is posted. Bind each navigation to a fresh page receipt.
+    return withDeadline(label,20_000,async signal=>{
+     for (;;) {
+      signal.throwIfAborted();
+      const ack = fixture.fake.acknowledgments.slice(start)
+       .map(({body})=>body as {sourceHash?:string;pageId?:string;publicationId?:string})
+       .find(({pageId})=>pageId&&!pageIds.has(pageId));
+      if (ack?.pageId) {
+       assert.match(ack.pageId,/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+       assert.equal(ack.sourceHash,publication.source.sourceHash);
+       assert.equal(ack.publicationId,publication.publicationId);
+       pageIds.add(ack.pageId);
+       return ack.pageId;
+      }
+      await Bun.sleep(25);
+     }
+    });
+   }
    for (const suppressed of variant === 'bound-rig' ? [false,true] : [false]) {
     const pictured = variant === 'bound-rig' && !suppressed;
     const visit = pictured ? 'with-rig' : 'without-rig';
     const attempt = capturedActs.length;
-    const priorAcknowledgments = fixture.fake.acknowledgments.length;
     await page!.goto('about:blank');
     if (suppressed) fixture.suppressRigPicture();
     await page!.evaluate(`try{localStorage.clear();}catch{}`).catch(()=>{});
-    await page!.goto(url.href);
-    await waitForRecordComments();
+    const receiptLabel = '929 '+variant+' '+language+' '+visit;
+    await openAcknowledgedPage(receiptLabel+' inspection receipt');
     assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
-    await withDeadline('929 '+variant+' '+language+' '+visit+' receipt',20_000,async signal=>{
-     while(fixture.fake.acknowledgments.length===priorAcknowledgments){
-      signal.throwIfAborted();
-      await Bun.sleep(25);
-     }
-    });
     assert.equal(await page!.evaluate<string>('document.documentElement.lang'),language);
-    const ack = fixture.fake.acknowledgments.at(-1)?.body as {sourceHash?:string;pageId?:string;publicationId?:string} | undefined;
-    assert.equal(ack?.sourceHash,publication.source.sourceHash);
-    assert.equal(ack?.publicationId,publication.publicationId);
-    assert.ok(ack?.pageId && !pageIds.includes(ack.pageId),'each visit has a new displayed receipt');
-    pageIds.push(ack.pageId);
     assert.equal(fixture.submissions.length,attempt,'opening did not submit an act');
 
     let paintedPixels = 0;
@@ -406,9 +416,7 @@ async function boundRigPictureChecks(){
 
     await page!.evaluate(`try{localStorage.clear();}catch{}`);
     await page!.goto('about:blank');
-    await page!.goto(url.href);
-    await waitForRecordComments();
-    const currentAck = fixture.fake.acknowledgments.at(-1)?.body as {pageId:string};
+    const currentPageId = await openAcknowledgedPage(receiptLabel+' submission receipt');
     await addGeneralComment(commentText);
 
     const controls = await page!.evaluate<{
@@ -443,9 +451,9 @@ async function boundRigPictureChecks(){
     assert.equal(fixture.files.length,attempt+1);
     const submission = fixture.submissions[attempt]!;
     if (submission.kind !== 'comments') throw new Error('Expected a comments submission');
-    assert.equal(submission.pageId,currentAck.pageId);
+    assert.equal(submission.pageId,currentPageId);
     assert.equal(submission.publicationId,publication.publicationId);
-    assert.equal(submission.displayedNonce,`nonce-${publication.publicationId}-${currentAck.pageId}`);
+    assert.equal(submission.displayedNonce,`nonce-${publication.publicationId}-${currentPageId}`);
     const actPath = fixture.files[attempt]!;
     assert.equal(actPath,fixture.files[0],'the fixture writer uses the same act path on both visits');
     const bytes = await readFile(actPath), act = parseCommentOnlyAct(JSON.parse(bytes.toString('utf8')));
