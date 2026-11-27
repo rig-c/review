@@ -28,7 +28,6 @@ import {
   JOB_RECORD_ACT_SCHEMA as HOST_JOB_RECORD_ACT_SCHEMA,
   JOB_RECORD_READER_ID as HOST_JOB_RECORD_READER_ID,
   parseRecordAct as parseRecordActFromHost,
-  prepareJobRecordAct as prepareJobRecordActFromHost,
   prepareJobRecordSource as prepareJobRecordSourceFromHost,
   startJobHost,
   type JobActV3,
@@ -1213,12 +1212,12 @@ test('#586 reopen subject and rig-review/act@4 contract enforce exact keys, decl
   }
 });
 
-test('#588 @rig-c/review/job-host exports the record-mode constants, types and parser/preparer surface', () => {
+test('#588 @rig-c/review/job-host exports the record-mode constants, types and record readers', () => {
   expect(HOST_JOB_API_V3_SCHEMA).toBe('rig-review/job-api@3');
   expect(HOST_JOB_RECORD_ACT_SCHEMA).toBe('rig-review/act@4');
   expect(HOST_JOB_RECORD_READER_ID).toBe('rig-create/publication-reader/2');
   expect(typeof parseRecordActFromHost).toBe('function');
-  expect(typeof prepareJobRecordActFromHost).toBe('function');
+  expect('prepareJobRecordAct' in publicJobHost).toBe(false);
   expect(typeof prepareJobRecordSourceFromHost).toBe('function');
   expect(publicJobHost.JOB_API_V3_SCHEMA).toBe(JOB_API_V3_SCHEMA);
   expect(publicJobHost.JOB_RECORD_ACT_SCHEMA).toBe(JOB_RECORD_ACT_SCHEMA);

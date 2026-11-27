@@ -17,6 +17,6 @@ export async function interviewOpenFixture(questions:1|2=1){
   project.interview.framing.push({id:'rig_type',pending_options:{path:'evidence/options-second.json',sha256:digest(bytes)}});
   await writeFile(join(root,'project.json'),JSON.stringify(project));
  }
- const inputs={input:root,project:{root,picksDir:'picks'}};
+ const inputs={input:root,project:{root}};
  return {scratch,root,stateDir,project,inputs,close:()=>rm(scratch,{recursive:true,force:true})};
 }

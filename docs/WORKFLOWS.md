@@ -597,16 +597,15 @@ keeps the wait open. See [Public API stability](STABILITY.md#host-bound-act-wait
 
 ## Create choice interview
 
-In the active standing live-job cycle ([Standing live job workflow](#standing-live-job-workflow), [Create #182](https://github.com/rig-c/create/issues/182), [Create #184](https://github.com/rig-c/create/issues/184)), interview choices and parts verdicts use the semantic job API (`interview-picks` and `parts-verdict` acts fetched directly by the Create writer via its private sibling capability). The `--picks-dir`, `--picks-file`, `--parts-verdict-dir` and saved verdict path commands below are preserved as legacy/history one-shot handoff documentation and are bypass findings if used in the active cycle.
+In the [standing live-job cycle](#standing-live-job-workflow), option-set pictures can be discussed through Review comments. Create takes interview answers through its own `rig-create interview-answer` command. Historical `interview-picks` acts and `rig-review/interview-picks@1` files remain readable. See [the historical opening form](STABILITY.md#interview-stage-project-opening) for the former `--picks-dir` workflow.
 
 Open the interview beside its separated parts in the standard inspection host.
 Use the materialized Create review package and designate the exact project and
-rig version. The picks directory must already exist inside the project and be
-separate from its inputs.
+rig version.
 
 ```sh
 rig-review open /path/to/project/derived/review/v2/out \
-  --project /path/to/project --project-version 2 --picks-dir scratch/review-picks
+  --project /path/to/project --project-version 2
 ```
 
 The host checks the recorded version's package
@@ -614,58 +613,47 @@ inventory and pins the project digest and inspected source. A different
 project or version returns `INTERVIEW_SOURCE_MISMATCH`. A changed input
 requires reopening and a project without interview content reports
 `INTERVIEW_UNAVAILABLE`.
-Use **Save explicit picks** to persist pending choices. Historical answers
-remain read-only and opening or saving picks does not sign off any stage.
 
 To show the Direction panel above the stage, add `--post-version <post>`
 to the joined command. The post must explicitly name the selected
 `--project-version` rig and bind an authored direction document. Reuse the
-printed feedback command, including the project, rig, post and picks arguments,
+printed feedback command, including the project, rig and post arguments,
 to export from that session.
 
 ### Open an interview before a draft or review package exists
 
-Create the dedicated picks output directory first, then open the same project
-root in both operand positions:
+Open the same project root in both operand positions:
 
 ```sh
-mkdir -p /path/to/project/scratch/review-picks
 rig-review open /path/to/project \
-  --project /path/to/project --picks-dir scratch/review-picks
+  --project /path/to/project
 ```
 
 This form is limited to the interview stage with no recorded draft and no
 non-null `versions[].review_package`. Versions containing only demo/build
 records are permitted, as is unrelated derived evidence. A `derived/` directory
 is not required. Explicit version/draft selectors never fall back to this form.
-Both roots must resolve to the same project; the dedicated picks directory must
-exist and not overlap an input. Other inspection flags and multiple targets
-are refused for this form. `feedback` and `control` retain their existing syntax.
+Both roots must resolve to the same project. Other inspection flags and multiple
+targets are refused for this form. `feedback` and `control` still require a selector.
 
-The interview opens and closes as a modal over the existing Review workspace.
+The workspace renders the named `INTERVIEW_PICKS_DISABLED` refusal.
 The workspace reports model-dependent sections as `MODEL_UNAVAILABLE` and
 creates no model, review package or package session. Reads preserve project and
 input bytes. Changed project, option or source bytes require reopening, with
-`INTERVIEW_OPTIONS_STALE`. Interview choices and inline Other text use the same list | image | survey
-answer builder as the standing record dialog. There is no interview Note input;
-existing saved or historical notes remain readable as read-only text and are
-carried unchanged. Joined picks omit `note` when absent; job acts retain their
-required string field. Historical records remain readable and the
-picks-file schema is unchanged. The active standing live-job cycle above
-still uses semantic acts and the trusted consumer; this inspection form does
-not authorize an agent to manufacture or carry picks files.
+`INTERVIEW_OPTIONS_STALE`. Historical interview records, including selections,
+inline Other text and notes, remain readable through the existing readers.
 
 ### Open a recorded draft before rig review
 
-In the active standing live-job cycle ([Standing live job workflow](#standing-live-job-workflow), [Create #182](https://github.com/rig-c/create/issues/182), [Create #184](https://github.com/rig-c/create/issues/184)), draft parts and mesh verdicts are submitted as `parts-verdict` acts over the semantic job API and fetched directly by the Create writer. The `--picks-dir`, `--parts-verdict-dir` and `--picks-file` commands below are preserved as legacy/history one-shot handoffs and are bypass findings if used in the active cycle.
+In the active standing live-job cycle ([Standing live job workflow](#standing-live-job-workflow), [Create #182](https://github.com/rig-c/create/issues/182), [Create #184](https://github.com/rig-c/create/issues/184)), draft parts and mesh verdicts are submitted as `parts-verdict` acts over the semantic job API and fetched directly by the Create writer. The `--parts-verdict-dir` command below is preserved as a legacy one-shot handoff. The historical `--picks-file` example applies to existing records only. Using file handoffs in the active cycle is a bypass finding.
 
 Select a Create draft explicitly and open its recorded compiled check directory.
-Create the picks directory and, for a pending parts verdict, a separate verdict
-directory inside the project before opening the host.
+For a pending parts verdict, create a separate verdict directory inside the
+project before opening the host.
 
 ```sh
 rig-review open /path/to/project/derived/drafts/chain/out/check \
-  --project /path/to/project --project-draft chain --picks-dir scratch/review-picks \
+  --project /path/to/project --project-draft chain \
   --parts-verdict-dir scratch/review-verdicts
 ```
 
@@ -674,31 +662,18 @@ Use **Save sign-off** to write a standard parts verdict with the part and mesh
 outcomes and notes. Its filename is bound to the inspected project and source.
 Keep the JSON file at its saved location for Create to resolve the source paths.
 The verdict does not sign the Create project. A closed parts review or an open
-without `--parts-verdict-dir` keeps this surface read-only. The interview
-endpoint offers the registered pending sets and historical answers.
+without `--parts-verdict-dir` keeps this surface read-only. `GET /api/interview`
+returns the registered pending sets and historical answers and omits the former
+per-question `saved` field.
 The header reports `RIG_VERSION_UNAVAILABLE` for disabled modes. Reopen with a
 rig version once Create records one.
 
 When the recorded draft entry includes `config`, `parts`, `rig` and `check` directories and the draft is editable (`parts` or `parts-review` stage without an effective `parts-review` sign-off, and not `--view-only`), the draft also offers the Chest regions, Mesh parameters and Edit Mesh instruments for mesh-bearing parts regardless of whether `--parts-verdict-dir` is supplied. Selecting an instrument opens the Setup inspector for that part while the Animate mode remains disabled with `RIG_VERSION_UNAVAILABLE`. Apply runs the installed producer and compiler in scratch under the existing discovery and operation-capability floors while keeping the recorded draft producer as provenance, and running Undo or Reset updates the displayed mesh and report readings from the active build (verdict saving remains read-only on scratch builds and when `--parts-verdict-dir` is omitted).
 
-The interview opens over the review screen of a joined workspace (the `open`
-command above with `--picks-dir`). Select a question and inspect its bound parts
-or source image. A direction set that binds only source inputs displays those
-inputs with the no-bound-parts notice. Each recommendation shows the retained
-reason and author/date. Choose an option for every prompt and save explicitly.
-Other records your wording and stays pending until a tailored choice is
-offered and picked. Auto stays pending until create has a covered agent
-decision. Historical choice sets are read-only.
-
-Each saved set has its own `<raw-set-sha256>.json` in the designated directory.
-Reopening restores picks for the same retained set. Existing records keep their
-original note field byte-for-byte, displayed as read-only text. The survey has
-no Note input. A saved note takes precedence over a historical note, including
-an empty saved string; when neither exists, the picks record omits `note`.
-A new set starts without selections. The directory must exist inside the project and be
-separate from every bound input. A stale context, forged selection or
-superseded set is refused. Review writes only `rig-review/interview-picks@1`
-files. To ingest a file, run create separately from the project root:
+Older Review versions wrote one `rig-review/interview-picks@1` file per saved
+set as `<raw-set-sha256>.json`. These files retain the selections and any
+original `note`, including an empty string. For a historical handoff with a
+Create version that accepts the format, the ingestion command was:
 
 ```sh
 rig-create interview-answer <question> . --picks-file scratch/review-picks/<raw-set-sha256>.json
