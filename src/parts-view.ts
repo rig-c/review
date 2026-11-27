@@ -28,6 +28,7 @@ import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifes
 import { destinationDirectory } from './destination-directory.ts';
 import {commentsObject, jobSha, jobInteger, parseComments} from './job-api.ts';
 import {PARTS_COMMENTS_VERDICT_SCHEMA, type PartsCommentsVerdict} from './job-contract.ts';
+import {jsonBlock} from './feedback-export.ts';
 
 export const PARTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/4';
 const LEGACY_VERDICT_SCHEMAS = ['rig-review-parts-verdict/1', 'rig-review-parts-verdict/2', 'rig-review-parts-verdict/3'] as const;
@@ -526,8 +527,8 @@ export function assertPartsCanOpen(pkg: Pick<PartsViewPackage, 'mode'>): void {
 }
 
 /** Compare names, real paths (including parent links), and filesystem identities before creating output. */
-async function assertVerdictDestination(pkg: Pick<PartsViewPackage, 'files' | 'flagFiles' | 'protectedPaths' | 'verdictPath'>): Promise<void> {
-  const target = resolve(pkg.verdictPath);
+export async function assertVerdictDestination(pkg: Pick<PartsViewPackage, 'files' | 'flagFiles' | 'protectedPaths' | 'verdictPath'>, destination = pkg.verdictPath): Promise<void> {
+  const target = resolve(destination);
   const targetReal = await realpath(target).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; return null; });
   const targetStat = await stat(target, { bigint: true }).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; return null; });
   const parent = await realpath(dirname(target)).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; return null; });
@@ -918,13 +919,14 @@ export type VerdictStale = 'files' | 'flags' | null;
  * `source.sha256` alone; the page also requires `source.flags`, so a reviewer never sees a sign-off over flags they
  * were not shown.
  */
-async function readVerdictSnapshot(pkg: PartsViewPackage): Promise<{
+async function readVerdictSnapshot(pkg: PartsViewPackage, forExport = false): Promise<{
   verdict: PartsVerdict | null;
   stale: VerdictStale;
   legacy: LegacyPartsVerdictView | null;
   legacyRecord: LegacyPartsVerdictRecord | null;
   by: string | null;
   savedFileSha256: string | null;
+  commentsRecord?: PartsCommentsVerdict;
 }> {
   let raw: unknown;
   const unavailable = { verdict: null, legacy: null, legacyRecord: null, by: null, savedFileSha256: null };
@@ -945,6 +947,16 @@ async function readVerdictSnapshot(pkg: PartsViewPackage): Promise<{
   const v = record(raw);
   const source = record(v?.source);
   const now = verdictSource(pkg);
+  if (forExport && v?.schema === PARTS_COMMENTS_VERDICT_SCHEMA) {
+    let commentsRecord: PartsCommentsVerdict;
+    try { commentsRecord = parseCommentsPartsVerdict(raw); }
+    catch (cause) { throw new Error('PARTS_VERDICT_INVALID: saved comments verdict is invalid', {cause}); }
+    if (commentsRecord.mode !== pkg.mode || commentsRecord.source.sha256 !== now.sha256)
+      return {...unavailable, stale: 'files'};
+    if (JSON.stringify(commentsRecord.source.flags) !== JSON.stringify(now.flags))
+      return {...unavailable, stale: 'flags'};
+    return {...unavailable, stale: null, commentsRecord, by: commentsRecord.by ?? null, savedFileSha256: createHash('sha256').update(bytes).digest('hex')};
+  }
   const isLegacy = Boolean(v && (LEGACY_VERDICT_SCHEMAS as readonly string[]).includes(String(v.schema)));
   if (!v || (v.schema !== PARTS_VERDICT_SCHEMA && !isLegacy) || typeof source?.sha256 !== 'string') {
     throw new Error('PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid');
@@ -997,16 +1009,23 @@ export async function readPartsVerdictForCli(
 
 /** Standalone CLI retrieval metadata and content come from one validated saved-file buffer. */
 export async function readPartsVerdictJson(pkg: PartsViewPackage): Promise<string> {
-  const saved = await readVerdictSnapshot(pkg);
-  const target = saved.verdict ?? saved.legacyRecord;
-  if (!target) {
-    return refuse('PARTS_VERDICT_UNAVAILABLE', 'save a verdict first');
-  }
+  const result = await readPartsVerdictExport(pkg, 'json');
+  return result ?? refuse('PARTS_VERDICT_UNAVAILABLE', 'save a verdict first');
+}
+
+/** CLI exports can still show local comments in the absence of a saved verdict. */
+export async function readPartsVerdictExport(pkg: PartsViewPackage, format: 'json' | 'issue'): Promise<string | null> {
+  const saved = await readVerdictSnapshot(pkg, true);
+  const target = saved.verdict ?? saved.legacyRecord ?? saved.commentsRecord;
+  if (!target) return null;
+  if (format === 'issue') return target.schema === PARTS_COMMENTS_VERDICT_SCHEMA
+    ? '# Parts review\n\n' + jsonBlock(target) + '\n'
+    : exportPartsVerdict(target, 'issue');
   await assertPartsUnchanged(pkg);
   return (
     JSON.stringify(
       {
-        ...JSON.parse(exportPartsVerdict(target, 'json')),
+        ...(target.schema === PARTS_COMMENTS_VERDICT_SCHEMA ? target : JSON.parse(exportPartsVerdict(target, 'json'))),
         by: saved.by,
         savedFileSha256: saved.savedFileSha256,
       },

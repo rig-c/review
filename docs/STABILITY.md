@@ -10,6 +10,7 @@
 | [Package-only job API](REVIEW_PACKAGE.md#live-job-contract) | `rig-review/job-api@2` | Default package-only host contract. | C4 (Review #501) |
 | [Record-and-package job API](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam) | `rig-review/job-api@3` | Additive record mode with its own capability and reuse checks. | Review #588 |
 | [Finalized job acts](#act-and-ask-schemas-currently-accepted) | `rig-review/act@2` through `rig-review/act@10` | Consumers narrow by `schema`. Historical acts retain their original bytes and readers. | C4 (Review #501) and subsequent revisions |
+| [Local comment sends](REVIEW_PACKAGE.md#local-comment-sends) | `rig-review/local-comments@1` | Append-only sends with the act@10 value shape. Agents read them through the feedback and parts CLI exports. Historical session status and parts verdict readers stay supported. | Review #1232 |
 | [Previous accepted draft binding](REVIEW_PACKAGE.md#previous-accepted-draft-difference) | `rig-review-previous-draft/1` | Optional publication context gated by `JOB_PREVIOUS_DRAFT_SCHEMA`. The act and comment bindings require an admitted declaration. | Review #914 |
 | [Sealed previous build](REVIEW_PACKAGE.md#sealed-previous-build) | `rig-review-previous-build/1` | Optional shared standalone manifest and trusted rig/direction job reader declaration. | Review #1214 |
 | [Host-bound act wait](#host-bound-act-wait) | `waitForJobAct` | Uses the host's API schema and existing agent capability. | Review #1005 |
@@ -86,6 +87,7 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | Interview answer form | #1230 | Live job comments (`rig-review/act@10`); option-set pictures stay in the shared main view. |
 | `--picks-dir`'s UI | #1230 | Now the `INTERVIEW_PICKS_DISABLED` refusal on the workspace; CLI and file readers still read `rig-review/interview-picks@1`. |
 | Historical interview answer display | #1230 | A person can no longer see an old interview answer or its note on a Review screen; agents and the CLI read them byte for byte. |
+| Fresh `review-verdict` and `parts-verdict` asks | #1232 | Fresh asks refuse with `JOB_ASK_INVALID`. Historical asks, replays and acts retain their readers. Send comments on the displayed publication produces an act@10. |
 
 ## History
 

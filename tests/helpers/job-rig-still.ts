@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './historical-verdict-ask.ts';
 import {createHash} from 'node:crypto';
 import {PNG} from 'pngjs';
 import type {jobFixture} from './job-api-fixture.ts';
@@ -10,7 +11,7 @@ export async function rigStillInput(
   animation?: string,
 ) {
   const publication = await fixture.publish();
-  const ask = await fixture.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+  const ask = seedHistoricalVerdictAsk(fixture.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
   const page = await fixture.display(publication);
   const {capture, bytes, sha256} = rigStillCapture(publication, ask, page, frame, animation);
   const input = {

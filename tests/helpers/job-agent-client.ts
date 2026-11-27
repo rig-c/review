@@ -80,24 +80,28 @@ if (mode === 'sqlite-crash') {
     process.exit(3);
   }
   let request = 0;
-  const invoke = async (value: Record<string, unknown>) => {
+  const invoke = async (value: Record<string, unknown>, expectedRefusal?: string) => {
     const response = await fetch(input.origin + '/jobs/' + input.jobId + '/api', {
       method: 'POST', redirect: 'error', headers: {
         'Content-Type': 'application/json', Authorization: 'Bearer ' + input.agentCapability,
       }, body: JSON.stringify({ schema: 'rig-review/job-api@2', jobId: input.jobId, requestId: 'agent-' + (++request), ...value }),
     });
     const result = await response.json();
-    writeSync(1, JSON.stringify({ flow: { verb: value.verb, ok: result.ok, generation: result.generation } }) + '\n');
-    if (!result.ok) throw new Error(result.error.code);
+    writeSync(1, JSON.stringify({ flow: { verb: value.verb, ok: result.ok, generation: result.generation,
+      ...(!result.ok ? {code: result.error.code} : {}) } }) + '\n');
+    if (expectedRefusal ? result.ok || result.error.code !== expectedRefusal : !result.ok) {
+      throw new Error(result.ok ? 'Expected ' + expectedRefusal : result.error.code);
+    }
     return result;
   };
   const publish = (generation: number, key: string) => invoke({ verb: 'publish', expectedGeneration: generation,
     idempotencyKey: key, result: { path: 'out', selector: { kind: 'rig', version: 1 } },
     freeze: { kind: 'producer-held', holdId: 'agent-fixture-freeze', record: input.record } });
   const first = await publish(0, 'agent-first');
-  // #1229: fresh checkpoint asks refuse; exercise the separate-UID semantic loop on review-verdict.
-  const asked = await invoke({ verb: 'ask', expectedGeneration: first.generation, idempotencyKey: 'agent-ask',
-    publicationId: first.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } });
+  const ask = {verb: 'ask', expectedGeneration: first.generation, publicationId: first.value.publicationId,
+    subject: {kind: 'review-verdict', stage: 'rig-review'}};
+  await invoke({...ask, idempotencyKey: 'agent-fresh-ask'}, 'JOB_ASK_INVALID');
+  const asked = await invoke({...ask, idempotencyKey: 'agent-ask'});
   let next = await invoke({ verb: 'next', after: null, waitMs: 0 });
   let event = next.value.events.find((event: { type: string }) => event.type === 'act');
   while (!event) {

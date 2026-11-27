@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {afterEach, expect, spyOn, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
 import {createHash, randomUUID} from 'node:crypto';
@@ -422,7 +423,7 @@ test('planted reclaim refuses every open publication including superseded, pendi
   const f = await fixture(), first = await f.publish();
   const retained = f.session.retainedSource(first.publicationId);
   const before = await readFile(retained.manifestPath);
-  await f.ask(first, {kind: 'review-verdict', stage: 'rig-review'});
+  seedHistoricalVerdictAsk(f.session, first.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
   await f.display(first);
   await expect(f.session.reclaimSnapshot(first.publicationId, jobSnapshotHash(retained.seals)))
     .rejects.toMatchObject({code: 'JOB_SOURCE_UNRETAINABLE', message: 'JOB_SNAPSHOT_PINNED'});
@@ -471,7 +472,7 @@ test('finalized consumer acts permanently pin exact sealed bytes and original re
 
 test('exactly 16MiB historical document closes atomically, revokes capability and invalidates asks/pages without rewriting history', async () => {
   const f = await fixture(), publication = await f.publish();
-  await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+  seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
   const page = await f.display(publication), grant = f.session.writerGrant();
   const database = new Database(join(f.state, 'jobs.sqlite'));
   const data = {...JSON.parse(stored(f).document), lifecyclePadding: ''};

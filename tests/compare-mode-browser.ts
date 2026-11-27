@@ -968,16 +968,31 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
       await addFormFeedback('b', 'quality', 'feedback on applied B');
       await addFormFeedback('a', 'quality', 'feedback on unapplied A');
-      document.getElementById('submit').click();
-
       const sessionUrl = new URL('api/compare/session', location.href);
+      if (document.querySelector('#status,label[for="status"]')) throw Error('COMPARE_VERDICT_CONTROL_PRESENT');
+      const readSession = await fetch(sessionUrl);
+      const historical = {...await readSession.json(), status: 'approved'};
+      const seeded = await fetch(sessionUrl, {method: 'PUT', headers: {'Content-Type': 'application/json',
+        'X-Review-Capability': ${JSON.stringify(new URL(opened.url).hash.slice(5))}}, body: JSON.stringify(historical)});
+      if (!seeded.ok) throw Error('COMPARE_HISTORICAL_STATUS_FIXTURE ' + seeded.status);
+      const originalFetch = window.fetch;
+      let submission;
+      window.fetch = function(input, init) {
+        if (init?.method === 'PUT' && String(input).endsWith('/api/compare/session')) submission = JSON.parse(init.body);
+        return originalFetch.call(window, input, init);
+      };
+      try { document.getElementById('submit').click(); } finally { window.fetch = originalFetch; }
+      if (!Array.isArray(submission?.feedback) || 'status' in submission) throw Error('COMPARE_SUBMITTED_STATUS');
       let fbAppliedB;
       let fbUnappliedA;
       for (let i = 0; i < 100; i++) {
         const saved = await (await fetch(sessionUrl)).json();
         fbAppliedB = saved.feedback?.find(f => f.summary === 'feedback on applied B');
         fbUnappliedA = saved.feedback?.find(f => f.summary === 'feedback on unapplied A');
-        if (fbAppliedB && fbUnappliedA) break;
+        if (fbAppliedB && fbUnappliedA) {
+          if (saved.status !== historical.status) throw Error('COMPARE_HISTORICAL_STATUS_LOST');
+          break;
+        }
         await sleep(50);
       }
       if (!fbAppliedB || !fbUnappliedA) throw Error('COMPARE_FEEDBACK_SUBMISSION_NOT_OBSERVED');

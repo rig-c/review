@@ -61,11 +61,11 @@ async function proveHeading(page:InputCdpSession,label:string){
 
 /** Returned #856 polish: inspect the painted footer and the retained action group at narrow widths. */
 async function proveRetainedReadouts(page:InputCdpSession,label:string){
- const g:any=await page.evaluate(`(()=>{const rect=n=>n.getBoundingClientRect().toJSON(),footer=document.querySelector('footer.status-bar'),approve=document.getElementById('save'),changes=document.getElementById('request-changes');return {width:innerWidth,footer:rect(footer),approve:rect(approve),changes:rect(changes),items:[...footer.querySelectorAll('.status-message,.status-readouts>*,.status-source>summary,.status-source summary,.status-source>#source-hash')].filter(n=>n.getBoundingClientRect().width>0&&!n.closest('[hidden]')).map(n=>{const s=getComputedStyle(n),r=n.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(n);const t=range.getBoundingClientRect(),clip=['hidden','clip'].includes(s.overflowX);return {id:n.id||n.className,rect:r.toJSON(),text:{left:clip?Math.max(t.left,r.left):t.left,right:clip?Math.min(t.right,r.right):t.right,top:t.top,bottom:t.bottom},scroll:n.scrollWidth,client:n.clientWidth,overflow:s.overflowX,ellipsis:s.textOverflow};})};})()`);
+ const g:any=await page.evaluate(`(()=>{const rect=n=>n.getBoundingClientRect().toJSON(),footer=document.querySelector('footer.status-bar'),send=document.getElementById('send-comments'),act=document.getElementById('workspace-act-row');return {width:innerWidth,footer:rect(footer),send:rect(send),act:rect(act),items:[...footer.querySelectorAll('.status-message,.status-readouts>*,.status-source>summary,.status-source summary,.status-source>#source-hash')].filter(n=>n.getBoundingClientRect().width>0&&!n.closest('[hidden]')).map(n=>{const s=getComputedStyle(n),r=n.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(n);const t=range.getBoundingClientRect(),clip=['hidden','clip'].includes(s.overflowX);return {id:n.id||n.className,rect:r.toJSON(),text:{left:clip?Math.max(t.left,r.left):t.left,right:clip?Math.min(t.right,r.right):t.right,top:t.top,bottom:t.bottom},scroll:n.scrollWidth,client:n.clientWidth,overflow:s.overflowX,ellipsis:s.textOverflow};})};})()`);
  assert.ok(g.footer.left>=0&&g.footer.right<=g.width+1,label+' footer is contained by viewport');
  for(const n of g.items){assert.ok(n.rect.left>=g.footer.left&&n.rect.right<=g.footer.right&&n.text.left>=g.footer.left-1&&n.text.right<=g.footer.right+1,label+' shown footer text horizontally contained: '+n.id);assert.ok(n.text.top>=g.footer.top-1&&n.text.bottom<=g.footer.bottom+1,label+' shown footer text vertically contained: '+n.id);if(n.scroll>n.client+1)assert.ok(['hidden','clip'].includes(n.overflow)&&n.ellipsis==='ellipsis',label+' overflow uses explicit ellipsis: '+n.id);}
- assert.ok(Math.abs(g.approve.top-g.changes.top)<=1&&Math.abs(g.approve.bottom-g.changes.bottom)<=1,label+' Approve and Request changes share one row');
- assert.ok(g.approve.right<=g.changes.left,label+' action buttons retain order');
+ assert.ok(g.send.width>0&&g.send.left>=g.act.left-1&&g.send.right<=Math.min(g.act.right+1,g.width),label+' Send comments stays in the act row and viewport');
+ assert.ok(g.send.top>=g.act.top-1&&g.send.bottom<=g.act.bottom+1,label+' Send comments stays within the act row height');
  return g;
 }
 
@@ -120,8 +120,7 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
  const fixture=await scriptedJobWindowFixture({c5Parts:'mesh'});
  let page:InputCdpSession|undefined;
  try{
-  const publication=await fixture.publish(kind);
-  await fixture.ask(publication,kind==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:kind==='direction'?'direction-review':'rig-review'});
+  await fixture.publish(kind);
   const target=new URL(fixture.locator+'/#cap='+fixture.credentials.ui);
   target.searchParams.set('lang',lang);
   page=await launchCdpSession(profile,{sendDeadlineMs:20_000,browserArgs:['--force-device-scale-factor=2']});
@@ -191,13 +190,13 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
    }
    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-initial.png`),await page.screenshot());
    if(kind!=='parts'&&width===1440){
-    const original=await page.evaluate<string>(`document.querySelector('#request-changes').textContent`);
-    await page.evaluate(`document.querySelector('#request-changes').textContent+=${JSON.stringify(' · '+original.repeat(3))}`);
+    const original=await page.evaluate<string>(`document.querySelector('#send-comments').textContent`);
+    await page.evaluate(`document.querySelector('#send-comments').textContent+=${JSON.stringify(' · '+original.repeat(3))}`);
     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
     const resized:any=await page.evaluate<any>(`(()=>{const row=document.querySelector('.workspace-bottom-tabs > .block-row:not([hidden])'),rect=row.getBoundingClientRect(),tabs=[...row.querySelectorAll(':scope > [role=tab]')].filter(tab=>!tab.hasAttribute('data-tab-overflow'));return {width:rect.width,contained:tabs.every(tab=>{const r=tab.getBoundingClientRect();return r.left>=rect.left-1&&r.right<=rect.right+1;}),wrap:getComputedStyle(row).flexWrap};})()`);
     assert.equal(resized.contained,true,'existing strip ResizeObserver handles act-label width changes');assert.equal(resized.wrap,'nowrap');
     await writeFile(join(output,`${kind}-${lang}-act-label-resize.json`),JSON.stringify(resized,null,2));
-    await page.evaluate(`document.querySelector('#request-changes').textContent=${JSON.stringify(original)}`);
+    await page.evaluate(`document.querySelector('#send-comments').textContent=${JSON.stringify(original)}`);
     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
    }
 

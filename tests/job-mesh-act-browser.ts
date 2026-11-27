@@ -7,8 +7,8 @@ import {join, resolve} from 'node:path';
 import {PNG} from 'pngjs';
 import {canonicalJson} from '../src/canonical-json.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
-import {jobBodyLimit, jobHash, parseCommentOnlyAct, parseCommentsAct, parseContextCommentsAct} from '../src/job-api.ts';
-import {JOB_API_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA,
+import {jobHash, parseCommentOnlyAct} from '../src/job-api.ts';
+import {JOB_API_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA,
   type JobChestLandmarkValue, type JobPublishedChestLandmark, type JobResponseValues, type JobResult} from '../src/job-contract.ts';
 import type {ReviewManifest} from '../src/manifest.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -91,24 +91,14 @@ async function createFixture(mode: BrowserMode) {
         chestLandmarks: [chestSeed]});
     }
     await writeFile(path, JSON.stringify(model));
-    async function askForRig() {
-      const publication = await fixture.publish();
-      const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
-        requestId: randomUUID(), verb: 'ask', expectedGeneration: fixture.host.session.status().generation,
-        idempotencyKey: randomUUID(), publicationId: publication.publicationId,
-        subject: {kind: 'review-verdict', stage: 'rig-review'}});
-      const result: JobResult<JobResponseValues['ask']> = await response.json();
-      assert.equal(result.ok, true, JSON.stringify(result));
-      return publication;
-    }
-    const publication = await askForRig();
+    const publication = await fixture.publish();
     assert.deepEqual(publication.chestLandmarks, chestSeed ? [chestSeed] : undefined);
     const owner = (language: 'en' | 'ko') => {
       const url = new URL(fixture.host.ownerUrl);
       url.searchParams.set('lang', language);
       return url.href;
     };
-    return {...fixture, owner, entry, publication, askForRig, stage: model.stage, chestSeed, fetchCapability};
+    return {...fixture, owner, entry, publication, stage: model.stage, chestSeed, fetchCapability};
   } catch (error) {
     await fixture.close();
     throw error;
@@ -175,15 +165,13 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
   try {
     let send: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
     const dialogs: {type: string; message: string; accepted: boolean}[] = [];
-    let acceptNextDialog = true;
     const catalog = language === 'ko' ? koCatalog : enCatalog;
-    const expectedConfirm = catalog['Send this Request changes with {0} mesh edit(s) to the producer?']!.replace('{0}', '1');
-    // #1226 owner ruling: once the verdict is answered the live rig row stays with the no-ask line and Send comments.
-    const verdictSettled = `document.querySelector('#save').hidden && !document.querySelector('#workspace-act-row').hidden && !document.querySelector('#send-comments').hidden && document.querySelector('#workspace-ask-headline').textContent === ${JSON.stringify(catalog["We're looking at the work together. Leave your thoughts as comments."])} && document.querySelector('#review-draft-state').dataset.saveState === 'saved'`;
+    // The comment act leaves the original live rig controls in place.
+    const commentsSettled = `document.querySelector('#save').hidden && !document.querySelector('#workspace-act-row').hidden && !document.querySelector('#send-comments').hidden && document.querySelector('#workspace-ask-headline').textContent === ${JSON.stringify(catalog["We're looking at the work together. Leave your thoughts as comments."])} && document.querySelector('#review-draft-state').dataset.saveState === 'saved'`;
     page = await launchCdpSession(profile, {onEvent: (event, command) => {
       send = command;
       if (event.method === 'Page.javascriptDialogOpening') {
-        const accept = acceptNextDialog;
+        const accept = false;
         dialogs.push({type: String(event.params?.type ?? ''), message: String(event.params?.message ?? ''), accepted: accept});
         return command('Page.handleJavaScriptDialog', {accept}).then(() => {});
       }
@@ -250,12 +238,12 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
         `${language} ${mode}: chest edit tooltip while the initial model is loading`);
       await screen.evaluate('window.__releaseChestModel()');
     }
-    await wait("!!document.querySelector('#rig-root canvas') && !!document.querySelector('#save:not([hidden]):not(:disabled)')");
+    await wait("!!document.querySelector('#rig-root canvas') && !!document.querySelector('#send-comments:not([hidden])')");
     if (checkOpeningChestGate) await screen.setViewport(1440, 1000);
     assert.equal(await screen.evaluate<string>('document.documentElement.lang'), language);
-    assert.equal(await screen.evaluate<boolean>("document.querySelector('#request-changes').disabled"), true);
+    assert.equal(await screen.evaluate<boolean>("document.querySelector('#send-comments').disabled"), true);
     const inputHashes = chestCase ? await jobInputHashes(fixture.input.root) : null;
-    /** #1231: drafts go first as an act@10 carrier act, then the verdict without them. */
+    /** #1231: act@10 retains the comment and any carriers together. */
     async function finalizedActs(count: number) {
       const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
         requestId: randomUUID(), verb: 'next', after: null, waitMs: 0});
@@ -281,7 +269,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
         .replace('{0}', '8.00').replace('{1}', '14.00').replace('{2}', '20.00').replace('{3}', '20.00');
       const partText = await screen.evaluate<string>("document.querySelector('#selected-part')?.textContent ?? ''");
       assert.ok(partText.includes(expectedBounds), `${language} ${mode}: expected formatted part bounds, read ${partText}`);
-      const requestDisabled = "document.querySelector('#request-changes').disabled";
+      const sendDisabled = "document.querySelector('#send-comments').disabled";
       if (chestSeed) {
         if (mode === 'chest-only') await writeFile(join(directory, 'part-tab.png'), await screen.screenshot());
         await wait("!!document.querySelector('#chest-edit:not([hidden]):not(:disabled)')");
@@ -306,7 +294,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
         const seeded = await readLandmarkFields(screen);
         assert.deepEqual(seeded, {apex_r: ['50.25', '39.5'], apex_l: ['66.5', '39.5'],
           cleavage: chestSeed.bust.cleavage ? ['58.5', '38.25'] : ['', ''], alpha: '0.46', clearance: '2.6'});
-        assert.equal(await screen.evaluate<boolean>(requestDisabled), true, 'Published points alone are not a correction');
+        assert.equal(await screen.evaluate<boolean>(sendDisabled), true, 'Published points alone are not a correction');
         await writeFile(join(directory, 'seeded.png'), await screen.screenshot());
         if (chestSeed.bust.cleavage) {
           const landmarkTags = [
@@ -365,7 +353,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
         await placePosedApex(screen, fixture.stage);
         const edited = await readLandmarkFields(screen);
         assert.deepEqual(edited, {...seeded, apex_r: correctedApex.map(String)});
-        await wait(`!(${requestDisabled})`);
+        await wait(`!(${sendDisabled})`);
         await writeFile(join(directory, 'posed-edited.png'), await screen.screenshot());
         await writeFile(join(directory, 'landmarks.json'), JSON.stringify({controls, seeded, edited}));
       } else {
@@ -386,7 +374,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
         assert.deepEqual(fields.apex_r, ['', '']);
         assert.deepEqual(fields.apex_l, ['', '']);
         assert.deepEqual(fields.cleavage, ['', '']);
-        assert.equal(await screen.evaluate<boolean>(requestDisabled), true);
+        assert.equal(await screen.evaluate<boolean>(sendDisabled), true);
         await writeFile(join(directory, 'read-only.png'), await screen.screenshot());
         await writeFile(join(directory, 'read-only.json'), JSON.stringify({readOnly, fields}));
       }
@@ -397,7 +385,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       await wait("!!document.querySelector('.stage-comment-composer input')");
       await screen.evaluate<void>(`(()=>{const form=document.querySelector('.stage-comment-composer');
         form.querySelector('input').value='Adjust the mesh';form.requestSubmit();})()`);
-      await wait("!document.querySelector('.stage-comment-composer') && !document.querySelector('#request-changes').disabled");
+      await wait("!document.querySelector('.stage-comment-composer') && !document.querySelector('#send-comments').disabled");
       if (mode === 'with-comment') {
         const commentVisuals = await screen.evaluate<{
           lineHeight: string;
@@ -509,64 +497,38 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
         await writeFile(join(directory, 'edited.png'), await screen.screenshot());
       }
     }
-    await wait("!document.querySelector('#request-changes').disabled");
+    await wait("!document.querySelector('#send-comments').disabled");
     const meshExpected = mode === 'mesh-only' || mode === 'with-comment';
-    if (meshExpected) {
-      const before = await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value");
-      assert.ok(before);
-      acceptNextDialog = false;
-      await click(screen, '#request-changes');
-      await wait("!document.querySelector('#request-changes').disabled");
-      assert.deepEqual(dialogs, [{type: 'confirm', message: expectedConfirm, accepted: false}]);
-      await writeFile(join(directory, 'confirm.png'), await screen.screenshot());
-      await writeFile(join(directory, 'confirm.json'), JSON.stringify(dialogs[0], null, 2) + '\n');
-      assert.equal(await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value"), before);
-      assert.equal(await screen.evaluate<boolean>("document.querySelector('#message').classList.contains('error')"), false);
-      const pending = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
-        requestId: randomUUID(), verb: 'next', after: null, waitMs: 0});
-      const pendingResult: JobResult<JobResponseValues['next']> = await pending.json();
-      assert.ok(pendingResult.ok, JSON.stringify(pendingResult));
-      assert.deepEqual(pendingResult.value.events.filter(event => event.type === 'act'), []);
-      acceptNextDialog = true;
-    }
     if (mode === 'with-comment') {
       const before = await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value");
       assert.ok(before);
       await screen.evaluate<void>("void(window.__refuseMeshOnce=true)");
-      await click(screen, '#request-changes');
-      await wait("document.querySelector('#workspace-act-row #review-draft-state').title.includes('JOB_ACT_INVALID') && !document.querySelector('#request-changes').disabled");
+      await click(screen, '#send-comments');
+      await wait("document.querySelector('#workspace-act-row #review-draft-state').title.includes('JOB_ACT_INVALID') && !document.querySelector('#send-comments').disabled");
       assert.equal(await screen.evaluate<boolean>("document.querySelector('#message').title.includes('JOB_ACT_INVALID')"), false);
       assert.equal(await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value"), before);
     }
-    await click(screen, '#request-changes');
-    await wait(verdictSettled);
-    assert.deepEqual(dialogs, meshExpected ? [
-      {type: 'confirm', message: expectedConfirm, accepted: false},
-      ...(mode === 'with-comment' ? [{type: 'confirm', message: expectedConfirm, accepted: true}] : []),
-      {type: 'confirm', message: expectedConfirm, accepted: true},
-    ] : []);
-    const carried = !!chestSeed || meshExpected;
-    const finalizedRows = await finalizedActs(carried ? 2 : 1);
-    const {act: finalized, raw} = finalizedRows.at(-1)!;
-    const expectedSchema = mode === 'with-comment' || !carried ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA;
-    assert.equal(finalized.schema, expectedSchema,
-      `${language} ${mode}: unexpected schema from the production writer`);
-    // #1231: the Request changes verdict no longer carries Edit Mesh or chest drafts.
-    assert.equal(finalized.kind, 'review-verdict');
-    assert.equal('meshEdits' in finalized.value, false);
-    assert.equal('chestLandmarks' in finalized.value, false);
-    if (carried) {
-      assert.equal(finalizedRows[0]!.act.schema, JOB_COMMENT_ONLY_ACT_SCHEMA);
-      const carrier = parseCommentOnlyAct(finalizedRows[0]!.act);
-      assert.deepEqual(carrier.value.comments, []);
-      assert.equal(carrier.publicationId, fixture.publication.publicationId);
-      assert.deepEqual(carrier.source, fixture.publication.source);
-      assert.equal(carrier.value.carriers?.length, 1);
-      const verdict = finalized.schema === JOB_COMMENT_CONTEXT_ACT_SCHEMA ? parseContextCommentsAct(finalized) : parseCommentsAct(finalized);
-      assert.equal(verdict.kind === 'review-verdict' && verdict.value.verdict, 'changes-requested');
+    await click(screen, '#send-comments');
+    await wait(commentsSettled);
+    assert.deepEqual(dialogs, [], 'Send comments requires no verdict confirmation');
+    const finalizedRows = await finalizedActs(1);
+    const {act: finalized, raw} = finalizedRows[0]!;
+    const act = parseCommentOnlyAct(finalized);
+    assert.equal(act.schema, JOB_COMMENT_ONLY_ACT_SCHEMA);
+    assert.equal(act.kind, 'comments');
+    assert.equal('askId' in act, false);
+    assert.equal('still' in act, false);
+    assert.equal(act.publicationId, fixture.publication.publicationId);
+    assert.deepEqual(act.source, fixture.publication.source);
+    assert.equal(act.value.carriers?.length ?? 0, chestSeed || meshExpected ? 1 : 0);
+    assert.deepEqual(act.value.comments.map(comment => comment.text),
+      mode === 'with-comment' || !chestSeed && !meshExpected ? ['Adjust the mesh'] : []);
+    if (act.value.comments.length) {
+      assert.ok(act.value.comments[0]?.context, 'the pinned comment retains its view');
+      assert.equal('subject' in act.value.comments[0]!.context!, false);
     }
     if (chestSeed) {
-      const carrierAct = finalizedRows[0]!.act;
+      const carrierAct = act;
       assert.ok(fixture.fetchCapability);
       const response = await fetch(fixture.locator + '/api', {
         method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + fixture.fetchCapability},
@@ -584,12 +546,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       assert.deepEqual(carrier?.kind === 'chest-landmarks' && carrier.chestLandmarks, [{edit, sha256: jobHash(canonicalJson(edit))}]);
       await writeFile(join(directory, 'submitted.png'), await screen.screenshot());
     } else if (meshExpected) {
-      const act = mode === 'with-comment' ? parseContextCommentsAct(finalized) : parseCommentsAct(finalized);
-      assert.ok(act.kind === 'review-verdict' && act.value.stage === 'rig-review');
-      assert.equal(act.value.verdict, 'changes-requested');
-      assert.deepEqual(act.value.comments.map(comment => comment.text), mode === 'with-comment' ? ['Adjust the mesh'] : []);
-      if (mode === 'with-comment') assert.equal(parseContextCommentsAct(finalized).value.comments[0]?.context?.subject?.sourceHash, act.source.sourceHash);
-      const [carrier] = parseCommentOnlyAct(finalizedRows[0]!.act).value.carriers!;
+      const [carrier] = act.value.carriers!;
       assert.ok(carrier?.kind === 'mesh-edits', `${language} ${mode}: the act@10 is missing its mesh-edits carrier`);
       assert.deepEqual(carrier.file, fixture.publication.source.model);
       assert.equal(carrier.meshEdits.length, 1);
@@ -606,30 +563,18 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       assert.equal(edit.ops[0]?.op, 'add');
       assert.equal(sha256, jobHash(canonicalJson(edit)));
       await wait("document.querySelector('#mesh-edit-draft').value === ''");
-      const png = fixture.host.session.readActExport(act.actId, true);
       if (largeCapture) {
-        assert.ok(png.byteLength > jobBodyLimit, `still is only ${png.byteLength} bytes`);
         const path = join(fixture.input.root, 'out/review.json');
         const manifest: ReviewManifest = await Bun.file(path).json();
         await writeFile(path, JSON.stringify({...manifest, revision: 'same-mesh-next'}));
-        const next = await fixture.askForRig();
+        const next = await fixture.publish();
         assert.notEqual(next.publicationId, fixture.publication.publicationId);
         assert.equal(next.source.model?.sha256, fixture.publication.source.model?.sha256);
-        await wait("!!document.querySelector('#save:not([hidden]):not(:disabled)') && !document.querySelector('#workspace-act-row').hidden");
+        await wait("document.querySelector('#revision')?.textContent === 'same-mesh-next' && document.querySelector('#send-comments')?.checkVisibility()");
         assert.equal(await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value"), '');
-        assert.equal(await screen.evaluate<boolean>("document.querySelector('#request-changes').disabled"), true);
-        await click(screen, '#save');
-        await wait(verdictSettled);
-        assert.equal(dialogs.length, 2);
+        assert.equal(await screen.evaluate<boolean>("document.querySelector('#send-comments').disabled"), true);
+        assert.deepEqual(dialogs, []);
       }
-      await writeFile(join(directory, 'still-size.json'), JSON.stringify({bytes: png.byteLength}));
-    } else {
-      const act = parseContextCommentsAct(finalized);
-      assert.equal(act.kind, 'review-verdict');
-      assert.equal(act.value.stage, 'rig-review');
-      assert.equal(act.value.verdict, 'changes-requested');
-      assert.deepEqual(act.value.comments.map(comment => comment.text), ['Adjust the mesh']);
-      assert.equal(act.value.comments[0]?.context?.subject?.sourceHash, act.source.sourceHash);
     }
     if (inputHashes) assert.deepEqual(await jobInputHashes(fixture.input.root), inputHashes, 'Owner actions preserve source bytes');
     await writeFile(join(directory, 'act.json'), raw);

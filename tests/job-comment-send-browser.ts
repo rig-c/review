@@ -1,6 +1,6 @@
 /** #1226 direct Bun script; ordinary Nova only. Synthetic scripted job window fixture, owned headless Chromium.
  * Send comments with no ask records one act@10 with no askId; sent rows stay listed as Submitted;
- * a later Request changes carries only rows that were not already sent on their own (CONTRACT §1). EN and KO.
+ * a second Send comments carries only new rows (CONTRACT §1). EN and KO.
  * #1242: the direction, parts and record screens carry the same control, headline, hint and save states, and send act@10.
  * Run: bun tests/job-comment-send-browser.ts --out artifacts/job-comment-send-1226 [--screens rig,direction,parts,record]
  */
@@ -104,21 +104,22 @@ async function run(lang: 'en' | 'ko') {
       assert.equal(row.submitted, true, 'COMMENT_ROW_NOT_SUBMITTED ' + text);
     }
     await writeFile(join(output, `no-ask-${lang}-sent.png`), await page.screenshot());
-    // A later verdict carries only the new comment.
-    await fixture.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
-    await wait(page, `!document.getElementById('request-changes').hidden`);
+    // A later submission carries only the new comment.
+    assert.equal(await page.evaluate<boolean>(`document.getElementById('send-comments').disabled`), true);
     await general(words[lang][2]);
-    await wait(page, `!document.getElementById('request-changes').disabled`);
-    await page.evaluate(`document.getElementById('request-changes').click()`);
-    await wait(page, `document.getElementById('request-changes').hidden||document.getElementById('review-draft-state')?.dataset.saveState==='saved'`);
-    const verdict = (await acts(fixture)).filter(act => act.kind === 'review-verdict');
-    assert.equal(verdict.length, 1, JSON.stringify(verdict.map(act => act.schema)));
-    const verdictText = JSON.stringify(verdict[0]!.value);
-    assert.ok(verdictText.includes(JSON.stringify(words[lang][2]).slice(1, -1)), 'VERDICT_MISSING_NEW_COMMENT');
-    for (const text of [words[lang][0], words[lang][1]])
-      assert.ok(!verdictText.includes(JSON.stringify(text).slice(1, -1)), 'COMMENT_RESENT_IN_VERDICT ' + text);
-    await writeFile(join(output, `verdict-${lang}.png`), await page.screenshot());
-    return {lang, act10: sent[0]!.schema, verdict: verdict[0]!.schema};
+    await wait(page, `!document.getElementById('send-comments').disabled`);
+    await page.evaluate(`document.getElementById('send-comments').click()`);
+    await wait(page, `document.getElementById('review-draft-state')?.dataset.saveState==='saved'`);
+    const submitted = await acts(fixture);
+    assert.equal(submitted.length, 2, JSON.stringify(submitted.map(act => act.schema)));
+    assert.deepEqual(submitted[0], sent[0]);
+    const second = submitted[1]!;
+    assert.equal(second.schema, 'rig-review/act@10');
+    assert.equal(second.kind, 'comments');
+    assert.equal('askId' in second, false);
+    assert.deepEqual(second.value.comments, [{text: words[lang][2]}]);
+    await writeFile(join(output, `second-send-${lang}.png`), await page.screenshot());
+    return {lang, act10: sent[0]!.schema, secondSend: second.schema};
   } finally {await page.close?.(); await fixture.close();}
 }
 

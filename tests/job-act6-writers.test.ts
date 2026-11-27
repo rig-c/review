@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {afterEach, expect, test} from 'bun:test';
 import {readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -170,7 +171,7 @@ test('legacy direct direction decisions still project words to one anchorless ac
 
 test('#1136 direction@3 writes three exact time-only pins and an interleaved general row through the retained host', async () => {
   const {f, publication, modelHash, directionBytes} = await postFixture();
-  const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'direction-review'}), page = await f.display(publication);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'direction-review'}), page = await f.display(publication);
   const originalInputs = await jobInputHashes(f.root);
   const pins = [timedPin(publication.source.sourceHash, modelHash, 0.125, 4, 'First held location'),
     timedPin(publication.source.sourceHash, modelHash, 0.5000000000000001, 12, '중간 위치'),
@@ -221,7 +222,7 @@ test('#1136 direction@3 writes three exact time-only pins and an interleaved gen
     .toMatchObject({ok: false, error: {code: 'JOB_IDEMPOTENCY_CONFLICT'}});
   expect(f.session.status().generation).toBe(generation);
 
-  const negativeAsk = await f.ask(publication, {kind: 'review-verdict', stage: 'direction-review'});
+  const negativeAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'direction-review'});
   const pending = f.session.status();
   const negative = {...input, askId: negativeAsk.askId, expectedGeneration: pending.generation};
   for (const [label, change, code] of [
@@ -241,7 +242,7 @@ test('#1136 direction@3 writes three exact time-only pins and an interleaved gen
 
 test('#1136 direction verdict preserves producer and reference frame pins', async () => {
   const {f, publication, modelHash} = await postFixture();
-  const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'direction-review'}), page = await f.display(publication);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'direction-review'}), page = await f.display(publication);
   const comments = (['producer', 'reference'] as const).map((basis, offset) => {
     const index = 4 + offset;
     const {text, anchor, mark: {timeBasis: _timeBasis, ...mark}} =
@@ -266,7 +267,7 @@ test('#1136 direction verdict preserves producer and reference frame pins', asyn
 test('#1136 words-only direction retains its anchorless export and replay bytes', async () => {
   const {f, publication} = await postFixture();
   const stage = 'direction-review', verdict = 'changes-requested', words = '  Legacy 연출\r\nKeep edges  \n';
-  const ask = await f.ask(publication, {kind: 'review-verdict', stage}), page = await f.display(publication);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage}), page = await f.display(publication);
   const input = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
     submissionId: 'old-direction', kind: 'review-verdict', value: {stage, verdict, words}};
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
@@ -349,7 +350,7 @@ test('an empty or whitespace-only note has no comment form: zero comments, nothi
 test('a note whose act@6 projection exceeds 10,000 UTF-16 units is refused by name (JOB_ACT_INVALID)', async () => {
   // #1229: checkpoint retired; exercise the 10,000-unit act@6 scalar bound on a live direction-review verdict.
   const {f, publication} = await postFixture();
-  const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'direction-review'}), page = await f.display(publication);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'direction-review'}), page = await f.display(publication);
   const generation = f.session.status().generation;
   const label = '[general]\n';
   const words = 'x'.repeat(10000 - label.length + 1);
@@ -392,7 +393,7 @@ test.each([
   const f = await fixture();
   await syntheticJobParts(f, {project: true});
   const publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-draft'}), page = await f.display(publication);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-draft'}), page = await f.display(publication);
   const generation = f.session.status().generation;
   const input = {...page, askId: ask.askId, expectedGeneration: generation, kind: 'parts-verdict'};
   const approve = {verdict: 'approved', issues: [], words: ''};

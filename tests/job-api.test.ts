@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import {existsSync, fstatSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync} from 'node:fs';
 import {readFile, readdir, mkdir, writeFile, symlink, rm} from 'node:fs/promises';
 import {rigStillInput} from './helpers/job-rig-still.ts';
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {createJobFront} from '../src/job-front.ts';
 import {jobHash} from '../src/job-api.ts';
 import {parseCommentsAct, projectComments, type JobComment} from '../src/job-host.ts';
@@ -193,7 +194,7 @@ test('#900 scalar job revision observes publish and sealClose without loading do
   expect(closed).toMatchObject({code: 'JOB_STORAGE_FAILED'});
 });
 
-test('#900 an already waiting subscription sees an independent attachment publish, ask and close', async () => {
+test('#900 an already waiting subscription sees an independent attachment publish, historical pending ask and close', async () => {
   const f = await fixture(), abort = new AbortController();
   const iterator = f.ports.subscribeJob({jobId: f.session.jobId, after: null, signal: abort.signal})[Symbol.asyncIterator]();
   let pending = iterator.next();
@@ -217,13 +218,17 @@ test('#900 an already waiting subscription sees an independent attachment publis
     expect(first.value).toMatchObject({type: 'published', publication: {publicationId: published.value.publicationId}});
     pending = iterator.next();
     await Bun.sleep(0);
-    const asked = await call({...f.base(), verb: 'ask', expectedGeneration: attached.status().generation,
+    const generation = attached.status().generation;
+    const subject = {kind: 'review-verdict', stage: 'rig-review'} as const;
+    const asked = await call({...f.base(), verb: 'ask', expectedGeneration: generation,
       idempotencyKey: '900-attached-ask', publicationId: published.value.publicationId,
-      subject: {kind: 'review-verdict', stage: 'rig-review'}});
-    expect(asked.ok).toBe(true);
+      subject});
+    expect(asked).toMatchObject({ok: false, generation, error: {code: 'JOB_ASK_INVALID'}});
+    expect(attached.status().cursor).toBe(first.value?.cursor);
+    const historical = seedHistoricalVerdictAsk(attached, published.value.publicationId, subject);
     const second = await subscriptionDeadline(pending);
     expect(second.done).toBe(false);
-    expect(second.value).toMatchObject({type: 'pending', ask: {askId: asked.value.askId}});
+    expect(second.value).toMatchObject({type: 'pending', ask: {askId: historical.askId}});
     expect(second.value?.cursor).not.toBe(first.value?.cursor);
     pending = iterator.next();
     await Bun.sleep(0);

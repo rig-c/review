@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
 import {afterEach, expect, test} from 'bun:test';
@@ -34,7 +35,7 @@ test('#715 and #1229 mixed rig verdict, supported modal asks and legacy pending 
   const f = await fixture(), publication = await f.publish();
   const display = {publication} as unknown as DisplayPublicationV3, ids = new Set(['step-one']);
   expect(jobRigScreenSubject(publication.source as DisplayPublicationV3['publication']['source'])).toBe(true);
-  const verdict = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+  const verdict = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
   const checkpoint = seedHistoricalCheckpointAsk(f.session, publication.publicationId, {kind: 'checkpoint', checkpointId: 'step-one'});
   const asks = [verdict, checkpoint] as unknown as PendingAskV3[];
   expect(jobRigScreenRoute(display, asks, ids)).toBe(true);
@@ -67,7 +68,7 @@ test('#715 and #1229 mixed rig verdict, supported modal asks and legacy pending 
 
 test('#709 and #1229 pending decisions and retired checkpoint outcomes are never sent; only the verdict decision is emitted', async () => {
   const f = await fixture(), publication = await f.publish();
-  const verdict = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+  const verdict = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
   const checkpoint = seedHistoricalCheckpointAsk(f.session, publication.publicationId, {kind: 'checkpoint', checkpointId: 'step-one'});
   const asks = [verdict, checkpoint] as unknown as PendingAskV3[];
   expect(jobRigScreenDecisions(session({}), asks, publication.publicationId)).toEqual([]);
@@ -92,10 +93,10 @@ test('#746 the rig screen keeps act@6 and structured feedback instead of a gener
     if (!result.ok) throw new Error(result.error.code);
     return result.value as unknown as {actId: string; askId: string; at: string};
   }
-  const today = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+  const today = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
   // The job window's value shape `{stage, verdict, words}`, carrying the same words.
   const before = await commit(today.askId, {stage: 'rig-review', verdict: 'approved', words: note}, 'today');
-  const after = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+  const after = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
   const [decision] = jobRigScreenDecisions(session({status: 'approved', feedback: rows}),
     f.session.status().pending as unknown as PendingAskV3[], publication.publicationId);
   expect(decision!.ask.askId).toBe(after.askId);

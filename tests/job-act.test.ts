@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
 import { afterEach, expect, test } from 'bun:test';
@@ -206,7 +207,7 @@ test('#1229 fresh package checkpoint asks refuse JOB_ASK_INVALID, fresh submissi
 
 test('#1227 fresh package sign-off asks refuse JOB_ASK_INVALID and page submissions refuse JOB_ACT_KIND_DISABLED while historical act@2 plan bounds stay', async () => {
   const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
-  const verdictAsk = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
+  const verdictAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'review-verdict', stage: 'rig-review' });
   for (const stage of ['plan-approved', 'rigging-interview', 'post-interview']) {
     const asked = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
       idempotencyKey: 'refused-' + stage, publicationId: publication.publicationId, subject: { kind: 'signoff', stage } })).json();
@@ -233,7 +234,7 @@ test('#1227 fresh package sign-off asks refuse JOB_ASK_INVALID and page submissi
 
 test('review verdict remains separate from sign-off and is bound to the displayed model/version', async () => {
   const f = await fixture(), publication = await f.publish();
-  const ask = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' }), page = await f.display(publication);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'review-verdict', stage: 'rig-review' }), page = await f.display(publication);
   const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: ask.askId,
     expectedGeneration: f.session.status().generation, submissionId: 'review', kind: 'review-verdict',
     value: { stage: 'rig-review', verdict: 'approved', words: 'exact verdict' },
@@ -253,7 +254,7 @@ test('P1 unrelated agent ask does not stale a captured pending UI act and future
   const page = await f.display(publication);
   const input = { ...page, expectedGeneration: f.session.status().generation,
     submissionId: 'captured-ui', kind: 'comments', value: { comments: [{ text: 'captured' }] } };
-  const unrelated = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
+  const unrelated = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'review-verdict', stage: 'rig-review' });
   const future = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input,
     submissionId: 'future-ui', expectedGeneration: f.session.status().generation + 1 }));
   expect(future.ok).toBe(false);
@@ -279,7 +280,7 @@ test('pending UI act still refuses a rotated nonce, changed source and supersede
   const input = { ...page, expectedGeneration: f.session.status().generation,
     submissionId: 'pending-bindings', kind: 'comments' as const, value: { comments: [{ text: 'pending bindings' }] } };
   const freshPage = await f.display(publication);
-  await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
+  seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'review-verdict', stage: 'rig-review' });
   const wrongNonce = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
   expect(wrongNonce.ok).toBe(false);
   if (!wrongNonce.ok) expect(wrongNonce.error.code).toBe('JOB_DISPLAY_MISMATCH');
@@ -302,7 +303,7 @@ test('#1230 fresh package interview-picks asks refuse JOB_ASK_INVALID and submis
     idempotencyKey: 'refused-picks', publicationId: publication.publicationId,
     subject: { kind: 'interview-picks', questionId: 'question-one', setId: 'set-one' } })).json();
   expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
-  const verdictAsk = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
+  const verdictAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'review-verdict', stage: 'rig-review' });
   const value = { questionId: 'question-one', selections: [{ itemId: 'item-one', optionId: 'value-one', otherText: null }], note: '원문' };
   const submitted = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: verdictAsk.askId,
     expectedGeneration: f.session.status().generation, submissionId: 'refused-picks', kind: 'interview-picks', value }));
@@ -374,7 +375,7 @@ test('parts-verdict UI save finalizes rig-review/act@6 with pointed Parts commen
   const publication = await f.publish();
   const retained=f.session.retainedSource(publication.publicationId);
   const pkg=await loadPartsView(join(retained.snapshotRoot,'out'));
-  const ask = await f.ask(publication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   const page = await f.display(publication);
   const bodyHash = parts.images.find(img => img.path === 'parts/body.png' && img.role === 'part')!.sha256;
   const headHash = parts.images.find(img => img.path === 'parts/head.png' && img.role === 'part')!.sha256;
@@ -508,10 +509,17 @@ test('parts-verdict UI save finalizes rig-review/act@6 with pointed Parts commen
     schema: 'rig-review/1', id: 'pkg', title: 'Test Package', revision: 'r1', model: 'rig.model.json',
   });
   expect(withoutPanels.panels).toBeUndefined();
+  for (const side of [['parts.issues'], []] as const) {
+    const accepted = {...panels, side};
+    expect(parsePanelComposition(accepted)).toEqual(accepted);
+    expect(parseManifest({
+      schema: 'rig-review/1', id: 'pkg', title: 'Test Package', revision: 'r1', model: 'rig.model.json',
+      panels: accepted,
+    }).panels).toEqual(accepted);
+  }
   for (const invalidPanels of [
     { ...panels, schema: 'rig-review/panels@0' },
     { ...panels, stage: ['parts.canvas', 'rig.playback'] },
-    { ...panels, side: ['parts.issues'] },
     { ...panels, unknownSlot: ['parts.list'] },
   ]) {
     expect(() => parsePanelComposition(invalidPanels)).toThrow('JOB_PANELS_INVALID');
@@ -525,14 +533,14 @@ test('parts-verdict UI save finalizes rig-review/act@6 with pointed Parts commen
     panels: { ...panels, stage: ['unknown-component'] },
   });
   expect(withUnknownComponent.panels?.stage as readonly string[]).toEqual(['unknown-component']);
-  const mutableAsk=await f.ask(publication,{kind:'parts-verdict',draftId:'synthetic-draft'});
+  const mutableAsk=seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
   const mutableInput={...input,askId:mutableAsk.askId,submissionId:'parts-mutable',
     expectedGeneration:f.session.status().generation,value:structuredClone(input.value)};
   const pending=f.session.commitUIAct(mutableInput);
   mutableInput.value.issues[0]!.rigRegion.x++;
   const isolated=await pending;
   expect(isolated.value).toEqual(expectedValue as never);
-  const mixedAsk = await f.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
+  const mixedAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
   const general = ['  Parts general 한글  ', 'Another observation'] as const;
   const mixed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, askId: mixedAsk.askId,
     expectedGeneration: f.session.status().generation, submissionId: 'mixed-parts-831',
@@ -548,7 +556,7 @@ test('parts-verdict UI save finalizes rig-review/act@6 with pointed Parts commen
   expect(mixedAct.value).toEqual({verdict: 'changes-requested', comments: [...pinned, {text: general[0]}, {text: general[1]}]});
   expect(projectComments(mixedAct.value.comments)).toBe(projectComments(pinned) + '\n\n[general]\n' + general.join('\n\n[general]\n'));
   expect(JSON.stringify(mixedAct)).toBe(mixedBytes);
-  const secondAsk = await f.ask(publication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
+  const secondAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   await writeFile(join(f.root, 'out/parts/depth.png'), 'changed depth only');
   const stale = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, askId: secondAsk.askId,
     submissionId: 'stale-parts', expectedGeneration: f.session.status().generation }));

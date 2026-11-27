@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
@@ -84,7 +85,7 @@ async function inputFor(f: Fixture, operation: Operation): Promise<ReplayRaceInp
     return { ...common, kind: 'agent', request: {
       ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
       idempotencyKey: 'same-key-ask', publicationId: publication.publicationId,
-      // #1235: an ask-verb race needs an ask; the rig verdict is the one package ask that is not a fixture act.
+      // The gated caller runs a real ask against a receipt that arrives after its first read.
       subject: { kind: 'review-verdict', stage: 'rig-review' },
     } };
   }
@@ -105,7 +106,11 @@ async function askedUIInput(f: Fixture): Promise<ReplayRaceInput> {
 }
 
 async function commit(input: ReplayRaceInput) {
-  const child = worker({ ...input, gated: false });
+  // Publish and UI winners still commit through their production paths. The
+  // independent ask winner imports a receipt written before fresh asks retired.
+  const child = worker(input.kind === 'agent' && input.request.verb === 'ask'
+    ? { ...input, gated: false, historicalAsk: true }
+    : { ...input, gated: false });
   try {
     const result = await child.result();
     expect(result.result.outcome).toHaveProperty('value');
@@ -251,6 +256,16 @@ for (const operation of ['publish', 'ask', 'ui'] as const) {
   });
 }
 
+test('#1232 an ask reaching the locked row without a historical receipt refuses without committing', async () => {
+  const f = await jobFixture();
+  try {
+    const input = await inputFor(f, 'ask');
+    const result = await race(f, input, 'REVIEW1232_FRESH_ASK', async () => {});
+    expect(result.caller.result.outcome).toEqual({code: 'JOB_ASK_INVALID'});
+    expect(result.after).toEqual(result.before);
+  } finally { await f.close(); }
+});
+
 for (const scenario of ['older-generation', 'future-generation', 'rotated-nonce', 'changed-source',
   'changed-head', 'answered-ask', 'unknown-ask', 'closed'] as const) {
   test(`UI ${scenario} is validated on the fresh locked row`, async () => {
@@ -268,7 +283,7 @@ for (const scenario of ['older-generation', 'future-generation', 'rotated-nonce'
         switch (scenario) {
           case 'older-generation':
           case 'future-generation':
-            return f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
+            return seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'review-verdict', stage: 'rig-review' });
           case 'rotated-nonce': await f.display(publication); return;
           case 'changed-source': {
             const path = join(f.root, 'out/review.json'), manifest = JSON.parse(await readFile(path, 'utf8'));

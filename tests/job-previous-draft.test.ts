@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {afterEach, expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
 import {mkdirSync, readFileSync, symlinkSync, truncateSync, unlinkSync, writeFileSync} from 'node:fs';
@@ -322,7 +323,7 @@ test('previous draft identity is declared, digested and retained with the same f
 
 async function partsAct(f: Fixture) {
   const publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
   const retained = f.session.retainedSource(publication.publicationId);
   const crop = makeSyntheticPngBytes(), sha256 = jobHash(crop);
   const issue = {schema: 'rig-review-parts-comment/2', id: 'diff-pin', summary: '  한글\nexact  ',
@@ -375,7 +376,7 @@ test('standing owner prepares and commits a previous-draft pin without painting 
   try {
     const {publication, host} = f, {session} = host;
     const subject = {kind: 'parts-verdict', draftId: 'synthetic-parts'} as const;
-    const ask = await f.ask(publication, subject);
+    const ask = seedHistoricalVerdictAsk(session, publication.publicationId, subject);
     const response = await f.ui('displayed', {publicationId: publication.publicationId, sourceHash: publication.source.sourceHash,
       pageId: 'previous-draft-page'});
     expect(response.status).toBe(200);

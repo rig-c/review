@@ -1,11 +1,9 @@
 /** #735 ordinary-Nova-only UI proof. Reuses the live-job fixture, CDP and visibility harness.
  * No producer/compiler acceptance claim; no local browser invocation. */
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
 import {mkdir,mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
-import {JOB_API_SCHEMA} from '../src/job-contract.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
@@ -27,13 +25,11 @@ async function run(lang:'en'|'ko',output:string){
  const record=async(name:string,value:unknown)=>{observations[name]=value;await writeFile(join(out,'observations.json'),JSON.stringify(observations,null,2)+'\n');console.log('REVIEW_735 '+lang+' '+name);};
  try{
   const publication=await fixture.publish();
-  const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'ask',expectedGeneration:fixture.host.session.status().generation,idempotencyKey:'735-rig-'+lang,publicationId:publication.publicationId,subject:{kind:'review-verdict',stage:'rig-review'}});
-  assert.equal(response.status,200);assert.equal((await response.json()).ok,true);
   const before=await jobInputHashes(fixture.input.root);
   page=await launchCdpSession(profile,{sendDeadlineMs:20_000});await page.setViewport(1600,1000);
   const owner=new URL(fixture.host.ownerUrl);owner.searchParams.set('lang',lang);await page.goto(owner.href,lang);
   const wait=async(expression:string,name:string)=>withDeadline('735.'+lang+'.'+name,20_000,async signal=>{while(!signal.aborted){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(25);}throw signal.reason;});
-  await wait("!!document.querySelector('#rig-root canvas')&&!!document.querySelector('#stage-comment-list')&&!!document.querySelector('#save:not(:disabled)')&&!!document.querySelector('#view-coordinates')?.textContent",'ready');
+  await wait("!!document.querySelector('#rig-root canvas')&&!!document.querySelector('#stage-comment-list')&&!!document.querySelector('#send-comments:not([hidden])')&&!!document.querySelector('#view-coordinates')?.textContent",'ready');
   // #844 keeps the pending question in the dedicated headline/act row; wait for its real render.
   await wait("!!document.querySelector('#workspace-ask-headline')?.textContent?.trim()&&!document.querySelector('#workspace-act-row')?.hidden",'pending-act-row');
   await page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
@@ -65,7 +61,7 @@ async function run(lang:'en'|'ko',output:string){
     if(comments)assert.equal(state.commentsPanel,true);assert.ok(!state.tabs.includes(catalog['Comments (0)']));
     // #844 lands the #838 Timeline rename; the question remains separate from the Review opener.
     assert.equal(state.tabs[0],catalog[mode==='rig'?'Part':'Timeline']);assert.equal(state.summaryInputs,0);assert.equal(state.commentLists,1);assert.equal(state.commentListInPanel,true);
-    assert.equal(state.ask,catalog['Check the rig and motion.']);
+    assert.equal(state.ask,catalog["We're looking at the work together. Leave your thoughts as comments."]);
     for(const label of state.modeLabels)assert.ok(!['Setup','Animate','Write review','셋업','애니메이트','리뷰 작성'].includes(label),'no bottom mode labels');
     await writeFile(join(out,mode+(comments?'-comments':'-blocks')+'.png'),await page.screenshot());
     if(comments)await click(page,'#stage-comment');

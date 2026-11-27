@@ -8,6 +8,7 @@
 
 ### Changed
 
+* Leave comments on live reviews and in Compare without choosing a verdict. Send comments saves feedback locally when you open a package or parts folder (#1232).
 * Output from a build on one side no longer appears while the other side is selected, and its result is shown when you return.
 
 ### Fixed

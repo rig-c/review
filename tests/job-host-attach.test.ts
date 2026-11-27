@@ -16,6 +16,7 @@ import {
   type JobOwnerHost,
 } from '../src/job-host.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 const hosts: JobOwnerHost[] = [];
@@ -941,7 +942,7 @@ test('CP1 lazy write adopts only the same existing file and same exact job ident
   }
 });
 
-test('CP1 later semantic publish ask next UI finalization writer fetch and close preserve CAS and revocation', async () => {
+test('CP1 later semantic publish, ask refusal and replay, next, UI finalization, fetch and close preserve CAS and revocation', async () => {
   const f = await createFixture(); let installs = 0, reads = 0;
   const options = {...baseOptions(f), installWriterBinding: () => {installs++;},
     readPublished: async () => {reads++; return f.getContext();}};
@@ -958,8 +959,12 @@ test('CP1 later semantic publish ask next UI finalization writer fetch and close
   const stale = await semantic(attached, 'ask', {expectedGeneration: 0, idempotencyKey: 'stale', publicationId: published.value.publicationId,
     subject: {kind: 'review-verdict', stage: 'rig-review'}});
   expect(stale).toMatchObject({ok: false, error: {code: 'JOB_GENERATION_STALE'}});
-  const ask = await semantic(attached, 'ask', {expectedGeneration: 1, idempotencyKey: 'attached-ask', publicationId: published.value.publicationId,
-    subject: {kind: 'review-verdict', stage: 'rig-review'}}); expect(ask.ok).toBe(true);
+  const askFields = {expectedGeneration: 1, idempotencyKey: 'attached-ask', publicationId: published.value.publicationId,
+    subject: {kind: 'review-verdict', stage: 'rig-review'} as const};
+  expect(await semantic(attached, 'ask', {...askFields, idempotencyKey: 'fresh-attached-ask'}))
+    .toMatchObject({ok: false, generation: 1, error: {code: 'JOB_ASK_INVALID'}});
+  const historical = seedHistoricalVerdictAsk(attached.session, askFields.publicationId, askFields.subject, askFields.idempotencyKey);
+  expect(await semantic(attached, 'ask', askFields)).toMatchObject({ok: true, value: historical});
   expect(await semantic(attached, 'next', {after: null, waitMs: 0})).toMatchObject({ok: true, value: {status: 'events'}});
   const uiHeaders = {'Content-Type': 'application/json', Origin: attached.origin, 'X-Review-Capability': credentials.ui};
   const display = await attached.ports.ackDisplayed(attached.session.jobId, new Request(attached.origin + `/jobs/${attached.session.jobId}/ui/displayed`, {

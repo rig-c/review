@@ -7,6 +7,7 @@ import {createJobRigSubmission} from '../web/job-rig-capture.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
 import {t} from '../web/i18n.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 
 test('C4 panel parser shares one browser-safe implementation with manifest compatibility exports', async () => {
     const contract = await import('../src/job-contract.ts');
@@ -1237,9 +1238,11 @@ test('the real UI act stays valid across an unrelated ask while future generatio
         pageId: 'generation-page', sourceHash: publication.source.sourceHash})).json();
     const captured = {...displayed.value, expectedGeneration: f.host.session.status().generation,
         submissionId: 'generation-save', kind: 'comments', value: {comments: [{text: 'generation save'}]}};
-    const unrelated = await (await f.call({...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
+    const ask = {...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
         idempotencyKey: 'unrelated-ask', publicationId: publication.publicationId,
-        subject: {kind: 'review-verdict', stage: 'rig-review'}})).json();
+        subject: {kind: 'review-verdict', stage: 'rig-review'} as const};
+    seedHistoricalVerdictAsk(f.host.session, ask.publicationId, ask.subject, ask.idempotencyKey);
+    const unrelated = await (await f.call(ask)).json();
     expect(unrelated.ok).toBe(true);
     const saved = await (await f.ui('acts', captured)).json();
     expect(saved.ok).toBe(true);
@@ -1272,13 +1275,15 @@ test('the declared browser inputs publish parts, rig and direction through the r
         const parts = await f.publish('parts');
         expect(parts.source.selector?.kind).toBe('draft');
         expect(parts.source.parts?.images).toHaveLength(1);
-        const partsAsk = await f.ask(parts, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+        const partsAsk = seedHistoricalVerdictAsk(f.host.session, parts.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
         expect(partsAsk.status).toBe('pending');
+        expect(f.host.session.status().pending).toContainEqual(partsAsk);
         const rig = await f.publish('rig');
         expect(rig.source.selector).toEqual({kind: 'rig', version: 2});
         // #1235: the rig sample ask is the rig verdict; the interview binding has its own retained-question test.
-        const verdict = await f.ask(rig, {kind: 'review-verdict', stage: 'rig-review'});
+        const verdict = seedHistoricalVerdictAsk(f.host.session, rig.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
         expect(verdict.status).toBe('pending');
+        expect(f.host.session.status().pending).toContainEqual(verdict);
         const direction = await f.publish('direction');
         expect(direction.source.direction?.sha256).toMatch(/^[a-f0-9]{64}$/);
         const descriptor = await (await fetch(f.locator + '/publications/' + direction.publicationId)).json();
@@ -2214,8 +2219,10 @@ describe('C4 shared parts host', () => {
             stage: ['parts.canvas'], toolbar: ['parts.layers'], side: ['parts.issues', 'act.submit']});
         const explicit = {...fallback.composition, toolbar: []};
         expect(resolveJobPanels(partsMetadata(explicit), source).composition).toEqual(explicit);
+        const legacyOrder = {...explicit, side: ['act.submit', 'parts.issues'] as const};
+        expect(resolveJobPanels(partsMetadata(legacyOrder), source)).toEqual({composition: legacyOrder, invalid: false});
         for (const raw of [null, [], {}, {...explicit, schema: 'wrong'}, {...explicit, stage: []},
-            {...explicit, stage: ['parts.canvas', 'rig.playback']}, {...explicit, side: ['act.submit', 'parts.issues']},
+            {...explicit, stage: ['parts.canvas', 'rig.playback']},
             {...explicit, left: [false]}]) {
             expect(resolveJobPanels(partsMetadata(raw), source)).toEqual({...fallback, invalid: true});
         }
@@ -2552,12 +2559,14 @@ test('#623: job stage-parts accepts a sealed source-only painting outside parts 
     expect(diffRes.status).toBe(409);
     expect((await diffRes.json()).error.code).toBe('JOB_SOURCE_MISMATCH');
 
-    // Commit a nonempty Overlay issue through the normal job ask -> displayed -> ui/acts -> fetch-act cycle.
-    const asked = await (await f.call({
+    // Complete a stored verdict ask through displayed -> ui/acts -> fetch-act with a nonempty Overlay issue.
+    const ask = {
         ...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
         idempotencyKey: 'parts-verdict-ask-623', publicationId: publication.publicationId,
-        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts'},
-    })).json();
+        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts'} as const,
+    };
+    seedHistoricalVerdictAsk(f.host.session, ask.publicationId, ask.subject, ask.idempotencyKey);
+    const asked = await (await f.call(ask)).json();
     expect(asked.ok).toBe(true);
     const ack = await (await f.ui('displayed', {
         publicationId: publication.publicationId, pageId: 'parts-page-623', sourceHash: publication.source.sourceHash,
@@ -2844,12 +2853,14 @@ test('#626: retained job publication with producer.config, producer.parts, produ
     expect(diffRes.status).toBe(409);
     expect((await diffRes.json()).error.code).toBe('JOB_SOURCE_MISMATCH');
 
-    // Complete normal ask -> displayed -> ui/acts -> fetch-act cycle.
-    const asked = await (await f.call({
+    // Complete a stored verdict ask through displayed -> ui/acts -> fetch-act.
+    const ask = {
         ...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
         idempotencyKey: 'parts-verdict-ask-626', publicationId: publication.publicationId,
-        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts-626'},
-    })).json();
+        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts-626'} as const,
+    };
+    seedHistoricalVerdictAsk(f.host.session, ask.publicationId, ask.subject, ask.idempotencyKey);
+    const asked = await (await f.call(ask)).json();
     expect(asked.ok).toBe(true);
     const ack = await (await f.ui('displayed', {
         publicationId: publication.publicationId, pageId: 'parts-page-626', sourceHash: publication.source.sourceHash,

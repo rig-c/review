@@ -1,4 +1,4 @@
-/** #1159: the shared verdict controls explain the zero-comment refusal in EN and KO. */
+/** #1159/#1232: the shared action row keeps Send comments and no verdict controls in EN and KO. */
 import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
@@ -10,25 +10,22 @@ import {koCatalog} from '../web/catalog-ko.ts';
 
 type Box=PartsViewRect;
 type Reading={
- width:number;dpr:number;row:Box;headline:Box;approve:Box;changes:Box;status:Box|null;reason:Box|null;reasonText:Box|null;
- text:string;title:string;notice:string;state:string;disabled:boolean;oneLine:boolean;describedBy:string|null;
+ width:number;dpr:number;row:Box;headline:Box;send:Box;status:Box|null;
+ headlineText:string;sendText:string;notice:string;state:string;disabled:boolean;primary:boolean;verdictVisible:boolean;
 };
 const readback=`(()=>{
  const byId=id=>document.getElementById(id);
- const box=node=>node?.getClientRects().length?node.getBoundingClientRect().toJSON():null;
- const changes=byId('request-changes'),reason=byId('request-changes-reason'),range=document.createRange();
- if(reason)range.selectNodeContents(reason);
- return {width:innerWidth,dpr:devicePixelRatio,row:box(byId('workspace-act-row')),headline:box(byId('workspace-ask-headline')),
-  approve:box(byId('save')),changes:box(changes),status:box(byId('review-draft-state')),reason:box(reason),
-  reasonText:reason?.checkVisibility()?range.getBoundingClientRect().toJSON():null,
-  text:reason?.textContent??'',title:changes.title,notice:byId('review-message').textContent,
-  state:byId('review-draft-state').textContent,disabled:changes.disabled,describedBy:changes.getAttribute('aria-describedby'),
-  oneLine:!!reason&&range.getClientRects().length===1&&range.getBoundingClientRect().width<=reason.clientWidth+1};
+ const box=node=>node?.checkVisibility()?node.getBoundingClientRect().toJSON():null;
+ const send=byId('send-comments'),headline=byId('workspace-ask-headline');
+ return {width:innerWidth,dpr:devicePixelRatio,row:box(byId('workspace-act-row')),headline:box(headline),
+  send:box(send),status:box(byId('review-draft-state')),headlineText:headline.textContent,sendText:send.textContent,
+  notice:document.querySelector('#review-message.error')?.textContent??'',state:byId('review-draft-state').textContent,
+  disabled:send.disabled,primary:send.classList.contains('primary'),
+  verdictVisible:['save','request-changes','request-changes-reason'].some(id=>!!box(byId(id)))};
 })()`;
 const outIndex=Bun.argv.indexOf('--out');
 const output=resolve(outIndex<0?'artifacts/request-changes-reason':Bun.argv[outIndex+1]!);
 await mkdir(output,{recursive:true});
-const failures:string[]=[];
 const cases:readonly {lang:'en'|'ko';width:number;stage:'direction'|'rig'|'parts';close?:boolean}[]=[
  ...(['en','ko'] as const).flatMap(lang=>[390,1024,1440].map(width=>({lang,width,stage:'direction' as const}))),
  {lang:'en',width:390,stage:'rig'},
@@ -49,19 +46,11 @@ async function closeDrawer(page:InputCdpSession) {
  await wait(page,`!document.querySelector('${drawer}')`);
 }
 function verifyGeometry(reading:Reading, label:string) {
- const {reason,approve,changes,row,headline,status}=reading;
- if(!reason)return;
- assert.ok(reading.oneLine,label+' reason fits on a single line');
- assert.ok(reason.left>=row.left&&reason.right<=row.right&&reason.top>=row.top&&reason.bottom<=row.bottom,label+' reason inside the act row');
- for(const other of [approve,changes,headline,status]){
+ const {send,row,headline,status}=reading;
+ assert.ok(send.left>=row.left&&send.right<=row.right&&send.top>=row.top&&send.bottom<=row.bottom,label+' Send comments inside the act row');
+ for(const other of [headline,status]){
   if(!other)continue;
-  assert.ok(reason.right<=other.left+.5||reason.left>=other.right-.5||reason.bottom<=other.top+.5||reason.top>=other.bottom-.5,label+' reason does not overlap act content');
- }
- if(reading.width===390){
-  assert.ok(reason.top>=changes.bottom-.5,label+' narrow reason below the controls');
-  assert.ok(reading.reasonText&&Math.abs(reading.reasonText.right-changes.right)<=1,label+' narrow reason text right-aligned');
- }else{
-  assert.ok(approve.right<=reason.left&&reason.right<=changes.left&&reason.top<changes.bottom&&reason.bottom>changes.top,label+' wide reason between the buttons');
+  assert.ok(send.right<=other.left+.5||send.left>=other.right-.5||send.bottom<=other.top+.5||send.top>=other.bottom-.5,label+' Send comments does not overlap act content');
  }
 }
 
@@ -71,16 +60,14 @@ for(const {lang,width,stage,close} of cases){
  const profile=await mkdtemp(join(output,'chrome-'));
  let page:InputCdpSession|undefined;
  try{
-  const publication=await fixture.publish(stage);
-  await fixture.ask(publication,stage==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:
-   {kind:'review-verdict',stage:stage==='rig'?'rig-review':'direction-review'});
+  await fixture.publish(stage);
   const target=new URL(fixture.host.ownerUrl);target.searchParams.set('lang',lang);
   let send:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
   page=await launchCdpSession(profile,{onEvent:(event,control)=>{if(event.sessionId)send=control;}});
   assert.ok(send);
   await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:2,mobile:false});
   await page.goto(target.href,lang);
-  await wait(page,`document.body.dataset.ready==='true'&&!document.body.inert&&document.querySelector('#request-changes')?.checkVisibility()`);
+  await wait(page,`document.body.dataset.ready==='true'&&!document.body.inert&&document.querySelector('#send-comments')?.checkVisibility()`);
   await closeDrawer(page);
   const capture=async(name:string)=>{
    await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
@@ -91,25 +78,21 @@ for(const {lang,width,stage,close} of cases){
   };
   const initial=await capture('before');
   const catalog=lang==='en'?enCatalog:koCatalog;
-  const key=stage==='rig'?'Add a comment or an edit where changes are needed.':'Add a comment where changes are needed.';
   assert.equal(initial.width,width);assert.equal(initial.dpr,2);
-  assert.equal(initial.disabled,true);assert.equal(initial.title,catalog[key]);
-  const x=initial.changes.left+initial.changes.width/2,y=initial.changes.top+initial.changes.height/2;
+  assert.equal(initial.disabled,true);assert.equal(initial.primary,true);assert.equal(initial.verdictVisible,false);
+  assert.equal(initial.headlineText,catalog["We're looking at the work together. Leave your thoughts as comments."]);
+  assert.equal(initial.sendText,catalog['Send comments']);
+  verifyGeometry(initial,label);
+  const x=initial.send.left+initial.send.width/2,y=initial.send.top+initial.send.height/2;
   await page.mouse('mousePressed',x,y);
   await page.mouse('mouseReleased',x,y);
   assert.deepEqual(await page.evaluate<Reading>(readback),initial,label+' disabled click leaves the act bar unchanged');
-  if(!initial.reason)failures.push(label+' missing visible zero-comment reason');
-  else{
-   assert.equal(initial.text,catalog[key]);
-   assert.equal(initial.describedBy,'request-changes-reason');
-   verifyGeometry(initial,label);
-  }
   if(close){
    await fixture.finish();
    await wait(page,`document.querySelector('#review-message.error')?.textContent===${JSON.stringify(catalog['job.closed'])}`);
    const closed=await capture('after');
-   assert.equal(closed.reason,null);
-   assert.equal(closed.describedBy,null);
+   assert.equal(closed.verdictVisible,false);
+   assert.equal(closed.send,null);
    console.log('REQUEST_CHANGES_CASE',label,JSON.stringify({notice:closed.notice,state:closed.state}));
    continue;
   }
@@ -136,16 +119,14 @@ for(const {lang,width,stage,close} of cases){
   await wait(page,`!document.querySelector('.stage-comment-composer')&&document.querySelectorAll('.stage-comment-summary').length===1`);
   await closeDrawer(page);
   const after=await capture(pin?'after-pin':'after-comment');
-  assert.equal(after.reason,null);assert.equal(after.describedBy,null);
-  assert.equal(after.disabled,stage==='parts','a Parts general comment still needs a part pin');
-  if(stage==='parts'){
-   assert.equal(after.title,catalog['Request changes needs at least one comment pinned to a part.']);
-   assert.equal(after.notice,after.title);
-  }
-  console.log('REQUEST_CHANGES_CASE',label,pin?'pin':'general',JSON.stringify({reason:!!initial.reason,title:initial.title,afterDisabled:after.disabled,afterNotice:after.notice}));
+  assert.equal(after.verdictVisible,false);
+  assert.equal(after.disabled,false,'a general or pinned comment can be sent on every live screen');
+  assert.equal(after.primary,true);
+  assert.equal(after.notice,'','general Parts comments need no pin');
+  verifyGeometry(after,label);
+  console.log('SEND_COMMENTS_CASE',label,pin?'pin':'general',JSON.stringify({disabled:after.disabled,notice:after.notice}));
  }finally{
   try{await page?.close();}finally{await fixture.close();await rm(profile,{recursive:true,force:true});}
  }
 }
-assert.deepEqual(failures,[],'visible reason on every zero-comment verdict');
-console.log('REQUEST_CHANGES_REASON_PASS',cases.length);
+console.log('SEND_COMMENTS_LAYOUT_PASS',cases.length);

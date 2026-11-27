@@ -10,7 +10,7 @@ import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 
-const help = 'Record review status and structured feedback while preserving sources. Motion is read only.';
+const help = 'Saves locally. The producer receives no feedback.';
 const widths = [1440, 1600, 1920];
 const outFlag = Bun.argv.indexOf('--out');
 const output = resolve(outFlag < 0 ? 'artifacts/rig-footer' : Bun.argv[outFlag + 1]!);

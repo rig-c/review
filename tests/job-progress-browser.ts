@@ -1,4 +1,4 @@
-/** #987 owner readbacks against the shipped page stream, the #929 sealed scene option-set picture (#1230 comment mode) and a pending rig review-verdict ask (#1229). */
+/** #987 owner readbacks against the shipped page stream, the #929 sealed scene option-set picture (#1230 comment mode) and live progress on a rig with comments (#1232). */
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {realpathSync} from 'node:fs';
@@ -77,13 +77,6 @@ async function startFixture(scratch: string) {
     assert.ok(result.verb === 'publish' && result.ok);
     return result;
   }
-  async function askRigVerdict(publication: Awaited<ReturnType<typeof publishRig>>) {
-    const {publicationId} = publication.value;
-    const result = await agent({verb: 'ask', publicationId, subject: {kind: 'review-verdict', stage: 'rig-review'},
-      expectedGeneration: publication.generation, idempotencyKey: 'ask-' + publicationId});
-    assert.ok(result.verb === 'ask' && result.ok);
-    return result;
-  }
   async function progress(seq: number, phase: 'ingest' | 'build' | 'measure') {
     const result = await agent({verb: 'progress', seq, phase, ...(phase === 'build' ? {text: agentText, step: {i: 2, n: 3}} : {})});
     assert.ok(result.verb === 'progress' && result.ok && result.value.status === 'accepted');
@@ -95,7 +88,7 @@ async function startFixture(scratch: string) {
     assert.ok(result.verb === 'next' && result.ok);
     return result.value.events.find(event => event.type === 'act' && event.act.publicationId === publicationId && event.act.kind === 'comments');
   }
-  return {host, root, publishInterview, publishRig, askRigVerdict, progress, readCommentAct};
+  return {host, root, publishInterview, publishRig, progress, readCommentAct};
 }
 
 const readScreen = (page: InputCdpSession, askId = '') => page.evaluate<HeadlineReadback>(`(() => {
@@ -140,7 +133,6 @@ async function runBrowser(language: Language, output: string, scratch: string) {
   const streams = new Map<string, {feed(data: string): void; buffered: string[] | null}>();
   let page: InputCdpSession | undefined;
   let command: ((method: string) => Promise<unknown>) | undefined;
-  let askId = '';
   try {
     page = await launchCdpSession(join(scratch, 'chrome'), {async onEvent({method, params, sessionId}, send) {
       if (sessionId) command = send;
@@ -176,7 +168,7 @@ async function runBrowser(language: Language, output: string, scratch: string) {
     }});
     assert.ok(command);
     await command('Network.enable');
-    const read = () => readScreen(page!, askId);
+    const read = () => readScreen(page!);
     const capture = async (name: string, predicate: (value: HeadlineReadback) => boolean) => {
       const result = await observe(name, read, predicate);
       readbacks[name] = result;
@@ -243,31 +235,24 @@ async function runBrowser(language: Language, output: string, scratch: string) {
       state.headline === catalog[noAskHeadline] && state.sendCommentsVisible && state.translate === null && state.whiteSpace === firstLoad.whiteSpace);
 
     const rigPublication = await fixture.publishRig();
-    const secondAsk = await fixture.askRigVerdict(rigPublication);
-    askId = secondAsk.value.askId;
-    const pendingCaption = (state: HeadlineReadback) => state.barVisible && state.ready && state.actionVisible &&
-      state.headline === catalog['Check the rig and motion.'] && state.translate === null;
-    await capture('second-pending', pendingCaption);
-    const pendingUpdate = await fixture.progress(3, 'measure');
+    await capture('rig-no-ask', state => state.barVisible && state.ready && !state.actionVisible &&
+      state.sendCommentsVisible && state.headline === catalog[noAskHeadline] && state.translate === null);
+    const rigProgress = await fixture.progress(3, 'measure');
     const witness = async (name: string, earlierRequests?: ReadonlySet<string>) => {
       const observed = await observe(name, async () => seenProgress.find(({requestId, line}) =>
-        !earlierRequests?.has(requestId) && line.progress?.seq === pendingUpdate.seq &&
-        line.progress.at === pendingUpdate.at && line.progress.phase === 'measure' &&
-        line.progress.generation === secondAsk.generation), value => !!value);
+        !earlierRequests?.has(requestId) && line.progress?.seq === rigProgress.seq &&
+        line.progress.at === rigProgress.at && line.progress.phase === 'measure' &&
+        line.progress.generation === rigPublication.generation), value => !!value);
       assert.ok(observed);
       progressReadbacks[name] = observed.line;
-      await page!.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
-      if (!earlierRequests) {
-        const state = await read();
-        assert.ok(pendingCaption(state), JSON.stringify(state));
-      }
-      await capture(name, pendingCaption);
+      await capture(name, state => state.ready && state.barVisible && !state.actionVisible &&
+        state.sendCommentsVisible && state.translate === 'no' && state.headline.includes(catalog['job.progress.phase.measure']));
     };
-    await witness('pending-beats-live-progress');
+    await witness('rig-live-progress');
     const earlierRequests = new Set(streams.keys());
     await page.goto('about:blank');
     await page.goto(owner.href);
-    await witness('pending-beats-replayed-progress', earlierRequests);
+    await witness('rig-replayed-progress', earlierRequests);
     await writeFile(join(output, 'observations.json'), JSON.stringify({status: 'PASS', language, actId: act.act.actId, readbacks, progressReadbacks}, null, 2) + '\n');
   } catch (error) {
     await writeFile(join(output, 'observations.json'), JSON.stringify({status: 'RED', language, readbacks, progressReadbacks, error: String(error)}, null, 2) + '\n');

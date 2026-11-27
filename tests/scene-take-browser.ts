@@ -28,10 +28,8 @@ try{
    f.input.setContext({...f.input.getContext(),selector:{kind:'post',version:2,rigVersion:1},subjects:[{kind:'review-verdict',stage:'direction-review'}]});
    const publication=await f.publish();
    const key='rig-review-record-comments/1:'+f.host.session.jobId+':'+jobSourceDraftId(publication.source)+':'+publication.source.sourceHash;
-   const response=await f.call({...f.input.base(),verb:'ask',expectedGeneration:f.host.session.status().generation,idempotencyKey:'scene-ask',publicationId:publication.publicationId,subject:{kind:'review-verdict',stage:'direction-review'}});
-   assert.equal((await response.json()).ok,true);
    const url=new URL(f.host.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href,language);
-   await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')&&!document.querySelector('#save').disabled`);
+   await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')&&document.querySelector('#send-comments')?.checkVisibility()`);
    if(sourceStart!==0){
     // #1041: Comment · C opens the right communication panel and narrows the stage; open it before the first raster read.
     // #1242 owner ruling 11-25: the panel stays only while the person is commenting, so Comment stays on (C off with no comment closes it).

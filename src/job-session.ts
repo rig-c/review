@@ -549,8 +549,9 @@ export class JobSession {
     return retained;
   }
 
-  /** Bind one subject to the retained source, store its pending ask and write its `pending` event. */
+  /** Admit a new ask after receipt replay and source checks. Historical verdict receipts and finalization bypass this path. */
   private addAsk(data: JobData, publicationId: string, subject: JobSubject | RecordSubject, retained: JobRetainedSourceV3): JobPendingAsk | PendingAskV3 {
+    if (subject.kind === 'review-verdict' || subject.kind === 'parts-verdict') throw new JobError('JOB_ASK_INVALID');
     const ask: JobPendingAsk | PendingAskV3 = isRetainedRecordSource(retained)
       ? { askId: randomUUID(), publicationId, subject, source: bindJobRecordAsk(subject, retained), status: 'pending' }
       : { askId: randomUUID(), publicationId, subject, source: bindJobAsk(subject, retained), status: 'pending' };

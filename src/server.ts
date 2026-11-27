@@ -23,6 +23,7 @@ import { createEnvironmentCheck, ENVIRONMENT_CHECK_LIMIT, EnvironmentCheckError 
 import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type LiveLifecycle, type UpgradableServer } from './live-lifecycle.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { LOCAL_COMMENTS_ROUTE, PACKAGE_COMMENTS_BODY_LIMIT, savePackageComments } from './local-comments.ts';
 const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; frame-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
 /** Request shapes the page or an edit card got wrong: 400. Everything else a refusal names is an outcome (200). */
 const MALFORMED=new Set(['REBUILD_REQUEST_INVALID','DENSITY_STRIP_REQUEST_INVALID','DENSITY_STRIP_FIELD','MESH_PATCH_SCOPE','EDIT_PATCH_INVALID','EDIT_PATCH_OP_UNKNOWN','EDIT_PATCH_POINTER_INVALID','EDIT_PATCH_CMD_UNKNOWN','EDIT_PATCH_ARG_UNKNOWN','BONES_OP_OUT_OF_SCOPE','RETARGET_REQUEST_INVALID']);
@@ -147,6 +148,15 @@ export async function createReviewRequestContext(p: ReviewPackage | null, option
 
       const controlled=await control?.(req,origin);if(controlled)return controlled;
 
+      if(req.method==='POST'&&path===LOCAL_COMMENTS_ROUTE){
+        if(joined?.draft)return json({error:'MODEL_UNAVAILABLE'},409);
+        if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+        const input=await bodyJson(req,PACKAGE_COMMENTS_BODY_LIMIT,'LOCAL_COMMENTS_BODY_LIMIT');
+        return json(await savePackageComments(p,input,options.stateDir,unchanged,async feedback => {
+          await rebuilds.validateApplied(appliedValue(feedback));
+        }));
+      }
+
       if(req.method==='PUT'&&url.pathname==='/api/session'){
         if(joined?.draft)return json({error:'MODEL_UNAVAILABLE'},409);
         if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
@@ -270,7 +280,8 @@ export async function createReviewRequestContext(p: ReviewPackage | null, option
     }catch(e){
       if(e instanceof JobError&&e.code==='JOB_PREVIOUS_BUILD_INVALID')return json({error:e.code,detail:e.message},409);
       const message=e instanceof Error?e.message:'Request failed';
-      return json({error:message},message===directionStale || message.startsWith(interviewStale) || message.includes('inputs changed')?409:400);
+      return json({error:message},message===directionStale || message.startsWith(interviewStale) || message.includes('inputs changed') ||
+        message.startsWith('JOB_ACT_SOURCE_STALE') || message==='JOB_IDEMPOTENCY_CONFLICT'?409:400);
     }};
   return {
     live,

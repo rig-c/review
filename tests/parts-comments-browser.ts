@@ -1,12 +1,14 @@
 /** Real browser evidence, separate from CI's *.test.ts contract guards. Uses the approved shared launcher. */
 import {mkdtemp,mkdir,readFile,writeFile,rm} from 'node:fs/promises';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {PNG} from 'pngjs';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {commentFixture} from './helpers/parts-comments-package.ts';
-import {loadPartsView,readVerdict} from '../src/parts-view.ts';
+import {loadPartsView} from '../src/parts-view.ts';
+import {commentPartsIssues,type PartsIssue} from '../src/parts-comment.ts';
+import type {JobContextComment} from '../src/job-contract.ts';
 import {resolvedCropPath} from '../src/comment-crops.ts';
 import {startPartsServer} from '../src/parts-server.ts';
 import {loadReview} from '../src/manifest.ts';
@@ -57,11 +59,22 @@ async function atlasClick(page:CdpSession,_embedded=false){
  await wait(page,`document.querySelector('[data-part-list] button[aria-pressed="true"]')?.dataset.slot===${JSON.stringify(box.name)}`,'atlas box opens region');
  const selected=await page.evaluate<string>(`document.querySelector('[data-part-list] button[aria-pressed="true"]').dataset.slot`);assert(selected===box.name,'atlas selects intended region');return {expected:box.name,selected};
 }
+async function readSentParts(file:string):Promise<PartsIssue[]> {
+ const {sends}=await Bun.file(file).json() as {sends:{value:{comments:JobContextComment[]}}[]};
+ return sends.flatMap(send=>commentPartsIssues(send.value.comments));
+}
+async function exportSentParts(root:string,painting:string,format:string):Promise<string> {
+ const child=Bun.spawn(['bun','src/entry.ts','parts',root,'--painting',painting,'--format',format],{stdout:'pipe',stderr:'pipe'});
+ const [exit,output,error]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);
+ assert(exit===0,'parts CLI export '+format+' '+error);
+ return output;
+}
 async function main(){
  const cache=process.env.RIG_REVIEW_BROWSER_CACHE??tmpdir();await mkdir(cache,{recursive:true});const root=await mkdtemp(join(cache,'browser-'));const previousState=process.env.RIG_REVIEW_STATE_DIR;process.env.RIG_REVIEW_STATE_DIR=join(root,'state');const profile=join(root,'profile');
  let server:Awaited<ReturnType<typeof startPartsServer>>|null=null,page:CdpSession|null=null,rigServer:Awaited<ReturnType<typeof startServer>>|null=null,atlasServer:Awaited<ReturnType<typeof startPartsServer>>|null=null;const report:Record<string,any>={};
  try{
  await mkdir(profile);await commentFixture(root);const painting=new PNG({width:64,height:64});for(let y=0;y<64;y++)for(let x=0;x<64;x++)painting.data.set([x*3,y*3,90,255],(y*64+x)*4);const paintingFile=join(root,'rig','painting.png');await writeFile(paintingFile,PNG.sync.write(painting));const pkg=await loadPartsView(root,{painting:paintingFile}),before=await Promise.all(pkg.files.map(async f=>[f.abs,hash(await readFile(f.abs))] as const));
+ const commentsFile=join(dirname(pkg.verdictPath),'review-comments.json');
  server=await startPartsServer(pkg,{port:0,capability:'d'.repeat(64),exitOnClose:false,graceMs:3600000,unopenedTimeoutMs:3600000});page=await launchCdpSession(profile);await page.setViewport(1440,1000);const base=`http://127.0.0.1:${server.port}/`;await page.goto(base+'?lang=en#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'parts boot');await click(page,'[data-part-list] button[data-slot="back_defect"]');await click(page,'#part-solo');await wait(page,commentReady,'item boot');await Bun.sleep(150);await page.evaluate(`(()=>{window.__inputTrace=[];for(const name of ['pointerdown','pointermove','pointerup','wheel'])document.addEventListener(name,e=>window.__inputTrace.push({type:name,target:e.target.id,viewport:e.target.closest?.('.viewport')?.id,x:e.clientX,y:e.clientY,buttons:e.buttons,trusted:e.isTrusted}),true);})()`);
  // Exact native 1 is reachable and cursor zoom/pan use the actual canonical canvas transform.
  await click(page,'#native-one');let c=await page.evaluate<any>(camera);assert(c.scale===1,'native 1 exact');const point={x:c.x+7.5*c.scale,y:c.y+9.5*c.scale},anchor=source(c,point);await page.mouse('mouseMoved',c.left+point.x,c.top+point.y);await page.mouse('mouseWheel',c.left+point.x,c.top+point.y,-120);await wait(page,`new DOMMatrix(document.getElementById('rig-root').style.transform).a>1`,'wheel actually zooms');const wheel=await page.evaluate<any>(`window.__inputTrace.filter(e=>e.type==='wheel').at(-1)`);assert(wheel?.viewport==='rig-viewport'&&wheel.trusted,'trusted wheel reaches rig viewport');const actualPoint={x:wheel.x-c.left,y:wheel.y-c.top},actualAnchor=source(c,actualPoint),zoomed=await page.evaluate<any>(camera),anchored=source(zoomed,actualPoint);report.cursor={scaleBefore:c.scale,scaleAfter:zoomed.scale,deliveredPoint:actualPoint,sourceBefore:actualAnchor,sourceAfter:anchored,pixelBefore:{x:Math.floor(actualAnchor.x),y:Math.floor(actualAnchor.y)},pixelAfter:{x:Math.floor(anchored.x),y:Math.floor(anchored.y)}};report.cursorError=Math.max(Math.abs(actualAnchor.x-anchored.x),Math.abs(actualAnchor.y-anchored.y));assert(JSON.stringify(report.cursor.pixelBefore)===JSON.stringify(report.cursor.pixelAfter),'cursor anchored native pixel');
@@ -80,13 +93,13 @@ async function main(){
  console.log('PARTS_821_RELOAD '+JSON.stringify({before:report.draftBeforeReload,after:report.draftAfterReload,lost:report.draftBeforeReload-report.draftAfterReload}));
  assert(report.draftBeforeReload===2&&report.draftAfterReload===2,'unsent parts comments survive reload');
  await page.evaluate(`window.__partsEvidence=${JSON.stringify(draftAccepted)}`);
- report.shots={en:(await page.screenshot()).toString('base64')};await click(page,'#request-changes');await wait(page,`document.getElementById('review-draft-state')?.dataset.saveState==='saved'`,'save verdict');
- const saved=(await readVerdict(pkg)).verdict!,accepted=await page.evaluate<any[]>('window.__partsEvidence');report.persistedNumericViews=saved.issues.map(c=>c.view);assert(JSON.stringify(saved.issues.map(c=>c.view))===JSON.stringify(accepted.map(c=>c.view)),'accepted numeric cameras persist exactly');assert(saved?.issues.length===2,'two saved comments');report.regions=saved.issues.map(c=>({image:c.imageRegion,rig:c.rigRegion}));report.rgbaEqual=[];for(const comment of saved.issues){const crop=PNG.sync.read(await readFile(resolvedCropPath(comment.nativeCrop!.path))),original=PNG.sync.read(await readFile(pkg.imagePaths[0]!)),r=comment.imageRegion!,expected=Buffer.alloc(r.width*r.height*4);for(let y=0;y<r.height;y++)original.data.copy(expected,y*r.width*4,((r.y+y)*original.width+r.x)*4,((r.y+y)*original.width+r.x+r.width)*4);report.rgbaEqual.push(crop.data.equals(expected));}assert(report.rgbaEqual.every(Boolean),'native RGBA alpha parity');
- for(const format of ['json','issue']){const res=await fetch(base+'api/parts/export?format='+format),out=await res.text();assert(res.ok&&saved.issues.every(c=>out.includes(c.nativeCrop!.sha256)&&out.includes(c.crop.sha256)),'export '+format);report[format+'ExportBytes']=out.length;}
+ report.shots={en:(await page.screenshot()).toString('base64')};await click(page,'#send-comments');await wait(page,`document.getElementById('review-draft-state')?.dataset.saveState==='saved'`,'save comments');
+ const saved={issues:await readSentParts(commentsFile)},accepted=await page.evaluate<any[]>('window.__partsEvidence');report.persistedNumericViews=saved.issues.map(c=>c.view);assert(JSON.stringify(saved.issues.map(c=>c.view))===JSON.stringify(accepted.map(c=>c.view)),'accepted numeric cameras persist exactly');assert(saved?.issues.length===2,'two saved comments');report.regions=saved.issues.map(c=>({image:c.imageRegion,rig:c.rigRegion}));report.rgbaEqual=[];for(const comment of saved.issues){const crop=PNG.sync.read(await readFile(resolvedCropPath(comment.nativeCrop!.path))),original=PNG.sync.read(await readFile(pkg.imagePaths[0]!)),r=comment.imageRegion!,expected=Buffer.alloc(r.width*r.height*4);for(let y=0;y<r.height;y++)original.data.copy(expected,y*r.width*4,((r.y+y)*original.width+r.x)*4,((r.y+y)*original.width+r.x+r.width)*4);report.rgbaEqual.push(crop.data.equals(expected));}assert(report.rgbaEqual.every(Boolean),'native RGBA alpha parity');
+ for(const format of ['json','issue']){const out=await exportSentParts(root,paintingFile,format);assert(saved.issues.every(c=>out.includes(c.nativeCrop!.sha256)&&out.includes(c.crop.sha256)),'export '+format);report[format+'ExportBytes']=out.length;}
  await page.goto(base+'?lang=en&reload=1#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'reload en');
  report.shots.savedVerdictBootEn=(await page.screenshot()).toString('base64');
- await click(page,'#stage-comment');await wait(page,`document.querySelectorAll('.stage-comment-item').length===2`,'reloaded rows');await click(page,'.stage-comment-summary');await wait(page,`!!document.querySelector('.stage-comment-composer')`,'restore view');report.postRestoreRendered=await page.evaluate(rendered);assert(JSON.stringify(report.preMarkRendered)===JSON.stringify(report.postRestoreRendered),'rendered rig/reference transforms and rects restore exactly');const reloaded=await page.evaluate<any>(`fetch('/api/parts').then(r=>r.json())`);assert(JSON.stringify(reloaded.verdict.issues.map((c:any)=>c.view))===JSON.stringify(report.persistedNumericViews),'reloaded numeric cameras round-trip exactly');
- await page.goto(base+'?lang=ko#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'reload ko');await click(page,'#stage-comment');await click(page,'.stage-comment-summary');await wait(page,`!!document.querySelector('.stage-comment-composer')`,'restore ko view');await click(page,'#stage-comment');await click(page,'#stage-comment');report.shots.ko=(await page.screenshot()).toString('base64');report.koLabels=await page.evaluate(`({selected:document.getElementById('rig-label').textContent,export:document.getElementById('request-changes').textContent,comments:document.getElementById('stage-comment').textContent})`);assert(report.koLabels.selected===koCatalog['Selected part']&&report.koLabels.export===koCatalog['Request changes'],'ko visible UI');
+ await click(page,'#stage-comment');await wait(page,`document.querySelectorAll('.stage-comment-item').length===2`,'reloaded rows');await click(page,'.stage-comment-summary');await wait(page,`!!document.querySelector('.stage-comment-composer')`,'restore view');report.postRestoreRendered=await page.evaluate(rendered);assert(JSON.stringify(report.preMarkRendered)===JSON.stringify(report.postRestoreRendered),'rendered rig/reference transforms and rects restore exactly');const reloaded=await readSentParts(commentsFile);assert(JSON.stringify(reloaded.map(c=>c.view))===JSON.stringify(report.persistedNumericViews),'reloaded numeric cameras round-trip exactly');
+ await page.goto(base+'?lang=ko#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'reload ko');await click(page,'#stage-comment');await click(page,'.stage-comment-summary');await wait(page,`!!document.querySelector('.stage-comment-composer')`,'restore ko view');await click(page,'#stage-comment');await click(page,'#stage-comment');report.shots.ko=(await page.screenshot()).toString('base64');report.koLabels=await page.evaluate(`({selected:document.getElementById('rig-label').textContent,export:document.getElementById('send-comments').textContent,comments:document.getElementById('stage-comment').textContent})`);assert(report.koLabels.selected===koCatalog['Selected part']&&report.koLabels.export===koCatalog['Send comments'],'ko visible UI');
  // The painting crop uses the same real pair. On an integer-placed part, compare decoded pixel bytes.
  await click(page,'#stage-comment');await click(page,'[data-part-list] button[data-slot="front"]');await wait(page,commentReady,'front painted');report.paintingEqual=await page.evaluate(`(()=>{const c=document.querySelector('#reference-content canvas'),d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++){let i=(y*c.width+x)*4;if(d[i]!==3*(14+x)||d[i+1]!==3*(14+y)||d[i+2]!==90||d[i+3]!==255)return false;}return true;})()`);assert(report.paintingEqual,'painting original subrect');
  // The same gesture, composer and crop path now bind a seam across two parts.
@@ -125,14 +138,14 @@ async function main(){
   const edited='Edited seam '+lang;
   await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value=${JSON.stringify(edited)};form.requestSubmit();})()`);
   await wait(page,`!document.querySelector('.stage-comment-composer')`,'validated seam edit accepted');
-  await click(page,'#request-changes');await wait(page,`document.getElementById('review-draft-state')?.dataset.saveState==='saved'`,'assembled save');
-  const verdict=(await readVerdict(pkg)).verdict!,seam=verdict.issues.find(issue=>issue.id===row)!;
-  if(lang==='ko'){const english=report.assembled[0].issue;assert(JSON.stringify(verdict.issues.find(issue=>issue.id===english.id))===JSON.stringify(english),'saved EN issue remains unchanged');}
+  await click(page,'#send-comments');await wait(page,`document.getElementById('review-draft-state')?.dataset.saveState==='saved'`,'assembled save');
+  const sent=await readSentParts(commentsFile),seam=sent.find(issue=>issue.id===row)!;
+  if(lang==='ko'){const english=report.assembled[0].issue;assert(JSON.stringify(sent.find(issue=>issue.id===english.id))===JSON.stringify(english),'saved EN issue remains unchanged');}
   assert(seam?.view.mode==='assembled'&&seam.imageRegion===null&&seam.nativeCrop===null&&seam.summary===edited,'saved assembled evidence');
   assert(JSON.stringify(seam.parts.map(part=>part.name))===JSON.stringify(['back_defect','front']),'bound parts survive edit and save');
   const bytes=await readFile(resolvedCropPath(seam.crop.path));assert(hash(bytes)===seam.crop.sha256,'stored viewport crop bytes');
   const decoded=PNG.sync.read(bytes);assert(decoded.width===seam.crop.width&&decoded.height===seam.crop.height,'stored viewport crop dimensions');
-  for(const format of ['json','issue']){const response=await fetch(base+'api/parts/export?format='+format),body=await response.text();assert(response.ok&&body.includes(seam.crop.sha256)&&body.includes(edited),'assembled export '+format);}
+  for(const format of ['json','issue']){const body=await exportSentParts(root,paintingFile,format);assert(body.includes(seam.crop.sha256)&&body.includes(edited),'assembled export '+format);}
   await page.goto(base+'?lang='+lang+'&seam-reload=1#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'assembled reopen');
   await click(page,'#stage-comment');await click(page,`[data-comment-id="${row}"] .stage-comment-summary`);await wait(page,`!!document.querySelector('.stage-comment-composer')&&!document.getElementById('part-solo').checked`,'assembled restore');
   assert(await page.evaluate(`JSON.stringify([...document.querySelectorAll('.stage-comment-parts [aria-pressed="true"]')].map(button=>button.dataset.commentPart))===JSON.stringify(['back_defect','front'])`),'restored issue highlights every bound part');

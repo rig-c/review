@@ -11,7 +11,7 @@ const fixture=await scriptedJobWindowFixture();let page:InputCdpSession|undefine
 const profile=await mkdtemp(join(tmpdir(),'review796-setup-'));const errors:unknown[]=[];
 async function wait(expression:string,timeoutMs=20000){const end=Date.now()+timeoutMs;while(Date.now()<end){if(await page!.evaluate(expression))return;await Bun.sleep(25);}throw new Error('SETUP_SCREEN_WAIT '+expression);}
 try{
- const publication=await fixture.publish('rig');await fixture.ask(publication,{kind:'review-verdict',stage:'rig-review'});
+ const publication=await fixture.publish('rig');
  page=await launchCdpSession(profile,{sendDeadlineMs:10000,onEvent(event,send){command=send;if(event.method==='Runtime.exceptionThrown')errors.push(event.params);}});await page.setViewport(1600,1000);await page.goto(fixture.host.ownerUrl);
  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')`);
  await page.evaluate(`document.querySelector('#zoom-in').click()`);
@@ -31,8 +31,8 @@ try{
  // #941: a pane that delivers no animation frames must still leave the waiting state and show the publication's controls.
  await command!('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{let id=0;window.__silentRafCalls=0;window.requestAnimationFrame=()=>{window.__silentRafCalls++;return ++id;};window.cancelAnimationFrame=()=>{};})()`});
  await page.goto('about:blank');await page.goto(fixture.host.ownerUrl);
- await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')&&document.querySelector('#workspace-ask-headline')?.textContent==='Check the rig and motion.'&&!!document.querySelector('#save:not(:disabled)')&&document.querySelector('#save')?.checkVisibility()&&document.querySelector('#request-changes')?.checkVisibility()`,5000);
- const silentRaf:any=await page.evaluate(`({calls:window.__silentRafCalls,headline:document.querySelector('#workspace-ask-headline')?.textContent,animation:document.querySelector('#animation-select')?.value,saveDisabled:document.querySelector('#save')?.disabled,requestChangesHidden:document.querySelector('#request-changes')?.hidden})`);
- assert.ok(silentRaf.calls>0);assert.equal(silentRaf.headline,'Check the rig and motion.');assert.equal(silentRaf.animation,'');assert.equal(silentRaf.saveDisabled,false);assert.equal(silentRaf.requestChangesHidden,false);assert.deepEqual(errors,[]);
+ await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')&&document.querySelector('#workspace-ask-headline')?.textContent==="We're looking at the work together. Leave your thoughts as comments."&&!!document.querySelector('#send-comments:not([hidden])')&&!document.querySelector('#save')?.checkVisibility()&&!document.querySelector('#request-changes')?.checkVisibility()`,5000);
+ const silentRaf:any=await page.evaluate(`({calls:window.__silentRafCalls,headline:document.querySelector('#workspace-ask-headline')?.textContent,animation:document.querySelector('#animation-select')?.value,sendDisabled:document.querySelector('#send-comments')?.disabled,requestChangesPresent:!!document.querySelector('#request-changes')})`);
+ assert.ok(silentRaf.calls>0);assert.equal(silentRaf.headline,"We're looking at the work together. Leave your thoughts as comments.");assert.equal(silentRaf.animation,'');assert.equal(silentRaf.sendDisabled,true);assert.equal(silentRaf.requestChangesPresent,false);assert.deepEqual(errors,[]);
  await writeFile(join(out,'observations.json'),JSON.stringify({fixture:'synthetic source-bound owner draft; real shared screen',sourceHash:publication.source.sourceHash,expectedRefusal:Bun.argv.includes('--expect-refusal'),refused,state,silentRaf,errors},null,2));await writeFile(join(out,'screen.png'),await page.screenshot());
 }finally{await page?.close();await fixture.close();await rm(profile,{recursive:true,force:true});}
