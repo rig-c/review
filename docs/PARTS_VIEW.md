@@ -16,8 +16,9 @@ npx rig-review parts <out>/check --format json # read a saved atlas verdict with
 ```
 
 Options: `--rig <file>` (mesh geometry), `--mesh-report <file>` and `--check <file>`
-(producer reports), `--verdict <file>` (output), `--painting <png>` (original painting),
-`--by <name>` (launch-only reviewer declaration), `--format json|issue` (saved verdict export)
+(producer reports), `--verdict <file>` (historical verdict location and local feedback directory),
+`--painting <png>` (original painting), `--by <name>` (launch-only reviewer declaration),
+`--format json|issue` (saved feedback export)
 and `--port <n>`. The foreground server uses a 3-second grace period after the last live review connection closes.
 
 ## Inputs
@@ -34,22 +35,20 @@ inspection and the secondary toolbar for Images, Mesh edges and painting Overlay
 
 ## The sign-off
 
-Standalone sign-off uses saved files. The active Create and Parts cycle uses finalized acts through the
+Use **Send comments** to save general or pointed comments from a standalone
+parts view. Agents read the saves through `rig-review parts <dir> --format json|issue`.
+See [Local comment sends](REVIEW_PACKAGE.md#local-comment-sends) for the schema.
+Historical parts and atlas verdicts remain available in the same export.
+A live job sends a finalized comment act through the
 [standing live job workflow](WORKFLOWS.md#standing-live-job-workflow).
-
-Use **Approve** with no pointed issues. To request changes, pin at least one
-comment to a part and choose **Request changes** in the act bar. The standalone
-command saves a verdict file. A live job submits through the pending act.
 Reviewer wording stays verbatim.
-
-New saves write `schema: "rig-review-parts-verdict/4"` (`status: "approved"` when `issues` is empty, `"changes-requested"` when `issues` is non-empty, `issues: PartsIssue[]`, `updatedAt`, and optional `by`) to `parts-review.json` beside `parts.json`, or to `--verdict`. The legacy atlas export looks beside the model by default.
 
 ## Pointed parts comments
 
 Use **Comment · C** to open the right-hand Comments panel and enter pin mode.
 Click or drag in the main view to mark the comment. Click a pin or comment row
 to open it. Enter adds the comment, and Escape cancels the composer.
-Use the act bar to record the verdict.
+Use **Send comments** in the act bar to save the comments.
 For an editable saved comment opened in the composer, eight handles resize its area and dragging its
 interior moves it; Enter saves text and geometry, Escape reverts the edit, and Shift+drag starts a
 new area over the selected area or its handles. Tags are recomputed after resize or move only until
@@ -60,11 +59,10 @@ mode match the screen and, in item view, it names the same part. Otherwise, a va
 its saved item or assembled mode, mesh, painting comparison and any recorded layer visibility,
 then writes the saved rig camera (adjusted for the part placement in item view with painting).
 The reference camera aligns only when camera sync is currently on; stale source or part bindings
-are refused. Atlas inspection remains read only for pointed comments. A standalone compiled session (`open --project --project-version N`) saves comments and
-Request changes locally and delivers nothing to the producer; feedback that must reach the producer goes through a
+are refused. Atlas inspection remains read only for pointed comments. A standalone compiled session (`open --project --project-version N`) saves comments locally.
+Feedback that must reach the producer goes through a
 [live job](REVIEW_PACKAGE.md#live-job-contract). A joined draft open refuses that save with `MODEL_UNAVAILABLE`.
-The joined draft verdict API refuses pointed issues with `PARTS_JOINED_ISSUE_UNSUPPORTED`. Its
-zero-issue approval path remains available.
+The legacy joined draft verdict API retains its `PARTS_JOINED_ISSUE_UNSUPPORTED` refusal for pointed issues.
 
 `rig-review-parts-verdict/4` stores `issues[]` of closed `rig-review-parts-comment/2` records (historical `rig-review-parts-verdict/2` and `/3` stored `comments[]` of `rig-review-parts-comment/1`; a historical `/1` verdict file reads with an empty array).
 Each historical closed `rig-review-parts-comment/1` carries `id`, original reviewer `summary`, `part`,

@@ -52,7 +52,7 @@ On a review link:
 - **Answer an interview.** Pick options, write your own under Other, add a note. [Interview — WORKFLOWS](docs/WORKFLOWS.md#create-choice-interview)
 - **Check parts before rigging.** `parts` shows each part as an image before any rig is built. [Parts view — PARTS_VIEW](docs/PARTS_VIEW.md)
 - **Review direction.** See the scene plates and the authored camera and timing, and pin comments on the take. [Direction — REVIEW_PACKAGE](docs/REVIEW_PACKAGE.md#direction-inspection)
-- **Sign off.** Approve, or Request changes with comments. Opening a link never approves anything. [Sign-off — PARTS_VIEW](docs/PARTS_VIEW.md#the-sign-off)
+- **Send comments.** Leave general or pinned feedback, saved locally in standalone views. [Local comments](docs/REVIEW_PACKAGE.md#local-comment-sends)
 
 For the publishing agent:
 

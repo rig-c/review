@@ -6,13 +6,14 @@ import { accessGate } from './open-protocol.ts';
 import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
 import {serveReference} from './reference.ts';
+import {LOCAL_COMMENTS_ROUTE,savePartsComments} from './local-comments.ts';
 import { partsDifference, partsViewJson, exportPartsVerdict, assertPartsUnchanged, assertPartsCanOpen, readVerdict, saveVerdictWithReceipt, servedImage, type PartsViewPackage, type PartsSaveReceipt } from './parts-view.ts';
 
 const headers = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers });
 const BODY_LIMIT = 4 * 1024 * 1024;
 
-async function bodyJson(req: Request): Promise<unknown> {
+async function bodyJson(req: Request, limitError = 'Verdict payload exceeds 4 MiB'): Promise<unknown> {
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type') ?? '')) throw new Error('Expected application/json');
   const reader = req.body?.getReader();
   if (!reader) return JSON.parse('');
@@ -25,7 +26,7 @@ async function bodyJson(req: Request): Promise<unknown> {
       bytes += value.byteLength;
       if (bytes > BODY_LIMIT) {
         await reader.cancel().catch(() => {});
-        throw new Error('Verdict payload exceeds 4 MiB');
+        throw new Error(limitError);
       }
       chunks.push(value);
     }
@@ -55,6 +56,7 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
   let rawStop: ((closeActiveConnections?: boolean) => void) | null = null;
   let pendingSaves = 0, saveCount = 0;
   let saveQueue: Promise<void> = Promise.resolve();
+  const commentSaves = new Set<Promise<unknown>>();
   let closing = false;
   let notifyFailure: Error | null = null;
   const live = createLiveLifecycle({ label: 'review parts', graceMs: options.graceMs, unopenedTimeoutMs: options.unopenedTimeoutMs, exitOnClose: options.exitOnClose, onClose: options.onClose, log: options.log, busy: () => pendingSaves > 0, stopServer: () => { rawStop?.(true); } });
@@ -100,6 +102,15 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
           return json({subject:'parts',parts:partsViewJson(pkg,saved)});
         }
         if (url.pathname === '/api/parts' && req.method === 'GET'){await assertPartsUnchanged(pkg);return json(partsViewJson(pkg,await readVerdict(pkg)));}
+        if (url.pathname === LOCAL_COMMENTS_ROUTE && req.method === 'POST') {
+          if (req.headers.get('origin') !== origin) return json({error:'Same-origin Origin required'},403);
+          if (closing) return json({error:'LOCAL_COMMENTS_BUSY'},503);
+          const sending = bodyJson(req, 'LOCAL_COMMENTS_BODY_LIMIT').then(input => savePartsComments(pkg,input,by));
+          commentSaves.add(sending);
+          pendingSaves++;
+          try { return json(await sending); }
+          finally { commentSaves.delete(sending); pendingSaves--; }
+        }
         if(url.pathname==='/api/parts/comment'&&req.method==='POST'){if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);await assertPartsUnchanged(pkg);return json({comment:await preparePartsComment(pkg,await bodyJson(req))});}
         if(url.pathname==='/api/parts/export'&&req.method==='GET'){await assertPartsUnchanged(pkg);const saved=await readVerdict(pkg);if(!saved.verdict)return json({error:'PARTS_VERDICT_UNAVAILABLE: save a verdict first'},409);return new Response(exportPartsVerdict(saved.verdict,url.searchParams.get('format')==='issue'?'issue':'json'),{headers:{...headers,'Content-Type':url.searchParams.get('format')==='issue'?'text/markdown':'application/json'}});}
         if (url.pathname === '/api/parts/verdict' && req.method === 'POST') {
@@ -131,7 +142,8 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
       } finally { live.onRequestEnd(url.pathname); }
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Request failed';
-      return json({ error: message }, message.startsWith('PARTS_VIEW_SOURCE_CHANGED') ? 409 : 400);
+      return json({ error: message }, message.startsWith('PARTS_VIEW_SOURCE_CHANGED') || message.startsWith('JOB_ACT_SOURCE_STALE') ||
+        message === 'JOB_IDEMPOTENCY_CONFLICT' ? 409 : 400);
     }
   };
   const server = Bun.serve({ hostname: '127.0.0.1', port: options.port ?? 4317, websocket: live.websocket, async fetch(req, srv) { const res = await handle(req, srv.port, srv); return res as Response; } });
@@ -140,6 +152,7 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
   const shutdown = async () => {
     closing = true;
     await saveQueue;
+    await Promise.allSettled(commentSaves);
     live.stop();
     await server.stop(false);
   };

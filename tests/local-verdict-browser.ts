@@ -1,136 +1,170 @@
-/** #1188: local single-rig verdicts disclose where feedback is saved. */
+/** #1232: local packages and parts save through the same Send comments control as live jobs. */
 import assert from 'node:assert/strict';
 import {randomBytes} from 'node:crypto';
-import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
+import {PNG} from 'pngjs';
 import {parseOpenInputs} from '../src/cli.ts';
 import {loadOpenPackage} from '../src/open.ts';
+import {loadPartsView} from '../src/parts-view.ts';
+import {startPartsServer} from '../src/parts-server.ts';
 import {startServer} from '../src/server.ts';
-import type {ReviewSession} from '../src/session.ts';
+import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {commentFixture} from './helpers/parts-comments-package.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 
 type Language = 'en' | 'ko';
-type Verdict = 'approved' | 'changes-requested';
-type Reading = {
- width:number;height:number;dpr:number;language:string;status:string;footer:string;
- statusVisible:boolean;footerVisible:boolean;reason:string;
-};
-const copy = {
- en: {
-  before:'Saves locally. The producer receives no feedback.',
-  after:'Saved locally',
-  footer:'Saved locally. The producer received no feedback.',
-  reason:'Add a comment where changes are needed.',
-  // #1226 owner ruling: the bar shows the Send comments save state while a verdict ask is pending.
-  liveBefore:'Not submitted',
-  liveAfter:'Approved · Next step',
-  liveFooter:'Human action saved.',
- },
- ko: {
-  before:'여기에만 저장돼요. 제작 도구에는 전달되지 않아요.',
-  after:'여기에만 저장됨',
-  footer:'여기에만 저장했어요. 제작 도구에는 전달되지 않았어요.',
-  reason:'고칠 곳에 코멘트를 달아 주세요',
-  liveBefore:'제출되지 않음',
-  liveAfter:'승인됨 · 다음 단계',
-  liveFooter:'사용자 작업을 저장했어요.',
- },
-};
 const outIndex=Bun.argv.indexOf('--out');
-const output=resolve(outIndex<0?'artifacts/local-verdict':Bun.argv[outIndex+1]!);
-const scratch=await mkdtemp(join(tmpdir(),'review-1188-'));
-const differences:string[]=[];
+const output=resolve(outIndex<0?'artifacts/local-comments':Bun.argv[outIndex+1]!);
+const scratch=await mkdtemp(join(tmpdir(),'review-1232-'));
+const fixtureComment='Public fixture comment';
 
 async function wait(page:InputCdpSession,expression:string) {
- const deadline=Date.now()+15000;
+ const deadline=Date.now()+30000;
  while(Date.now()<deadline){
   if(await page.evaluate<boolean>(expression))return;
   await Bun.sleep(50);
  }
- throw Error('LOCAL_VERDICT_WAIT: '+expression);
+ const message=await page.evaluate("document.getElementById('message')?.textContent");
+ throw Error('LOCAL_COMMENTS_WAIT: '+expression+' / '+message);
 }
-async function openPage(profile:string,url:string,language:Language) {
- let control:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
- const page=await launchCdpSession(profile,{onEvent:(event,send)=>{if(event.sessionId)control=send;}});
+
+async function openPage(name:string,url:string,language:Language,localPackage=false) {
+ const page=await launchCdpSession(join(scratch,'chrome-'+name));
  try{
-  assert.ok(control);
-  await control('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
-  const target=new URL(url);
-  target.searchParams.set('lang',language);
+  await page.setViewport(1600,1000);
+  const target=new URL(url);target.searchParams.set('lang',language);
   await page.goto(target.href,language);
+  await wait(page,localPackage
+   ? "!!document.getElementById('stage-comment-list')&&!!document.getElementById('rig-root')?.style.transform"
+   : "document.body.dataset.ready==='true'");
+  if(await page.evaluate<boolean>("!!document.querySelector('dialog.workspace-drawer[open]')"))
+   await click(page,'dialog.workspace-drawer[open] .workspace-drawer-close');
   return page;
  }catch(error){await page.close();throw error;}
 }
-async function readScreen(page:InputCdpSession,language:Language,name:string) {
- const reading=await page.evaluate<Reading>(`(()=>{
-  const status=document.getElementById('review-draft-state'),footer=document.getElementById('message');
-  const reason=document.getElementById('request-changes-reason');
-  return {width:innerWidth,height:innerHeight,dpr:devicePixelRatio,language:document.documentElement.lang,
-   status:status.textContent.trim(),footer:footer.textContent.trim(),statusVisible:status.checkVisibility(),
-   footerVisible:footer.checkVisibility(),reason:reason.checkVisibility()?reason.textContent.trim():''};
+
+async function checkBar(page:InputCdpSession,language:Language,state:'empty'|'sent') {
+ const catalog=language==='ko'?koCatalog:enCatalog;
+ const reading=await page.evaluate(`(()=>{
+  const send=document.getElementById('send-comments');
+  return {
+   viewport:[innerWidth,innerHeight,devicePixelRatio,document.documentElement.lang],
+   send:[send.checkVisibility(),send.classList.contains('primary'),send.disabled,send.textContent.trim()],
+   verdict:['save','request-changes','request-changes-reason'].some(id=>document.getElementById(id)?.checkVisibility()),
+   state:document.getElementById('review-draft-state').textContent.trim()
+  };
  })()`);
- assert.deepEqual([reading.width,reading.height,reading.dpr,reading.language],[1440,900,2,language]);
- await writeFile(join(output,name+'.json'),JSON.stringify(reading,null,2)+'\n');
- return reading;
-}
-function checkCopy(name:string,actual:string,expected:string) {
- if(actual!==expected)differences.push(name+' expected '+JSON.stringify(expected)+'; read '+JSON.stringify(actual));
+ assert.deepEqual(reading,{
+  viewport:[1600,1000,1,language],
+  send:[true,true,true,catalog['Send comments']],
+  verdict:false,
+  state:catalog[state==='empty'?'Not submitted':'Submitted'],
+ });
 }
 
-async function pinComment(page:InputCdpSession) {
+async function addComment(page:InputCdpSession,pinned:boolean) {
+ await wait(page,"!!document.querySelector('#stage-comment:not(:disabled)')");
  await click(page,'#stage-comment');
- const point=await page.evaluate<{x:number;y:number}>(`(()=>{
-  const box=document.getElementById('rig-viewport').getBoundingClientRect();
-  return {x:box.left+.54*box.width,y:box.top+.49*box.height};
- })()`);
- await page.mouse('mouseMoved',point.x,point.y);
- await page.mouse('mousePressed',point.x,point.y);
- await page.mouse('mouseReleased',point.x,point.y);
+ if(pinned){
+  const point=await page.evaluate<{x:number;y:number}>(`(()=>{
+   const box=document.getElementById('rig-viewport').getBoundingClientRect();
+   return {x:box.left+.54*box.width,y:box.top+.49*box.height};
+  })()`);
+  await page.mouse('mouseMoved',point.x,point.y);
+  await page.mouse('mousePressed',point.x,point.y);
+  await page.mouse('mouseReleased',point.x,point.y);
+ }else{
+  await wait(page,"!!document.querySelector('[data-comment-general]:not(:disabled)')");
+  await click(page,'[data-comment-general]');
+ }
  await wait(page,"!!document.querySelector('.stage-comment-composer input')");
  await page.evaluate(`(()=>{
   const form=document.querySelector('.stage-comment-composer');
-  form.querySelector('input').value='Public fixture comment';
+  form.querySelector('input').value=${JSON.stringify(fixtureComment)};
   form.requestSubmit();
  })()`);
- await wait(page,"!document.querySelector('.stage-comment-composer')&&!document.getElementById('request-changes').disabled");
+ await wait(page,"!document.querySelector('.stage-comment-composer')&&!document.getElementById('send-comments').disabled");
 }
 
-async function checkLocal(language:Language,verdict:Verdict,opened:Extract<Awaited<ReturnType<typeof loadOpenPackage>>,{mode:'single'}>) {
- const name='local-'+language+'-'+verdict;
+async function checkLocal(
+ screen:'package'|'parts',language:Language,opened:Extract<Awaited<ReturnType<typeof loadOpenPackage>>,{mode:'single'}>,
+) {
+ const name=screen+'-'+language;
  const capability=randomBytes(32).toString('hex');
- const server=await startServer(opened.p,{port:0,joined:opened.joined,capability,stateDir:join(scratch,name)});
+ const root=join(scratch,name);
+ await mkdir(root);
+ let filename:string|undefined;
+ const server=screen==='parts'
+  ? await (async()=>{
+     await commentFixture(root);
+     const pkg=await loadPartsView(root);
+     filename=join(pkg.verdictPath,'..','review-comments.json');
+     return startPartsServer(pkg,{port:0,capability,exitOnClose:false});
+    })()
+  : await startServer(opened.p,{port:0,joined:opened.joined,capability,stateDir:root,exitOnClose:false});
  let page:InputCdpSession|undefined;
  try{
   const origin='http://127.0.0.1:'+server.port;
-  const session=async()=>(await (await fetch(origin+'/api/session')).json()) as ReviewSession;
-  page=await openPage(join(scratch,'chrome-'+name),origin+'/#cap='+capability,language);
-  await wait(page,"document.getElementById('request-changes')?.checkVisibility()&&!!document.getElementById('stage-comment-list')");
-  if(await page.evaluate<boolean>("!!document.querySelector('dialog.workspace-drawer[open]')"))
-   await click(page,'dialog.workspace-drawer[open] .workspace-drawer-close');
-  const initial=await readScreen(page,language,name+'-initial');
-  assert.equal(initial.reason,copy[language].reason);
-  await pinComment(page);
-  const before=await readScreen(page,language,name+'-before');
-  assert.ok(before.statusVisible&&before.footerVisible);
-  assert.equal(before.reason,'');
-  assert.equal((await session()).status,'pending');
-  checkCopy(name+' before',before.status,copy[language].before);
-  await writeFile(join(output,name+'-before.png'),await page.screenshot());
+  page=await openPage(name,origin+'/#cap='+capability,language,screen==='package');
+  await checkBar(page,language,'empty');
+  await writeFile(join(output,name+'-empty.png'),await page.screenshot());
 
-  await click(page,verdict==='approved'?'#save':'#request-changes');
-  await wait(page,`document.getElementById('review-status').value===${JSON.stringify(verdict)} && document.getElementById('message').textContent.trim()!==${JSON.stringify(before.footer)} && document.getElementById('review-draft-state').dataset.saveState==='saved'`);
-  const after=await readScreen(page,language,name+'-after');
-  assert.ok(after.statusVisible&&after.footerVisible);
-  checkCopy(name+' after',after.status,copy[language].after);
-  checkCopy(name+' footer',after.footer,copy[language].footer);
-  const saved=await session();
-  assert.equal(saved.status,verdict);
-  assert.deepEqual(saved.feedback.map(row=>row.summary),['Public fixture comment']);
-  await writeFile(join(output,name+'-after.png'),await page.screenshot());
-  console.log('LOCAL_VERDICT',name,JSON.stringify({before:before.status,after:after.status,footer:after.footer,comments:saved.feedback.length}));
+  await addComment(page,false);
+  const retry=screen==='package'&&language==='en';
+  if(retry)await page.evaluate(`(()=>{
+   const request=window.fetch;
+   window.__localSendIds=[];
+   window.fetch=async (url,options)=>{
+    const response=await request(url,options);
+    if(String(url).endsWith('/api/local-comments')&&response.ok){
+     window.__localSendIds.push(JSON.parse(options.body).sendId);
+     if(window.__localSendIds.length===1)throw new TypeError('Fixture lost the successful response');
+    }
+    return response;
+   };
+  })()`);
+  await click(page,'#send-comments');
+  if(retry){
+   await wait(page,"document.getElementById('review-draft-state').dataset.saveState==='failed'");
+   await click(page,'#send-comments');
+  }
+  await wait(page,"document.getElementById('review-draft-state').dataset.saveState==='saved'");
+  if(retry){
+   const ids=await page.evaluate<string[]>('window.__localSendIds');
+   assert.equal(ids.length,2);
+   assert.equal(ids[0],ids[1],'the retry reuses the first successful send ID');
+  }
+  await checkBar(page,language,'sent');
+  if(screen==='package'){
+   const listing=(await readdir(root)).filter(file=>file.endsWith('.comments.json'));
+   assert.equal(listing.length,1);
+   filename=join(root,listing[0]!);
+  }
+  const bytes=await readFile(filename!);
+  const saved=JSON.parse(bytes.toString());
+  assert.equal(saved.schema,'rig-review/local-comments@1');
+  assert.equal(saved.sends.length,1);
+  assert.equal(saved.sends[0].source.kind,screen);
+  assert.deepEqual(saved.sends[0].value.comments.map((row:{text:string})=>row.text),[fixtureComment]);
+  if(language==='en')await writeFile(join(output,screen+'-sample.json'),bytes);
+  await writeFile(join(output,name+'-sent.png'),await page.screenshot());
+  if(screen==='package'&&language==='en'){
+   const panelOpen=await page.evaluate<boolean>("document.getElementById('stage-comment').getAttribute('aria-pressed')==='true'");
+   if(panelOpen)await click(page,'#stage-comment');
+   await addComment(page,true);
+   await click(page,'#send-comments');
+   await wait(page,"document.getElementById('review-draft-state').dataset.saveState==='saved'");
+   const withPin=await Bun.file(filename!).json();
+   assert.deepEqual(withPin.sends[0],saved.sends[0],'the first send keeps its bytes');
+   assert.equal(withPin.sends[1].value.comments.length,1);
+   assert.ok(withPin.sends[1].value.comments[0].anchor,'package comment retains its pin');
+  }
+  console.log('LOCAL_COMMENTS',name,JSON.stringify({sends:saved.sends.length,comments:1}));
  }finally{
   try{await page?.close();}finally{server.stop(true);}
  }
@@ -138,27 +172,17 @@ async function checkLocal(language:Language,verdict:Verdict,opened:Extract<Await
 
 async function checkLive(language:Language) {
  const fixture=await scriptedJobWindowFixture({c5Parts:'mesh',scratchParent:scratch});
- const name='live-'+language;
  let page:InputCdpSession|undefined;
  try{
-  const publication=await fixture.publish('rig');
-  const ask=await fixture.ask(publication,{kind:'review-verdict',stage:'rig-review'});
-  page=await openPage(join(scratch,'chrome-'+name),fixture.host.ownerUrl,language);
-  await wait(page,"document.body.dataset.ready==='true'&&document.getElementById('save')?.checkVisibility()&&!document.getElementById('save').disabled");
-  if(await page.evaluate<boolean>("!!document.querySelector('dialog.workspace-drawer[open]')"))
-   await click(page,'dialog.workspace-drawer[open] .workspace-drawer-close');
-  const before=await readScreen(page,language,name+'-before');
-  checkCopy(name+' before',before.status,copy[language].liveBefore);
-  await click(page,'#save');
-  await wait(page,`document.getElementById('message')?.textContent.trim()===${JSON.stringify(copy[language].liveFooter)}`);
-  const after=await readScreen(page,language,name+'-after');
-  assert.ok(after.statusVisible&&after.footerVisible);
-  checkCopy(name+' after',after.status,copy[language].liveAfter);
-  checkCopy(name+' footer',after.footer,copy[language].liveFooter);
-  const events=await fixture.next();
-  assert.ok(events.events.some(event=>event.type==='act'&&event.act.askId===ask.askId));
-  await writeFile(join(output,name+'-after.png'),await page.screenshot());
-  console.log('LIVE_VERDICT_CONTROL',name,JSON.stringify({before:before.status,after:after.status,footer:after.footer}));
+  await fixture.publish('rig');
+  page=await openPage('live-'+language,fixture.host.ownerUrl,language);
+  await checkBar(page,language,'empty');
+  await addComment(page,false);
+  await click(page,'#send-comments');
+  await wait(page,"document.getElementById('review-draft-state').dataset.saveState==='saved'");
+  await checkBar(page,language,'sent');
+  const {events}=await fixture.next();
+  assert.ok(events.some(event=>event.type==='act'&&event.act.kind==='comments'&&event.act.value.comments.some(row=>row.text===fixtureComment)));
  }finally{
   try{await page?.close();}finally{await fixture.close();}
  }
@@ -177,9 +201,9 @@ try{
  assert.equal(opened.mode,'single');
  assert.ok(opened.joined&&opened.p.manifest.model);
  for(const language of ['en','ko'] as const){
-  for(const verdict of ['changes-requested','approved'] as const)await checkLocal(language,verdict,opened);
+  await checkLocal('package',language,opened);
+  await checkLocal('parts',language,opened);
   await checkLive(language);
  }
- assert.deepEqual(differences,[],'local verdict copy and live job controls');
- console.log('LOCAL_VERDICT_PASS: 4 local verdicts, 2 live controls');
+ console.log('LOCAL_COMMENTS_PASS: 4 local screens, 5 local sends, 2 live sends');
 }finally{await rm(scratch,{recursive:true,force:true});}

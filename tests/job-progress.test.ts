@@ -8,6 +8,7 @@ import { startJobHost, type JobHostOptions, type JobProgressLineV3, type JobProg
 import { JobSession } from '../src/job-session.ts';
 import { JobStore } from '../src/job-store.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
+import { seedHistoricalVerdictAsk } from './helpers/historical-verdict-ask.ts';
 import { createSyntheticOptionSetsRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
 
 async function progressFixture() {
@@ -118,7 +119,7 @@ test('#987 V3 progress closes the request shape and enforces the 1024-byte HTTP 
   } finally { session.dispose(); await f.close(); }
 });
 
-test('#987 only committed publish, ask, ask-batch and close clear the progress slot', async () => {
+test('#987 committed publish and close clear progress while refused and replayed asks preserve it', async () => {
   const { f, packageRecord, packageResult, options, writeOptionRecord } = await progressFixture();
   const session = new JobSession(options);
   const api = agentClient(session, f.origin);
@@ -160,14 +161,19 @@ test('#987 only committed publish, ask, ask-batch and close clear the progress s
     expect(snapshot().data.progress?.seq).toBe(3);
     const publicationId = published.value.publicationId;
     const ask = { verb: 'ask', expectedGeneration: 1, idempotencyKey: 'progress-ask', publicationId,
-      subject: { kind: 'review-verdict', stage: 'rig-review' } };
+      subject: { kind: 'review-verdict', stage: 'rig-review' } as const };
     expect((await api.call({ ...ask, expectedGeneration: 0 })).error.code).toBe('JOB_GENERATION_STALE');
     expect(snapshot().data.progress?.at).toBe(newer.value.at);
-    const asked = await api.call(ask);
-    expect(asked.ok).toBe(true);
+    const beforeRefusal = snapshot();
+    expect(await api.call({...ask, idempotencyKey: 'fresh-progress-ask'}))
+      .toMatchObject({ok: false, generation: 1, error: {code: 'JOB_ASK_INVALID'}});
+    expect(snapshot()).toEqual(beforeRefusal);
+    const historical = seedHistoricalVerdictAsk(session, publicationId, ask.subject, ask.idempotencyKey);
     expect(snapshot().data.progress).toBeUndefined();
 
     await api.progress(4);
+    expect(await api.call(ask)).toMatchObject({ok: true, value: historical});
+    expect(snapshot().data.progress?.seq).toBe(4);
     // #1235: the sample act is the comment-only act@10; it answers no ask.
     const page = session.ackDisplayed({ publicationId, pageId: 'progress-page', sourceHash: published.value.source.sourceHash });
     const act = await session.commitUIAct({ ...page, expectedGeneration: 2,

@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {expect, test, spyOn} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -75,7 +76,7 @@ for (const language of ['en', 'ko'] as const) test(`#785 ${code} says NOT submit
   setLanguagePreference(language);
   try {
     // #1235: the pending sample ask is the rig verdict; the oversized sample is the comment-only act@10.
-    const publication = await f.publish(), ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+    const publication = await f.publish(), ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
     const page = await f.display(publication), current = baseline(), original = structuredClone(current);
     current.status = 'approved';
     const app = await mainSave(current, original, {async submit() {
@@ -141,7 +142,7 @@ for (const rigPending of [false, true]) test(`#721 and #1229 legacy pending chec
   try {
     const publication = await f.publish();
     seedHistoricalCheckpointAsk(f.session, publication.publicationId, {kind: 'checkpoint', checkpointId: 'step-one'});
-    const verdictAsk = rigPending ? await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'}) : null;
+    const verdictAsk = rigPending ? seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'}) : null;
     const page = await f.display(publication), requests: UISubmissionV3[] = [];
     const initial = baseline();
     initial.id = publication.source.package.id; initial.revision = publication.source.package.revision;
@@ -303,7 +304,7 @@ test('#966 #1231 mesh-carrying Request changes asks confirm once; Cancel sends n
   let player: RigPlayer | undefined;
   try {
     const publication = await f.publish();
-    const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+    const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
     const page = await f.display(publication);
     const retained = f.session.retainedSource(publication.publicationId);
     const model = JSON.parse(await readFile(join(retained.snapshotRoot, ask.source.model!.path), 'utf8'));
@@ -414,7 +415,7 @@ for (const verdict of ['approved', 'changes-requested'] as const) test(`#966 ${v
   let player: RigPlayer | undefined;
   try {
     const publication = await f.publish();
-    const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+    const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
     const page = await f.display(publication), requests: UISubmissionV3[] = [], acts: ActV3[] = [], prompts: string[] = [];
     const retained = f.session.retainedSource(publication.publicationId);
     const model = JSON.parse(await readFile(join(retained.snapshotRoot, ask.source.model!.path), 'utf8'));

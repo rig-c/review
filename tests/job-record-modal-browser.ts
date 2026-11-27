@@ -13,8 +13,8 @@ import {launchCdpSession,type CdpPageEvent,type InputCdpSession} from './parts-e
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
-import {parseCommentOnlyAct,parseCommentsAct} from '../src/job-api.ts';
-import {JOB_API_SCHEMA,type JobDisplayAcknowledgment,type JobDisplayReceipt,type JobResult,type PendingAskV3,type PublicationV3,type UISubmissionV3} from '../src/job-contract.ts';
+import {parseCommentOnlyAct} from '../src/job-api.ts';
+import {JOB_API_SCHEMA,type JobDisplayAcknowledgment,type JobDisplayReceipt,type JobResult,type PublicationV3,type UISubmissionV3} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {tr} from '../web/i18n.ts';
@@ -73,7 +73,7 @@ const saveClicks='globalThis.__mixedSaveClicks';
 const countSaveClicks=`(()=>{
  const counts=${saveClicks}={ready:false,earlyClicks:0,trustedSaveClicks:0};
  document.addEventListener('click',event=>{
-  const save=document.getElementById('save');
+  const save=document.getElementById('send-comments');
   if(!event.isTrusted||!save||!event.composedPath().includes(save))return;
   counts.trustedSaveClicks++;
   if(!counts.ready)counts.earlyClicks++;
@@ -445,11 +445,10 @@ try{
   const fixture=parts?await scriptedJobWindowFixture({c5Parts:'mesh'}):await realJobWindowFixture(),out=join(output,parts?'mixed-parts':'mixed',language);await mkdir(out,{recursive:true});
   let intercepting=false;
   try{
-   const publication=parts?await (fixture as Awaited<ReturnType<typeof scriptedJobWindowFixture>>).publish('parts'):await (fixture as Awaited<ReturnType<typeof realJobWindowFixture>>).publish(),asks:PendingAskV3[]=[];
+   const publication=parts?await (fixture as Awaited<ReturnType<typeof scriptedJobWindowFixture>>).publish('parts'):await (fixture as Awaited<ReturnType<typeof realJobWindowFixture>>).publish();
    const verdictSubject=parts?{kind:'parts-verdict',draftId:'synthetic-parts'} as const:{kind:'review-verdict',stage:'rig-review'} as const;
-   {const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'ask',expectedGeneration:fixture.host.session.status().generation,idempotencyKey:randomUUID(),publicationId:publication.publicationId,subject:verdictSubject});const value=await response.json();assert.equal(value.ok,true,JSON.stringify(value));asks.push(value.value);}
-   // #1227 / #1229: fresh signoff and checkpoint asks on packages refuse JOB_ASK_INVALID; the verdict ask continues uninterrupted.
-   for(const retiredSubject of [{kind:'signoff',stage:'plan-approved'},{kind:'checkpoint',checkpointId:'step-one'}] as const){
+   // #1227 / #1229: fresh signoff, checkpoint and verdict asks refuse while the same publication remains open for comments.
+   for(const retiredSubject of [{kind:'signoff',stage:'plan-approved'},{kind:'checkpoint',checkpointId:'step-one'},verdictSubject] as const){
     const refused=await (await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'ask',expectedGeneration:fixture.host.session.status().generation,idempotencyKey:randomUUID(),publicationId:publication.publicationId,subject:retiredSubject})).json();
     assert.equal(refused.ok,false,JSON.stringify(refused));assert.equal(refused.error.code,'JOB_ASK_INVALID');
    }
@@ -461,7 +460,7 @@ try{
    }
    await page.goto(url.href);await wait(`globalThis.__access756==='pending'`,'mixed capability');
    await page.evaluate(countSaveClicks);
-   await page.evaluate(`globalThis.__releaseAccess756()`);await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#stage-comment-list')&&!!document.querySelector(${parts?"'#parts-canvas'":"'#rig-root canvas'"})&&!document.querySelector('#save').disabled&&document.querySelector('#workspace-pending-ask').hidden`,'mixed ready');
+   await page.evaluate(`globalThis.__releaseAccess756()`);await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#stage-comment-list')&&!!document.querySelector(${parts?"'#parts-canvas'":"'#rig-root canvas'"})&&document.querySelector('#send-comments')?.checkVisibility()&&!document.querySelector('#workspace-pending-ask')?.checkVisibility()`,'mixed ready');
    const readActs=async()=>{
     const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0});
     const next=await response.json();assert.equal(next.ok,true);
@@ -506,19 +505,27 @@ try{
      return snapshot;
     })():undefined,
    ]);
-   await click(page,'#save');await wait(`(()=>{const node=document.getElementById('review-draft-state');return node?.textContent===${JSON.stringify(catalog['job.review.approved'])}&&node.dataset.saveState==='saved';})()`,'mixed verdict approved');
+   const commentText='Receipt-bound comment · '+language;
+   await click(page,'#stage-comment');
+   await click(page,'[data-comment-general]');
+   await wait(`!!document.querySelector('.stage-comment-composer input')`,'mixed comment composer');
+   await page.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(commentText)};f.requestSubmit();})()`);
+   await wait(`!document.querySelector('#send-comments').disabled`,'mixed comment ready');
+   await click(page,'#send-comments');
+   await wait(`(()=>{const node=document.getElementById('review-draft-state');return node?.textContent===${JSON.stringify(catalog['Submitted'])}&&node.dataset.saveState==='saved';})()`,'mixed comment saved');
    const acts=await readActs();assert.equal(acts.length,1);
-   const act=parseCommentsAct(acts[0]);assert.ok(act.kind===(parts?'parts-verdict':'review-verdict'));
-   assert.equal(act.value.verdict,'approved');assert.equal(act.askId,asks[0]!.askId);
+   const act=parseCommentOnlyAct(acts[0]);
+   assert.equal('askId' in act,false);
+   assert.deepEqual(act.value.comments,[{text:commentText}]);
    assert.equal(act.publicationId,publicationId);assert.equal(act.source.sourceHash,sourceHash);
-   assert.equal(displayWatch.acts.length,1,'one approval POST');
+   assert.equal(displayWatch.acts.length,1,'one comment POST');
    const submission=await postData<UISubmissionV3>(displayWatch.acts[0]!);
    assert.ok(submission.publicationId===receipt.publicationId&&submission.pageId===receipt.pageId&&
-    submission.displayedNonce===receipt.displayedNonce,'approval POST uses the observed display receipt');
+    submission.displayedNonce===receipt.displayedNonce,'comment POST uses the observed display receipt');
    const clicks:SaveClicks=await page.evaluate<SaveClicks>(saveClicks);
    assert.deepEqual(clicks,{ready:true,earlyClicks:0,trustedSaveClicks:1});
-   assert.deepEqual(await jobInputHashes(fixture.input.root),before);await shot(out,'submitted');const submittedUi=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.value,saveDisabled:document.querySelector('#save')?.disabled,actState:['dirty','review-draft-state','draft-state'].map(id=>{const node=document.getElementById(id);return {id,text:node?.textContent,kind:node?.dataset.saveState,visible:!!node?.getClientRects().length};})})`);const result={kind:parts?'mixed-parts':'mixed',language,submittedUi,transport:actTransport.filter(event=>event.path.includes('/jobs/'+fixture.host.session.jobId+'/')),acts,displayed:{publicationId,sourceHash,status:displayWatch.status,label,receiptBound:true,clicks,heldSave},sourceImmutable:true};cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('715_MIXED_PASS '+language);
-  }catch(error){const ui=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.value,saveDisabled:document.querySelector('#save')?.disabled,activeElement:document.activeElement?.id,dialogs:[...document.querySelectorAll('dialog')].map(n=>({id:n.id,open:n.open}))})`);const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0});const next=await response.json();await writeFile(join(out,'failure-state.json'),JSON.stringify({error:String(error),ui,next,actTransport},null,2)+'\n');await shot(out,'failure');throw error;}finally{
+   assert.deepEqual(await jobInputHashes(fixture.input.root),before);await shot(out,'submitted');const submittedUi=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.checkVisibility()??false,saveDisabled:document.querySelector('#send-comments')?.disabled,actState:['dirty','review-draft-state','draft-state'].map(id=>{const node=document.getElementById(id);return {id,text:node?.textContent,kind:node?.dataset.saveState,visible:!!node?.getClientRects().length};})})`);const result={kind:parts?'mixed-parts':'mixed',language,submittedUi,transport:actTransport.filter(event=>event.path.includes('/jobs/'+fixture.host.session.jobId+'/')),acts,displayed:{publicationId,sourceHash,status:displayWatch.status,label,receiptBound:true,clicks,heldSave},sourceImmutable:true};cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('715_MIXED_PASS '+language);
+  }catch(error){const ui=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.checkVisibility()??false,saveDisabled:document.querySelector('#send-comments')?.disabled,activeElement:document.activeElement?.id,dialogs:[...document.querySelectorAll('dialog')].map(n=>({id:n.id,open:n.open}))})`);const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0});const next=await response.json();await writeFile(join(out,'failure-state.json'),JSON.stringify({error:String(error),ui,next,actTransport},null,2)+'\n');await shot(out,'failure');throw error;}finally{
    try{await page.goto('about:blank');}finally{
     mixedDisplay=undefined;
     try{if(intercepting)await command!('Fetch.disable');}finally{await fixture.close();}

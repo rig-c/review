@@ -19,8 +19,8 @@ try{
   const fixture=await scriptedJobWindowFixture();
   let editable:Awaited<ReturnType<typeof startServer>>|undefined;
   try{
-   const publication=await fixture.publish(stage);
-   await fixture.ask(publication,{kind:'review-verdict',stage:stage==='direction'?'direction-review':'rig-review'});
+   await fixture.publish(stage);
+
    if(stage==='rig')editable=await startServer(await loadReview(fixture.packageRoot),{port:0,stateDir:join(fixture.input.root,'editable-state'),exitOnClose:false});
    const url=new URL(editable?`http://127.0.0.1:${editable.port}/`:fixture.host.ownerUrl);url.searchParams.set('lang',language);
    await page.goto(url.href,language);

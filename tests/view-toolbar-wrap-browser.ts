@@ -162,9 +162,8 @@ try{
  for(const screen of directionOnly?['direction'] as const:['direction','rig','parts'] as const){
   const fixture=await scriptedJobWindowFixture({c5Parts:'mesh',scratchParent:scratch});
   cleanup.push(()=>fixture.close());
-  const publication=await fixture.publish(screen);
-  await fixture.ask(publication,screen==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:
-   {kind:'review-verdict',stage:screen==='rig'?'rig-review':'direction-review'});
+  await fixture.publish(screen);
+
   targets.push({screen,url:fixture.host.ownerUrl,ready:jobReady,widths:baseline&&screen!=='parts'?[390,1280,1440]:[390]});
  }
  if(!directionOnly){

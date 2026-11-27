@@ -257,8 +257,8 @@ export function parsePanelComposition(input: unknown): JobPanelComposition {
   };
   const stage = slot(p.stage, 'panels.stage');
   const side = slot(p.side, 'panels.side');
-  if (stage.length !== 1 || side.length < 1 || side[side.length - 1] !== 'act.submit') {
-    throw new Error('JOB_PANELS_INVALID: stage must have exactly one component and side must end with act.submit');
+  if (stage.length !== 1) {
+    throw new Error('JOB_PANELS_INVALID: stage must have exactly one component');
   }
   return {
     schema: JOB_PANEL_COMPOSITION_SCHEMA,

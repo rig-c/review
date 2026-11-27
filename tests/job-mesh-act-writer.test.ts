@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {expect, test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -18,7 +19,7 @@ test('#977 the writer stores mesh edits and replays only against the retained at
   const fixture = await jobFixture();
   try {
     const publication = await fixture.publish();
-    const ask = await fixture.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+    const ask = seedHistoricalVerdictAsk(fixture.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
     const page = await fixture.display(publication);
     const retained = fixture.session.retainedSource(publication.publicationId);
     const model = JSON.parse(await readFile(join(retained.snapshotRoot, ask.source.model!.path), 'utf8'));

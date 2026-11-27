@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
 import {readFile, writeFile} from 'node:fs/promises';
@@ -155,7 +156,7 @@ test('#990 retained publication refuses corrupt seed copies', async () => {
 
 async function pendingRigReview(f: Awaited<ReturnType<typeof jobFixture>>) {
   const publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'});
   const page = await f.display(publication);
   const retained = f.session.retainedSource(publication.publicationId);
   const submission = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation, submissionId: 'chest-990',

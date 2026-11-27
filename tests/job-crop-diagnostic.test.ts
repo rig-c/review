@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {expect, test} from 'bun:test';
 import {readFile, lstat, writeFile} from 'node:fs/promises';
 import {PNG} from 'pngjs';
@@ -78,7 +79,7 @@ test('crop409 leads: EN act leaves package immutable and independent KO-height r
         try {
             const publication = await fixture.publish('parts', 'parts-issue');
             expect(publication.source.sourceHash).toBe(capturedENInput.sourceHash);
-            const ask = await fixture.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+            const ask = seedHistoricalVerdictAsk(fixture.host.session, publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
             const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
             assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);
             const pkg = await loadPartsView(fixture.packageRoot);

@@ -7,8 +7,8 @@ import {randomUUID} from 'node:crypto';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, type JobNextValue, type JobPendingAsk} from '../src/job-contract.ts';
-import {jobHash, parseCommentsAct, parseContextCommentsAct} from '../src/job-api.ts';
+import {JOB_API_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA, type JobNextValue} from '../src/job-contract.ts';
+import {jobHash, parseCommentOnlyAct} from '../src/job-api.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
 import type {LocalInspectionDraft} from '../web/inspection-persistence.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -33,12 +33,11 @@ assert.ok(draft || !hintOff, '--hint-off requires --draft');
 const draftComment = '초안의 이 부분을 수정해 주세요.';
 const draftSelector = {kind: 'draft', id: 'chain'} as const;
 const autoStill=Bun.argv.includes('--auto-still');
-// #1018: `--pin-comment` pins one rig comment in Playback before the verdict; `--frames` also declares the producer's
+// #1018: `--pin-comment` pins one rig comment in Playback before submission; `--frames` also declares the producer's
 // frame record (the real `rigc render --fps 12` record of the fixture's 1 s `still`, set renamed to the `idle` copy).
 const pinComment=Bun.argv.includes('--pin-comment'),declareFrames=Bun.argv.includes('--frames');
 assert.ok(!serve || !pinComment, '--serve leaves the comment to the person');
 assert.ok(!draft || !pinComment, '--draft places its own comment; --pin-comment runs without it');
-const verdict=(argument('--verdict')??'approved') as 'approved'|'changes-requested';
 const language = argument('--lang') ?? 'both';
 assert.ok(language === 'both' || language === 'en' || language === 'ko');
 const output = resolve(argument('--out') ?? 'artifacts/job-rig-screen-709');
@@ -50,7 +49,7 @@ const cameraExpression = `JSON.parse(document.getElementById('view-coordinates')
 const draftExpression = `Object.entries(localStorage).filter(([key])=>key.startsWith('rig-review-draft/1:'))
   .map(([key,value])=>({key,draft:JSON.parse(value)}))`;
 const readyExpression = `!document.body.inert && !!document.querySelector('#stage-comment-list') &&
-  !!document.querySelector('#rig-root canvas') && !!document.querySelector('#save:not(:disabled)') &&
+  !!document.querySelector('#rig-root canvas') && !!document.querySelector('#send-comments:not([hidden])') &&
   !!document.querySelector('#view-coordinates')?.textContent &&
   !!JSON.parse(document.querySelector('#view-coordinates').textContent).cameras.rig`;
 
@@ -109,19 +108,19 @@ async function run(lang: 'en' | 'ko') {
     if (!pendingAct) await wait(`document.getElementById('workspace-act-row')?.hidden===false&&document.getElementById('save').hidden&&!document.getElementById('send-comments').hidden&&document.getElementById('workspace-ask-headline').textContent===${JSON.stringify(noAskLine)}`, name + '.act-row-complete');
     const state = await page!.evaluate<{
       language: string; counts: Record<string, number>; title: string; rigHash: string; fullRigHash: string | null; sourceHash: string;
-      status: string; selectedLabel: string; actInHeading: boolean; actInRow: boolean; actRowDirect: boolean; actVisible: boolean; actRowHidden: boolean; visibleSaveStates: string[];
+      sendDisabled: boolean; verdictVisible: boolean; actInHeading: boolean; actInRow: boolean; actRowDirect: boolean; actVisible: boolean; actRowHidden: boolean; visibleSaveStates: string[];
       actGeometry: unknown; inspectorHeight: number; controls: string[];
     }>(`(()=>{
       const visible=${fullyVisible.toString()}, geometry=${visibilityGeometry.toString()};
-      const act=document.querySelector('.workspace-act-bar'),status=document.getElementById('review-status');
+      const act=document.querySelector('.workspace-act-bar'),send=document.getElementById('send-comments');
       const provenance=JSON.parse(document.getElementById('provenance-full').textContent);
       return {language:document.documentElement.lang,
-        counts:Object.fromEntries(['#app','.topbar','.layout','#rig-viewport','#zoom-in','#zoom-out','#fit','#native-one','#view-menu','#save','#review-status','.workspace-act-bar']
+        counts:Object.fromEntries(['#app','.topbar','.layout','#rig-viewport','#zoom-in','#zoom-out','#fit','#native-one','#view-menu','#send-comments','.workspace-act-bar']
           .map(selector=>[selector,document.querySelectorAll(selector).length])),
         title:document.getElementById('package-title').textContent,
         rigHash:document.getElementById('provenance-rig').textContent,
         fullRigHash:provenance.reviewedSource?.rig?.sha256??null,sourceHash:provenance.sourceHash,
-        status:status.value,selectedLabel:status.selectedOptions[0].textContent,
+        sendDisabled:send.disabled,verdictVisible:['save','request-changes','review-status'].some(id=>visible(document.getElementById(id))),
         actInHeading:!!act?.closest('.inspector-heading'),actInRow:act?.parentElement?.id==='workspace-act-row',actRowDirect:document.getElementById('workspace-act-row')?.previousElementSibling===document.querySelector('.topbar'),actVisible:!!act&&visible(act),
         actRowHidden:document.getElementById('workspace-act-row').hidden,visibleSaveStates:['dirty','review-draft-state','draft-state'].filter(id=>{const node=document.getElementById(id);return node&&visible(node)&&!!node.textContent.trim();}),
         actGeometry:act?geometry(act):null,inspectorHeight:document.querySelector('.inspector').getBoundingClientRect().height,
@@ -131,6 +130,7 @@ async function run(lang: 'en' | 'ko') {
     assert.equal(state.language, lang);
     for (const [selector, count] of Object.entries(state.counts)) assert.equal(count, 1, 'single shared screen ' + selector);
     assert.deepEqual(state.controls, ['zoom-in', 'zoom-out', 'fit', 'native-one', 'view-menu']);
+    assert.equal(state.verdictVisible, false);
     assert.equal(state.actInHeading, false, 'the live act leaves the bottom heading');
     assert.equal(state.actInRow, true, 'the decision and submit act nodes stay in the shared act row');
     assert.equal(state.actRowDirect, true, 'the act row sits directly beneath the topbar');
@@ -190,17 +190,6 @@ async function run(lang: 'en' | 'ko') {
     const publication = await fixture.publish();
     const display = fixture.host.session.displayPublication(publication.publicationId);
     assert.equal(display.rigDraftVerdict === true, draft && !hintOff);
-    let ask: JobPendingAsk | undefined;
-    if (!hintOff) {
-      const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
-        requestId: randomUUID(), verb: 'ask', expectedGeneration: fixture.host.session.status().generation,
-        idempotencyKey: '709-rig-' + lang, publicationId: publication.publicationId,
-        subject: {kind: 'review-verdict', stage: 'rig-review'}});
-      assert.equal(response.status, 200);
-      const asked = await response.json();
-      assert.equal(asked.ok, true);
-      ask = asked.value as JobPendingAsk;
-    }
     const owner = new URL(fixture.host.ownerUrl);
     owner.searchParams.set('lang', lang);
     if (serve) {
@@ -219,7 +208,7 @@ async function run(lang: 'en' | 'ko') {
     const before = await jobInputHashes(fixture.input.root);
     const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
     const retainedBefore = await jobInputHashes(retained.snapshotRoot);
-    await record('publication', {publication, ask, before, retainedBefore});
+    await record('publication', {publication, before, retainedBefore});
     page = await launchCdpSession(profile, {sendDeadlineMs: 20_000, async onEvent(event, send) {
       pageCommand = send;
       if (event.method === 'Page.loadEventFired') loadEvents++;
@@ -248,15 +237,13 @@ async function run(lang: 'en' | 'ko') {
       await record('result', {status: 'PASS', hintOff, ...state});
       return;
     }
-    assert.ok(ask);
     const fresh = await settled('fresh-fit');
     const initial = await screen('fresh-screen');
-    assert.equal(initial.status, 'pending');
-    assert.equal(initial.selectedLabel, catalog['Pending']);
+    assert.equal(initial.sendDisabled, true, 'an empty rig has no comment to send');
     assert.equal(initial.rigHash, publication.source.model!.sha256.slice(0, 12) + '…');
     assert.equal(initial.fullRigHash, publication.source.model!.sha256);
     assert.equal(initial.sourceHash, publication.source.sourceHash);
-    assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'opening never answers the pending ask');
+    assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'opening never sends comments');
     if (!draft) {
       await click(page, '#fit');
       const explicitFit = await settled('explicit-fit');
@@ -292,7 +279,7 @@ async function run(lang: 'en' | 'ko') {
       assert.ok(Math.abs(reloaded.zoom - zoomed.zoom) > 1e-5, 'Reload did not retain the saved zoom');
       assert.notEqual(documentLoads.at(-1)?.loaderId, beforeReload.document.loaderId, 'Reload replaced the document loader');
       await record('actual-reload', {command: 'Page.reload', before: beforeReload, after: {loadEvents, document: documentLoads.at(-1)}});
-      assert.equal((await screen('reloaded-screen')).status, 'pending');
+      assert.equal((await screen('reloaded-screen')).sendDisabled, true);
       assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'Reload does not submit');
       // Fresh document at the actual saved link; no fabricated bookmark or localStorage writes.
       await freshWalkReopen(page, savedUrl, lang, '709.' + lang + '.bookmark-reopen', 1, mark, mark);
@@ -300,7 +287,7 @@ async function run(lang: 'en' | 'ko') {
       sameCamera(reopened, explicitFit, 'saved zoom must settle at Fit on hosted opening');
       assert.ok(Math.abs(reopened.zoom - zoomed.zoom) > 1e-5, 'reopen did not retain the old zoom');
       const afterReopen = await screen('reopened-screen');
-      assert.equal(afterReopen.status, 'pending');
+      assert.equal(afterReopen.sendDisabled, true);
       assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'reopen does not submit');
     }
     let beforeSubmit:unknown;
@@ -349,13 +336,9 @@ async function run(lang: 'en' | 'ko') {
       }
       await writeFile(join(out, 'comment-row.png'), await page.screenshot());
     }
-    // Use the screen's direct verdict button and trusted pointer submit. No /ui/acts call here.
+    // Submit through the shared action row and a trusted pointer.
     assert.equal(await page.evaluate(`document.getElementById('review-status').hidden`),true);
     if (draft) {
-      await wait(`['#save','#request-changes'].every(selector => {
-        const button = document.querySelector(selector);
-        return button && button.getClientRects().length > 0;
-      })`, 'both-verdict-buttons');
       if (!await page.evaluate<boolean>(`document.querySelector('#stage-comment').getAttribute('aria-pressed') === 'true'`)) {
         await click(page, '#stage-comment');
       }
@@ -377,36 +360,39 @@ async function run(lang: 'en' | 'ko') {
       })()`);
       await wait(`!document.querySelector('.stage-comment-composer')`, 'draft-comment-saved');
     }
-    const answerSelector=verdict==='approved'?'#save':'#request-changes';
-    await wait(`!document.querySelector(${JSON.stringify(answerSelector)}).disabled`, 'decision-ready');
-    await screen('decision-screen');
-    await click(page, answerSelector);
+    if (!draft && !pinComment) {
+      assert.equal(await page.evaluate(`document.getElementById('send-comments').disabled`), true);
+      await click(page, '#stage-comment');
+      await click(page, '[data-comment-general]');
+      await wait(`!!document.querySelector('.stage-comment-composer input')`, 'general-comment-composer');
+      await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Rig comment';form.requestSubmit();})()`);
+      await wait(`!document.querySelector('.stage-comment-composer')`, 'general-comment-saved');
+    }
+    await wait(`!document.querySelector('#send-comments').disabled`, 'comments-ready');
+    await screen('comment-screen');
+    await click(page, '#send-comments');
     let finalized: JobNextValue | undefined;
     await withDeadline('709.' + lang + '.recorded-act', 20_000, async signal => {
       while (!signal.aborted) {
         finalized = await next();
-        if (finalized.events.some(event => event.type === 'act' && event.act.askId === ask.askId)) return;
+        if (finalized.events.some(event => event.type === 'act' && event.act.kind === 'comments')) return;
         await Bun.sleep(50);
       }
       throw signal.reason;
     });
-    const acts = finalized!.events.filter(event => event.type === 'act' && event.act.askId === ask.askId);
-    assert.equal(acts.length, 1, 'exactly one actual finalized verdict');
+    const acts = finalized!.events.filter(event => event.type === 'act' && event.act.kind === 'comments');
+    assert.equal(acts.length, 1, 'exactly one finalized comment act');
     const event = acts[0]!;
-    assert.ok(event.type === 'act' && event.act.kind === 'review-verdict');
+    assert.ok(event.type === 'act');
     await writeFile(join(out, 'recorded-act.json'), JSON.stringify(event.act, null, 2) + '\n');
-    // A pinned comment (the draft run's or --pin-comment's) carries its view context, which the act records as act@7.
-    const contextAct = draft || pinComment;
-    const act = contextAct ? parseContextCommentsAct(event.act) : parseCommentsAct(event.act);
-    assert.ok(act.kind === 'review-verdict');
-    assert.ok(act.still);
-    assert.equal(act.schema, contextAct ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA);
+    const act = parseCommentOnlyAct(event.act);
+    assert.equal(act.schema, JOB_COMMENT_ONLY_ACT_SCHEMA);
     assert.equal(act.publicationId, publication.publicationId);
     assert.equal(act.source.sourceHash, publication.source.sourceHash);
     assert.equal(act.authority.actor, 'human');
     assert.equal(act.authority.channel, 'review-ui');
-    assert.equal(act.value.stage, 'rig-review');
-    assert.equal(act.value.verdict, verdict);
+    assert.equal('askId' in act, false);
+    assert.equal('still' in act, false);
     if (pinComment) {
       assert.equal(act.value.comments.length, 1, 'the pinned comment reaches the act');
       // A JobComment carries the human text and, for a pin, its feedback anchor.
@@ -424,32 +410,27 @@ async function run(lang: 'en' | 'ko') {
         assert.equal(pinned.context?.comment?.frame, null);
         assert.equal(pinned.frameStart, null);
       }
-    } else if (!draft) assert.deepEqual(act.value.comments, []);
-    assert.equal(act.value.comments.length, contextAct ? 1 : 0);
+    } else if (!draft) assert.deepEqual(act.value.comments, [{text: 'Rig comment'}]);
+    assert.equal(act.value.comments.length, 1);
     if (draft) {
       assert.deepEqual(act.source.selector, draftSelector);
       const [comment] = act.value.comments;
       assert.equal(comment?.text, draftComment);
       assert.ok(comment?.anchor);
-      assert.ok('context' in comment);
-      assert.deepEqual((comment.context as import('../src/job-contract.ts').JobCommentContext).subject, {
-        ask: ask.subject, sourceHash: publication.source.sourceHash, selector: draftSelector,
-      });
+      assert.ok(comment.context);
+      assert.equal('subject' in comment.context, false);
     }
-    assert.equal(act.still.camera, 'fixed');
-    assert.match(act.still.sha256, /^[a-f0-9]{64}$/);
-    assert.equal(act.still.path, act.still.sha256 + '.png');
     await wait(`document.getElementById('dirty')?.classList.contains('dirty')===false`, 'submitted-clean');
     await screen('submitted-screen', false);
     if(autoStill){
       const after=await page.evaluate(inspectionExpression);
       assert.deepEqual(after,beforeSubmit,'Submit preserves camera, selection, time and mode');
-      await record('788-after-submit',{after,still:act.still});
+      await record('788-after-submit',{after});
     }
     assert.deepEqual(await jobInputHashes(fixture.input.root), before);
     assert.deepEqual(await jobInputHashes(retained.snapshotRoot), retainedBefore);
     assert.equal(unexpectedDialog, undefined);
-    await record('result', {status: 'PASS', askId: ask.askId, actId: act.actId, sourceUnchanged: true,
+    await record('result', {status: 'PASS', actId: act.actId, sourceUnchanged: true,
       browser: await page.evaluate('navigator.userAgent'), bun: Bun.version,
       limits: 'EN then KO, one browser at a time, no worker pool/producer; stage3 wrapper unsets DISPLAY/WAYLAND_DISPLAY, sets NODE_OPTIONS=--max-old-space-size=4096 and timeout 600; no hard total Bun/Chromium 6 GiB cgroup enforcement',
       scope: 'synthetic retained rig; actual human UI submission; no upstream producer or owner R0 ruling claim'});

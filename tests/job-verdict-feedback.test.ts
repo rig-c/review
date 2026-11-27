@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {afterEach, expect, setSystemTime, spyOn, test} from 'bun:test';
 import * as crypto from 'node:crypto';
 import {mkdir, readFile} from 'node:fs/promises';
@@ -56,7 +57,7 @@ test('#746 absent feedback keeps all four pre-edit deterministic envelope bytes,
 
 test('#746 decision → daemon → stored export preserves ordered pointed and time-only comments, including act@7 context', async () => {
   const f = await fixture(), publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'}), page = await f.display(publication);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'}), page = await f.display(publication);
   const rows = feedbackFor(publication.source as unknown as typeof baseline.source), snapshot = structuredClone(rows);
   const [decision] = jobRigScreenDecisions({status: 'changes-requested', checkpoints: {}, feedback: rows},
     [ask] as unknown as PendingAskV3[], publication.publicationId);
@@ -107,7 +108,7 @@ test('#746 decision → daemon → stored export preserves ordered pointed and t
 
 test('#746 malformed feedback and words refuse through existing decoding without answering the ask', async () => {
   const f = await fixture(), publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'}), page = await f.display(publication);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'}), page = await f.display(publication);
   const [point, timed] = feedbackFor(publication.source as unknown as typeof baseline.source);
   const ordinary = {id: 'ordinary', frameStart: 3, frameEnd: 5, target: {kind: 'slot', name: 'sleeve'},
     category: 'quality', summary: '  exact  '};
@@ -151,7 +152,7 @@ test('#746 malformed feedback and words refuse through existing decoding without
 
 test('#746 a present empty list means zero comments, while the act bar omits feedback when there are no comments', async () => {
   const f = await fixture(), publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'}), page = await f.display(publication);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'}), page = await f.display(publication);
   const [decision] = jobRigScreenDecisions({status: 'approved', checkpoints: {}, feedback: []},
     [ask] as unknown as PendingAskV3[], publication.publicationId);
   expect(decision?.value).toEqual({stage: 'rig-review', verdict: 'approved', words: ''});
@@ -165,7 +166,7 @@ test('#746 a present empty list means zero comments, while the act bar omits fee
 
 test('#831 rig appends ordered general comments after the existing #746 feedback and still validates words', async () => {
   const f = await fixture(), publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'}), page = await f.display(publication);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'review-verdict', stage: 'rig-review'}), page = await f.display(publication);
   const feedback = feedbackFor(publication.source as unknown as typeof baseline.source);
   const general = ['  원문 그대로 🚀  ', 'Another line\nwith a break'] as const;
   const generation = f.session.status().generation;
@@ -222,7 +223,7 @@ test.each(['approved', 'changes-requested'] as const)('#1011 finalizes draft ver
   const subject = {kind: 'review-verdict', stage: 'rig-review'} as const;
   f.setContext({...f.getContext(), selector, subjects: [subject]});
   const publication = await f.publish();
-  const ask = await f.ask(publication, subject), page = await f.display(publication);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, subject), page = await f.display(publication);
   expect(ask.source).toEqual(publication.source);
   expect(f.session.displayPublication(publication.publicationId).rigDraftVerdict).toBe(true);
   const feedback = verdict === 'changes-requested'

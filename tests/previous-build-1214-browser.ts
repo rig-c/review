@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
 import {cp,mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import type {RigPlayer} from '@rig-c/play';
 import {loadReview,previousBuildFiles,type ReviewManifest} from '../src/manifest.ts';
-import {JOB_API_SCHEMA,JOB_PREVIOUS_BUILD_SCHEMA,type JobPreviousBuild,type JobResponseValues,type JobResult} from '../src/job-contract.ts';
+import {JOB_PREVIOUS_BUILD_SCHEMA,type JobPreviousBuild} from '../src/job-contract.ts';
 import type {ControlView} from '../src/control.ts';
 import {createReviewRequestContext} from '../src/server.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
@@ -210,11 +209,6 @@ async function jobFixture(kind:JobKind,root:string) {
    subjects:[subject],previousBuild,files:previousBuildFiles(previousBuild).map(file=>({...file,path:'out/'+file.path})),
   });
   const publication=await fixture.publish();
-  const asked=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,
-   requestId:randomUUID(),verb:'ask',expectedGeneration:fixture.host.session.status().generation,
-   idempotencyKey:randomUUID(),publicationId:publication.publicationId,subject});
-  const response=await asked.json() as JobResult<JobResponseValues['ask']>;
-  assert.ok(asked.ok&&response.ok,JSON.stringify(response));
   const {routes}=fixture.host.session.displayPublication(publication.publicationId);
   const owner=new URL(fixture.host.ownerUrl);
   owner.searchParams.set('lang','en');
@@ -264,7 +258,7 @@ async function liveJobControls(roots:Record<JobKind,string>):Promise<void> {
     await command('Fetch.enable',{patterns:[{urlPattern:trace.scriptUrl,requestStage:'Response'}]});
     await browser.goto(owner.href,'en');
     await wait(browser,`document.body.dataset.ready==='true'&&window.__previous1214?.ready()&&
-     !!document.querySelector('#save:not(:disabled)')`);
+     !!document.querySelector('#send-comments:not([hidden])')`);
     assert.equal(await browser.evaluate<string>('location.pathname'),owner.pathname);
     assert.ok(trace.requests.some(request=>request.method==='GET'&&request.path===routes.apiBase+'review'));
     assert.deepEqual((await menu(browser)).filter(entry=>entry.id==='previous-version'),

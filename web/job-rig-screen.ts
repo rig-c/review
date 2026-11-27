@@ -419,10 +419,8 @@ export function createJobRigScreen(options: {
     };
     return {...evidencePair,access,pendingSubjects,recordSubmission,navigation,jobClosed:()=>options.window.state().closed,...prepared.refusal?{unavailable:prepared.refusal}:{},
       chestLandmarks:prepared.display.publication.chestLandmarks,
-      ...(source.direction?{direction:{...binding,answeredDirectionFeedback}}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>{const subjects=pendingSubjects();
-        // #1226/#1242: with no ask pending, a rig or parts general comment goes out as a comment-only act.
-        return !subjects.length||subjects.some(subject=>
-        prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review');}}}:{}),
+      ...(source.direction?{direction:{...binding,answeredDirectionFeedback}}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{
+        verdictComments:{...binding,rows:[],available:()=>true}}:{}),
       reviewState(issues,sending) {
         if(sending)return options.translate('job.parts.sending');
         const verdict=answeredVerdict();

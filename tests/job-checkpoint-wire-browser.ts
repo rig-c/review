@@ -11,8 +11,8 @@ import {join} from 'node:path';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
-import {JOB_COMMENT_CONTEXT_ACT_SCHEMA, type JobNextValue, type JobPendingAsk, type JobSubject} from '../src/job-contract.ts';
-import {parseContextCommentsAct} from '../src/job-api.ts';
+import {JOB_COMMENT_ONLY_ACT_SCHEMA, type JobNextValue} from '../src/job-contract.ts';
+import {parseCommentOnlyAct} from '../src/job-api.ts';
 import {feedbackItemComments,parseStageComment} from '../src/stage-comment.ts';
 import type {Feedback} from '../src/session.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
@@ -57,20 +57,6 @@ async function dragMouse(fromX: number, fromY: number, toX: number, toY: number)
     await control('Input.dispatchMouseEvent', {type: 'mousePressed', x: fromX, y: fromY, button: 'left', buttons: 1, clickCount: 1});
     await control('Input.dispatchMouseEvent', {type: 'mouseMoved', x: toX, y: toY, button: 'left', buttons: 1});
     await control('Input.dispatchMouseEvent', {type: 'mouseReleased', x: toX, y: toY, button: 'left', buttons: 0, clickCount: 1});
-}
-
-async function ask(publication: {publicationId: string}, subject: JobSubject): Promise<JobPendingAsk> {
-    const res = await fixture.call({
-        ...fixture.input.base(),
-        verb: 'ask',
-        expectedGeneration: fixture.host.session.status().generation,
-        idempotencyKey: 'ask-' + randomUUID(),
-        publicationId: publication.publicationId,
-        subject,
-    });
-    const body = await res.json();
-    assert.equal(body.ok, true, JSON.stringify(body));
-    return body.value as JobPendingAsk;
 }
 
 async function nextEvents(): Promise<JobNextValue> {
@@ -444,29 +430,28 @@ try {
     const mark=parseStageComment((comment.context as {comment:unknown}).comment);
     assert.equal(mark.mode,'setup');
     assert.ok(mark.crop.png.startsWith('data:image/png;base64,'));
-    // #1229: removed checkpoint Pass form submission; the pinned comment travels directly with the rig review-verdict below.
+    // The pinned checkpoint-view comment travels directly as a comment-only act.
     // Explicit human restoration replaces the deleted automatic reset; fixed evidence remains checked.
     await click(page,'.layer-toggle:has(#layer-mesh)');await click(page,'.layer-toggle:has(#layer-bones)');await click(page,'#fit');
-    const verdictAsk=await ask(rig,{kind:'review-verdict',stage:'rig-review'});
-    const verdictLayers=await sharedLayers();assert.equal(verdictLayers.visible,true);assert.equal(verdictLayers.enabled,true);
-    await wait(`!document.getElementById('save').hidden&&!document.getElementById('save').disabled`,'direct verdict');
-    await click(page,'#save');
-    let verdictActEvent:Extract<JobNextValue['events'][number],{type:'act'}>|undefined;
-    await until(async()=>{verdictActEvent=(await nextEvents()).events.find((e):e is Extract<JobNextValue['events'][number],{type:'act'}>=>e.type==='act'&&e.act.askId===verdictAsk.askId);return !!verdictActEvent;},'verdict act');
-    assert.ok(verdictActEvent);
-    assert.equal(verdictActEvent.act.schema,JOB_COMMENT_CONTEXT_ACT_SCHEMA,'the pinned rig verdict carries comment context');
-    const verdictAct=parseContextCommentsAct(verdictActEvent.act);
-    assert.ok(verdictAct.kind==='review-verdict'&&verdictAct.still);
-    assert.equal(verdictAct.still.camera,'fixed');
-    assert.equal(verdictAct.source.sourceHash,rig.source.sourceHash);
-    assert.equal(verdictAct.value.comments.length,1);
-    const {context,...signedComment}=verdictAct.value.comments[0]!;
+    const commentLayers=await sharedLayers();assert.equal(commentLayers.visible,true);assert.equal(commentLayers.enabled,true);
+    await wait(`document.getElementById('send-comments')?.checkVisibility()&&!document.getElementById('send-comments').disabled`,'comments ready');
+    await click(page,'#send-comments');
+    let commentsActEvent:Extract<JobNextValue['events'][number],{type:'act'}>|undefined;
+    await until(async()=>{commentsActEvent=(await nextEvents()).events.find((e):e is Extract<JobNextValue['events'][number],{type:'act'}>=>e.type==='act'&&e.act.kind==='comments'&&e.act.publicationId===rig.publicationId);return !!commentsActEvent;},'comment act');
+    assert.ok(commentsActEvent);
+    assert.equal(commentsActEvent.act.schema,JOB_COMMENT_ONLY_ACT_SCHEMA,'the pinned rig comment carries its view context');
+    const commentsAct=parseCommentOnlyAct(commentsActEvent.act);
+    assert.equal(commentsAct.kind,'comments');
+    assert.equal('askId' in commentsAct,false);
+    assert.equal(commentsAct.source.sourceHash,rig.source.sourceHash);
+    assert.equal(commentsAct.value.comments.length,1);
+    const {context,...signedComment}=commentsAct.value.comments[0]!;
     assert.deepEqual([signedComment],feedbackItemComments([{...comment,summary:commentText}]));
-    assert.deepEqual(context?.subject,{ask:verdictAsk.subject,sourceHash:rig.source.sourceHash,selector:verdictAct.source.selector});
+    assert.equal(context?.subject,undefined);
     assert.equal(context?.mode,mark.mode);
     assert.deepEqual(context?.region,mark.world);
     assert.deepEqual(context?.camera,mark.camera);
-    await record('canonical-verdict-committed',verdictAct);
+    await record('canonical-comments-committed',commentsAct);
 
     // #1229: reconnect and new publication exercise the shared overlay and actual source binding directly without a second checkpoint form.
     const wireState = () => page!.evaluate(`(()=>{

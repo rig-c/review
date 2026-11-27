@@ -21,7 +21,7 @@ import {parseCommentOnlyAct} from '../src/job-api.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {partsDifferenceJobFixture,partsDifferenceOwnerUrl} from './helpers/parts-difference-job-fixture.ts';
-import {JOB_COMMENTS_ACT_SCHEMA,JOB_COMMENT_ONLY_ACT_SCHEMA} from '../src/job-contract.ts';
+import {JOB_COMMENT_ONLY_ACT_SCHEMA} from '../src/job-contract.ts';
 import {jobWindowResources} from '../src/job-front.ts';
 
 const arg=(name:string)=>{const i=Bun.argv.indexOf(name);return i<0?undefined:Bun.argv[i+1];};
@@ -707,12 +707,11 @@ async function draftSurvivalChecks(){
   await wait(planReady,'992 bar 5 reload after legacy delete');
   assert.deepEqual(await readRows(),[]);
 
-  // #999 Bar: box-pin comment on parts-verdict draft page
+  // #999 Bar: box-pin comment on live parts draft page
   const parts999:Record<string,unknown>={};
   for(const lang of ['en','ko'] as const){
    const pf=await partsDifferenceJobFixture({scratchParent:out});
    try{
-    const ask=await pf.ask(pf.publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
     const pUrl=partsDifferenceOwnerUrl(pf,lang);
     await page!.setViewport(1440,900);
     await page!.goto('about:blank');await page!.goto(pUrl);
@@ -761,32 +760,32 @@ async function draftSurvivalChecks(){
     await page!.evaluate<void>(`document.querySelector('#stage-comment-list .stage-comment-summary').click()`);
     await wait(`!!document.querySelector('.stage-comment-composer .stage-comment-delete')`,'999 delete button '+lang);
     await page!.evaluate<void>(`document.querySelector('.stage-comment-composer .stage-comment-delete').click()`);
-    await wait(`document.querySelectorAll('.stage-comment-pin').length===0&&document.querySelector('#request-changes')?.disabled===true`,'999 cleared before open-composer submit '+lang);
+    await wait(`document.querySelectorAll('.stage-comment-pin').length===0&&document.querySelector('#send-comments')?.disabled===true`,'999 cleared before open-composer submit '+lang);
     await drawEdgeBox(words);
-    await wait(`document.querySelector('#request-changes')?.checkVisibility()&&!document.querySelector('#request-changes').disabled`,'999 request changes enabled with open composer '+lang);
+    await wait(`document.querySelector('#send-comments')?.checkVisibility()&&!document.querySelector('#send-comments').disabled`,'999 Send comments enabled with open composer '+lang);
     await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
-    await saveLook(lang,'request-changes-open-composer.png');
-    await click(page!,'#request-changes');
+    await saveLook(lang,'send-comments-open-composer.png');
+    await click(page!,'#send-comments');
     let submittedAct:any=null;
     const deadline=Date.now()+15_000;
     while(Date.now()<deadline){
-     const ev=(await pf.next()).events.find(e=>e.type==='act'&&e.act.askId===ask.askId);
+     const ev=(await pf.next()).events.find(e=>e.type==='act'&&e.act.kind==='comments'&&e.act.publicationId===pf.publication.publicationId);
      if(ev?.type==='act'){submittedAct=ev.act;break;}
      await Bun.sleep(50);
     }
-    assert.ok(submittedAct,'999 finalized parts-verdict act '+lang);
+    assert.ok(submittedAct,'999 finalized comment act '+lang);
     await wait(`!document.querySelector('.stage-comment-composer')&&document.querySelectorAll('.stage-comment-pin').length===1&&document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1`,'999 open composer committed and act sent '+lang);
     await wait(`document.querySelector('#stage-comment-list .stage-comment-summary')?.checkVisibility()===true`,'999 committed comment visible '+lang);
     await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
-    await saveLook(lang,'request-changes-open-composer-after.png');
-    assert.equal(submittedAct.schema,JOB_COMMENTS_ACT_SCHEMA);
-    assert.equal(submittedAct.kind,'parts-verdict');
-    assert.equal(submittedAct.value.verdict,'changes-requested');
+    await saveLook(lang,'send-comments-open-composer-after.png');
+    assert.equal(submittedAct.schema,JOB_COMMENT_ONLY_ACT_SCHEMA);
+    assert.equal(submittedAct.kind,'comments');
+    assert.equal('askId' in submittedAct,false);
     assert.equal(submittedAct.value.comments.length,1);
     assert.equal(submittedAct.value.comments[0].text,words);
     assert.deepEqual(submittedAct.value.comments[0].anchor.parts.map((p:any)=>p.name),['body']);
     assert.deepEqual(submittedAct.value.comments[0].anchor.rigRegion,{x:4,y:4,width:7,height:6});
-    parts999[lang]={actId:submittedAct.actId,verdict:submittedAct.value.verdict,text:submittedAct.value.comments[0].text,rigRegion:submittedAct.value.comments[0].anchor.rigRegion,refusal:expectedRefusal};
+    parts999[lang]={actId:submittedAct.actId,text:submittedAct.value.comments[0].text,rigRegion:submittedAct.value.comments[0].anchor.rigRegion,refusal:expectedRefusal};
    }finally{await pf.close();}
   }
   await writeFile(join(out,'draft-survival.json'),JSON.stringify({bar3State,bar3Ko,parts999},null,2)+'\n');
@@ -873,9 +872,8 @@ if(Bun.argv.includes('--serve')){
   if(!fixtureArg||fixtureArg==='parts-box-pin'){
    const pf=await partsDifferenceJobFixture({scratchParent:serveScratch});
    closers.push(()=>pf.close());
-   await pf.ask(pf.publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
    for(const lang of ['ko','en'] as const){
-    console.log(JSON.stringify({fixture:'parts-box-pin',lang,url:partsDifferenceOwnerUrl(pf,lang),pid:process.pid,sourceHash:pf.publication.source.sourceHash,clicks:['1. Click + Comment (#stage-comment) and drag a box across the part edge.', '2. Type comment text in the open composer (Request changes / 수정 요청 enables immediately).', '3. Press Enter to save the clamped box pin, or click Request changes (#request-changes) directly while the composer is open.']}));
+    console.log(JSON.stringify({fixture:'parts-box-pin',lang,url:partsDifferenceOwnerUrl(pf,lang),pid:process.pid,sourceHash:pf.publication.source.sourceHash,clicks:['1. Click + Comment (#stage-comment) and drag a box across the part edge.', '2. Type comment text in the open composer (Send comments / 코멘트 보내기 enables immediately).', '3. Press Enter to save the clamped box pin, or click Send comments (#send-comments) directly while the composer is open.']}));
    }
   }
   await new Promise<void>(resolve=>{process.once('SIGTERM',resolve);process.once('SIGINT',resolve);});

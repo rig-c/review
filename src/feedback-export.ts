@@ -221,7 +221,7 @@ function stableJson(value: unknown): string {
   return serialized;
 }
 /** A data-owned backtick run can never close the generated fenced JSON block. */
-function jsonBlock(value: unknown): string {
+export function jsonBlock(value: unknown): string {
   const json = stableJson(value);
   let longest = 0;
   for (const run of json.matchAll(/`+/g)) longest = Math.max(longest, run[0].length);

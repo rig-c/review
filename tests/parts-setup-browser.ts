@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join,resolve,dirname} from 'node:path';
 import {PNG} from 'pngjs';
 import type {JobAct} from '../src/job-contract.ts';
-import {parseCommentsAct} from '../src/job-api.ts';
+import {parseCommentOnlyAct} from '../src/job-api.ts';
 import {resolvedCropPath} from '../src/comment-crops.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 import {loadPartsView,type PartsViewPackage} from '../src/parts-view.ts';
@@ -93,7 +93,7 @@ try{
   for(const mode of ['job','standalone']as const)for(const mesh of ['mesh','no-mesh']as const){
    const fixture=await scriptedJobWindowFixture({c5Parts:mesh});
    try{
-    const publication=await fixture.publish('parts');await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
+    await fixture.publish('parts');
     const dir=join(root,'headline-'+mesh);if(mode==='standalone')await writeMeshPackage(dir);
     if(mode==='standalone'&&mesh==='no-mesh'){await rm(join(dir,'rig.json'));await rm(join(dir,'mesh_report.json'));}
     const pkg=mode==='standalone'?await loadPartsView(dir):null;
@@ -117,7 +117,7 @@ try{
      report['item2-'+mode+'-'+mesh+'-'+lang]={unselected,selected};
      await shot('item2-selected-'+mode+'-'+mesh+'-'+lang);
      report[mode+'-'+mesh+'-'+lang]=measured;await writeFile(join(output,'headline-measurements.json'),JSON.stringify(report,null,2));await shot('headline-'+mode+'-'+mesh+'-'+lang);
-     assert.equal((measured as {headline:string}).headline,(lang==='en'?enCatalog:koCatalog)[mesh==='mesh'?'Check the parts and meshes.':'Check the parts.'],'HEADLINE_923 '+mode+' '+mesh+' '+lang);
+     assert.equal((measured as {headline:string}).headline,(lang==='en'?enCatalog:koCatalog)["We're looking at the work together. Leave your thoughts as comments."],'HEADLINE_923 '+mode+' '+mesh+' '+lang);
     }
    }finally{await fixture.close();}
   }
@@ -151,7 +151,7 @@ try{
  if(!headlineOnly&&!rigFitOnly&&!Bun.argv.includes('--skip-job'))for(const lang of ['en','ko']as const){
   const fixture=await scriptedJobWindowFixture({c5Parts:'mesh'});
   try{
-   const publication=await fixture.publish('parts');await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});const secondAsk=await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
+   const publication=await fixture.publish('parts');
    await page.goto(fixture.locator+'/?lang='+lang+'#cap='+fixture.credentials.ui);await settled();assert.deepEqual((await controls()).counts,[1,1,1,1,1]);await click(page,'[data-part-list] button');await click(page,'#part-solo');await settled();await click(page,'#fit');
    const savedCamera:string=await page.evaluate<string>(`document.querySelector('#rig-root').style.cssText`);
    for(let i=0;i<2;i++){if(await page.evaluate(`document.getElementById('stage-comment').getAttribute('aria-pressed')`)!=='true')await click(page,'#stage-comment');
@@ -159,11 +159,11 @@ try{
     await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value=${JSON.stringify('U3 '+lang+' issue ')}+${i};form.requestSubmit()})()`);await wait(`!document.querySelector('.stage-comment-composer')`,'comment saved');
    }
    await click(page,'#stage-comment');assert.ok(await page.evaluate(`(()=>{const list=document.querySelector('#comments-list-host #stage-comment-list');return list.getClientRects().length>0&&getComputedStyle(list).position==='static'&&document.querySelector('#workspace-communication').contains(list)})()`));await click(page,'#zoom-out');const currentCamera: string=await page.evaluate(`document.querySelector('#rig-root').style.cssText`);assert.notEqual(currentCamera,savedCamera);await click(page,'.stage-comment-summary');await wait(`!!document.querySelector('.stage-comment-composer input')`,'saved comment keeps view');assert.equal(await page.evaluate(`document.querySelector('#rig-root').style.cssText`),currentCamera);await click(page,'#stage-comment');
-   await shot('job-parts-'+lang+'-before-submit');await click(page,'#request-changes');let verdict:JobAct|undefined;const end=Date.now()+20000;
-   while(Date.now()<end){const next=await fixture.next(),acts=next.events.filter(event=>event.type==='act'&&event.act.publicationId===publication.publicationId&&event.act.kind==='parts-verdict');assert.ok(acts.length<=1);const event=acts[0];if(event?.type==='act'){verdict=event.act;break;}await Bun.sleep(50);}
-   assert.ok(verdict);const act=parseCommentsAct(verdict);assert.ok(act.kind==='parts-verdict');assert.equal(act.value.verdict,'changes-requested');assert.equal(act.value.comments.length,2);
+   await shot('job-parts-'+lang+'-before-submit');await click(page,'#send-comments');let submitted:JobAct|undefined;const end=Date.now()+20000;
+   while(Date.now()<end){const next=await fixture.next(),acts=next.events.filter(event=>event.type==='act'&&event.act.publicationId===publication.publicationId&&event.act.kind==='comments');assert.ok(acts.length<=1);const event=acts[0];if(event?.type==='act'){submitted=event.act;break;}await Bun.sleep(50);}
+   assert.ok(submitted);const act=parseCommentOnlyAct(submitted);assert.equal(act.kind,'comments');assert.equal('askId' in act,false);assert.equal(act.value.comments.length,2);
    for(const comment of act.value.comments){const anchor=comment.anchor as Omit<PartsIssue,'summary'>;assert.equal(anchor.sourceHash,act.source.sourceHash);assert.ok(anchor.nativeCrop&&anchor.imageRegion);for(const crop of [anchor.crop,anchor.nativeCrop!]){const bytes=await readFile(resolvedCropPath(crop.path));assert.equal(new Bun.CryptoHasher('sha256').update(bytes).digest('hex'),crop.sha256);}const native=PNG.sync.read(await readFile(resolvedCropPath(anchor.nativeCrop!.path))),source=PNG.sync.read(await readFile(join(fixture.packageRoot,'parts',anchor.parts[0]!.name+'.png'))),region=anchor.imageRegion!;assert.equal(native.width,region.width);assert.equal(native.height,region.height);for(let y=0;y<native.height;y++)for(let x=0;x<native.width;x++)assert.deepEqual(native.data.subarray((y*native.width+x)*4,(y*native.width+x+1)*4),source.data.subarray(((y+region.y)*source.width+x+region.x)*4,((y+region.y)*source.width+x+region.x+1)*4));}
-   assert.equal(fixture.host.session.status().pending.find(ask=>ask.askId===secondAsk.askId)?.status,'pending');await shot('job-parts-'+lang+'-submitted');report['job-'+lang]=act;
+   assert.deepEqual(fixture.host.session.status().pending,[]);await shot('job-parts-'+lang+'-submitted');report['job-'+lang]=act;
   }finally{await fixture.close();}
  }
  await writeFile(join(output,'report.json'),JSON.stringify(report,null,2)+'\n');console.log('U3_BROWSER_PASS '+JSON.stringify({cases:Object.keys(report),viewport:[1600,1000]}));

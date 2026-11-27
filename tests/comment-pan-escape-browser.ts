@@ -40,7 +40,6 @@ interface ScreenHandle {
  viewportId:string;
  rootId:string;
  paneId:string;
- lockExisting:()=>Promise<void>;
  close:()=>Promise<void>;
 }
 
@@ -61,11 +60,9 @@ async function openScreen(kind:ScreenKind,work:string):Promise<ScreenHandle>{
   const images=await Promise.all(refs.map(async r=>({...r,sha256:hash(await readFile(join(pkg,r.path)))})));
   f.input.setPartsReferences(refs);
   f.input.setContext({...context,parts:{...context.parts!,manifest:{path:'out/parts.json',sha256:hash(await readFile(join(pkg,'parts.json')))},images}});
-  const pub=await f.publish('parts');
-  await f.ask(pub,{kind:'parts-verdict',draftId:'synthetic-parts'});
+  await f.publish('parts');
   return {
    kind,url:f.host.ownerUrl,viewportId:'rig-viewport',rootId:'rig-root',paneId:'rig-pane',
-   lockExisting:async()=>{await f.ask(pub,{kind:'parts-verdict',draftId:'synthetic-parts'});},
    close:()=>f.close(),
   };
  }
@@ -79,17 +76,8 @@ async function openScreen(kind:ScreenKind,work:string):Promise<ScreenHandle>{
   f.input.setContext({...f.input.getContext(),selector:{kind:'rig',version:3}});
   const pubRes=await (await f.call({schema:'rig-review/job-api@2',jobId:f.host.session.jobId,requestId:'rig-physics-pub',verb:'publish',expectedGeneration:f.host.session.status().generation,idempotencyKey:'rig-physics-pub',result:{path:'out',selector:{kind:'rig',version:3}},freeze:{kind:'producer-held',holdId:'scripted-window-held',record:{path:'project.json',sha256:recordSha}}})).json();
   if(!pubRes.ok)throw new Error(JSON.stringify(pubRes));
-  const pub=pubRes.value;
-  let askSeq=0;
-  const askRig=async()=>{
-   const k='rig-ask-'+ ++askSeq;
-   const askRes=await (await f.call({schema:'rig-review/job-api@2',jobId:f.host.session.jobId,requestId:k,verb:'ask',expectedGeneration:f.host.session.status().generation,idempotencyKey:k,publicationId:pub.publicationId,subject:{kind:'review-verdict',stage:'rig-review'}})).json();
-   if(!askRes.ok)throw new Error(JSON.stringify(askRes));
-  };
-  await askRig();
   return {
    kind,url:f.host.ownerUrl,viewportId:'rig-viewport',rootId:'rig-root',paneId:'rig-pane',
-   lockExisting:askRig,
    close:()=>f.close(),
   };
  }
@@ -106,7 +94,6 @@ async function openScreen(kind:ScreenKind,work:string):Promise<ScreenHandle>{
  const server=await startCompareServer(await loadCompare({a:join(dir,'a'),b:join(dir,'b'),reference,animation:'inspect'}),{port:0,stateDir:join(dir,'state')});
  return {
   kind,url:`http://127.0.0.1:${server.port}/`,viewportId:'a-viewport',rootId:'a-root',paneId:'a-pane',
-  lockExisting:async()=>{},
   close:async()=>{server.stop(true);},
  };
 }
@@ -454,13 +441,11 @@ for(const lang of (redMode?['en']:['en','ko']) as ('en'|'ko')[]){
    await check(`${kind} ${lang} bar1 escape read-only comment`,async()=>{
     await resetMode();
     if(kind==='compare'){
-     await p.evaluate(`(()=>{const s=document.getElementById('status');s.value='changes-requested';s.dispatchEvent(new Event('change',{bubbles:true}));document.getElementById('submit').click();})()`);
+     await click(p,'#submit');
      await wait(p,`!document.getElementById('submit').disabled&&!document.getElementById('save-state').classList.contains('dirty')`,'compare submitted');
     }else{
-     await click(p,'#request-changes');
+     await click(p,'#send-comments');
      await wait(p,`document.getElementById('review-draft-state')?.dataset.saveState==='saved'`,kind+' submitted');
-     await screen!.lockExisting();
-     await wait(p,`!document.getElementById('request-changes').disabled`,kind+' re-asked');
     }
     if(!(await modeState()).active)await click(p,'#stage-comment');
     await settle();

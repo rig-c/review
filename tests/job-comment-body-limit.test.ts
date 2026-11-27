@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
 import {join} from 'node:path';
@@ -162,7 +163,7 @@ for (const count of [1, 6, 12]) test(`#790 ${count} pointed parts comments pass 
       {name: 'body', x: 0, y: 0, w: 20, h: 20}, {name: 'head', x: 10, y: 0, w: 20, h: 20}]}));
     parts.manifest.sha256 = jobHash(await readFile(join(f.root, 'out/parts.json')));
     f.setContext({...f.getContext(), parts});
-    const publication = await f.publish(), ask = await f.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
+    const publication = await f.publish(), ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
     const page = await f.display(publication), retained = f.session.retainedSource(publication.publicationId);
     const pkg = await loadPartsView(join(retained.snapshotRoot, 'out'));
     const crop = (syntheticPinnedFeedback({sourceHash: publication.source.sourceHash,

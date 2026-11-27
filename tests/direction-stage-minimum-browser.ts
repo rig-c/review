@@ -64,7 +64,6 @@ let browser: InputCdpSession | undefined;
 try {
   fixture = await scriptedJobWindowFixture({scratchParent: scratch});
   const publication = await fixture.publish('direction');
-  await fixture.ask(publication, {kind: 'review-verdict', stage: 'direction-review'});
   const url = new URL(fixture.host.ownerUrl);
   url.searchParams.set('lang', 'en');
 
@@ -80,7 +79,7 @@ try {
   await page.goto(url.href, 'en');
   await waitFor(page, `document.body.dataset.ready === 'true' && !document.body.inert &&
     !!document.querySelector('#direction-panel:not([hidden])') &&
-    !!document.querySelector('#save:not(:disabled)') && !!document.querySelector('#rig-root canvas')`, 'live Direction verdict');
+    !!document.querySelector('#send-comments:not([hidden])') && !!document.querySelector('#rig-root canvas')`, 'live Direction comments');
 
   const initial = await page.evaluate<StageReadback>(`(${readStage})()`);
   assert.equal(initial.directionOpen, false, 'Direction starts collapsed');

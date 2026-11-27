@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import { afterEach, expect, test } from 'bun:test';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -197,7 +198,7 @@ test('real semantic next preserves verbatim reviewer words across checkpoint and
     checkpointId: 'step-one',
     value: { checkpointId: 'step-one', outcome: 'fail', words: checkpointWords },
   });
-  const verdictAsk = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
+  const verdictAsk = seedHistoricalVerdictAsk(f.session, publication.publicationId, { kind: 'review-verdict', stage: 'rig-review' });
   const rigCapture = rigStillCapture(publication, verdictAsk, page);
 
   const committedVerdict = await f.ports.commitUIAct(
@@ -317,7 +318,7 @@ test('real semantic next preserves verbatim issue summaries in act@6 parts-verdi
   const partsPublication = await partsFixture.publish();
   const retained = partsFixture.session.retainedSource(partsPublication.publicationId);
   const pkg = await loadPartsView(join(retained.snapshotRoot, 'out'));
-  const partsAsk = await partsFixture.ask(partsPublication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
+  const partsAsk = seedHistoricalVerdictAsk(partsFixture.session, partsPublication.publicationId, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   const partsPage = await partsFixture.display(partsPublication);
 
   const bodyPartNote = '  [몸통/Body] 외곽선 브릿지 1px 여백 확인 필요! 🔍\n\t(좌측 겨드랑이 라인)  ';

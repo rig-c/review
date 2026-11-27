@@ -29,9 +29,9 @@ interface SettledEvidence {
 }
 
 type SessionInput = {
-  // Already read and validated through Review's canonical saved-session path.
-  session: ReviewSession;
-  // Exact bytes of the same retained session, validated by the reader.
+  // Source and feedback verified against the retained review record.
+  session: SessionSource & Pick<ReviewSession, 'feedback'>;
+  // Exact bytes of the retained session or local comments file.
   sessionBytes: Uint8Array;
   source: SessionSource;
   selector: SessionSelector;

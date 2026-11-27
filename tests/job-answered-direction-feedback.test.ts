@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import {afterEach, expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
 import {cp} from 'node:fs/promises';
@@ -45,7 +46,7 @@ async function finalize(f: Awaited<ReturnType<typeof fixture>>, publication: Job
     return saved.value;
   }
   const decision = subject;
-  const ask = await f.ask(publication, decision);
+  const ask = seedHistoricalVerdictAsk(f.session, publication.publicationId, decision);
   const page = await f.display(publication);
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({
     ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
@@ -108,7 +109,7 @@ test.each(['wrong job', 'unknown act', 'inherited act ID', 'pending ask', 'same 
   post(f, 2);
   const earlier = await f.publish();
   const act = await finalize(f, earlier);
-  const pending = reason === 'pending ask' ? await f.ask(earlier, subject) : undefined;
+  const pending = reason === 'pending ask' ? seedHistoricalVerdictAsk(f.session, earlier.publicationId, subject) : undefined;
   const field = {answeredDirectionFeedback: [{
     jobId: reason === 'wrong job' ? 'other-job' : f.session.jobId,
     actId: pending?.askId ?? (reason === 'unknown act' ? 'unknown-act' : reason === 'inherited act ID' ? 'constructor' : act.actId),

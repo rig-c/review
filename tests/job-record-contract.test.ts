@@ -1,3 +1,4 @@
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, realpathSync, readdirSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -2655,7 +2656,7 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
     });
 
     const pkgReceipt = await pkgFixture.display(pkgPub);
-    const validPkgAsk = await pkgFixture.ask(pkgPub, { kind: 'review-verdict', stage: 'rig-review' });
+    const validPkgAsk = seedHistoricalVerdictAsk(pkgFixture.session, pkgPub.publicationId, { kind: 'review-verdict', stage: 'rig-review' });
 
     const badPkgAct = await pkgFixture.ports.commitUIAct(
       pkgFixture.session.jobId,

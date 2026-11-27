@@ -40,7 +40,6 @@ try {
         };
         const count = (list: Entry[], url: string) => list.filter(entry => entry.name === url).length;
         const first = await fixture.publish('direction', 'direction-1');
-        await fixture.ask(first, {kind: 'review-verdict', stage: 'direction-review'});
         const one = await routesOf(first);
         const url = new URL(fixture.host.ownerUrl);url.searchParams.set('lang', 'en');
         await page.goto(url.href, 'en');
@@ -54,7 +53,6 @@ try {
 
         // Content-addressed: the republished model has new bytes, a new publication and so a new URL.
         const second = await fixture.publish('direction', 'direction-2', {stripShortAnimation: true});
-        await fixture.ask(second, {kind: 'review-verdict', stage: 'direction-review'});
         const two = await routesOf(second);
         assert.notEqual(two.model, one.model);
         await wait(`${settled}&&![...document.querySelector('#animation-select').options].some(o=>o.value==='short')`);

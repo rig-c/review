@@ -14,6 +14,7 @@ import { createJobHostPorts } from '../src/job-api.ts';
 import { JOB_API_V3_SCHEMA } from '../src/job-contract.ts';
 import { createSyntheticOptionRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
 import { seedHistoricalPicksAsks } from './helpers/historical-picks-act.ts';
+import {seedHistoricalVerdictAsk} from './helpers/historical-verdict-ask.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 const stores: JobStore<unknown>[] = [];
@@ -358,7 +359,8 @@ test('#1022 replay of a superseded publish or ask refuses by name and names the 
   const publishA = await f.publishRequest('publish-a');
   const firstA = await (await f.call(publishA)).json();
   const askA = { ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation, idempotencyKey: 'ask-a',
-    publicationId: firstA.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } };
+    publicationId: firstA.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } as const };
+  seedHistoricalVerdictAsk(f.session, askA.publicationId, askA.subject, askA.idempotencyKey);
   const firstAskA = await (await f.call(askA)).json();
   expect(firstAskA.ok).toBe(true);
   // Still current: the stored receipts come back exactly as before (the envelope reports the current generation, as on main).
@@ -369,7 +371,8 @@ test('#1022 replay of a superseded publish or ask refuses by name and names the 
   // An ask whose act was finalized keeps its stored receipt.
   // #1235: the answered sample is the rig verdict with its synthetic still, not a signoff.
   const signoffA = { ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation, idempotencyKey: 'ask-a-signoff',
-    publicationId: firstA.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } };
+    publicationId: firstA.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } as const };
+  seedHistoricalVerdictAsk(f.session, signoffA.publicationId, signoffA.subject, signoffA.idempotencyKey);
   const firstSignoffA = await (await f.call(signoffA)).json();
   const page = await f.display(firstA.value);
   const committed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: firstSignoffA.value.askId,

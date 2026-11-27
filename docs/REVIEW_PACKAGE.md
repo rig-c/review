@@ -31,7 +31,7 @@ The CLI also accepts an existing output directory. It reads a root `review.json`
 }
 ```
 
-An optional `producer` block declares the producer handoff: `"producer": {"config": "rig/config.json", "parts": "rig/out", "source": "inputs/painting.png", "full": "inputs/full", "head": "inputs/head"}`. Only `config` is required, `source` may be declared alone, `full` requires `source`, and `head` requires `full`. See *Producer handoff* below. An optional `panels` block (`{"schema": "rig-review/panels@1", "left": ["parts.list"], "stage": ["parts.canvas"], "toolbar": ["parts.layers"], "side": ["parts.issues", "act.submit"]}`) declares the panel composition across the closed slots `left`, `stage`, `toolbar` and `side` (`stage.length === 1` and `side` ending with `"act.submit"`); malformed `panels` blocks refuse with `JOB_PANELS_INVALID` in `parsePanelComposition` and fall back to `panels: undefined` in `parseManifest`.
+An optional `producer` block declares the producer handoff: `"producer": {"config": "rig/config.json", "parts": "rig/out", "source": "inputs/painting.png", "full": "inputs/full", "head": "inputs/head"}`. Only `config` is required, `source` may be declared alone, `full` requires `source`, and `head` requires `full`. See *Producer handoff* below. An optional `panels` block (`{"schema": "rig-review/panels@1", "left": ["parts.list"], "stage": ["parts.canvas"], "toolbar": ["parts.layers"], "side": ["parts.issues", "act.submit"]}`) declares the panel composition across the closed slots `left`, `stage`, `toolbar` and `side`. The stage has exactly one component. The side may include `act.submit`, which renders the shared **Send comments** control on supported review screens. Malformed `panels` blocks refuse with `JOB_PANELS_INVALID` in `parsePanelComposition` and fall back to `panels: undefined` in `parseManifest`.
 
 The illustrative `look` animation in `axes` must also be declared in `animations`. Omit axes when no real angle animation exists. All animation identifiers name actual compiled-model animations; the frontend reports runtime load/lookup errors rather than inventing them. Metadata duration is optional; the player supplies actual duration.
 
@@ -312,6 +312,24 @@ The issue text header reports total records, defect/quality counts, and per-buil
 Blocks group in fixed category order (`defect`, then `quality`), followed by exact `(target.kind,target.name)` with deterministic code-unit ordering, then side and feedback id. Bone and slot names do not collide. Each block carries its original id, inclusive chosen frames, target, category, one-line summary, side and selected build's source hash/reviewedSource. Compare also repeats the complete ordered A/B/reference/animation binding so a copied block retains both source identities. Single external-reference blocks retain `referenceBinding` with the base package hash and selected video name/id/SHA. Missing rig/motion artifacts remain null. The original inspection context stays separate from chosen frames; no clock or category is inferred.
 
 The header retains recorded status/timestamp and full source/tool provenance. Prior-tool retrieval is labeled as historical rather than current approval; original versions, currentTools and matching-submission count remain available. Server-derived per-feedback warnings and historical read warnings are included without discarding their items. Formatting does not make an invalid legacy item resubmittable. User text is escaped in Markdown syntax positions and inert evidence uses data-safe JSON fences, preserving arbitrary ids/targets/context without creating extra headings or rows. No issue is posted automatically.
+
+### Local comment sends
+
+Send comments on an open package or parts folder saves feedback on the local
+machine. Agents read sends through `rig-review feedback <package> --format json|issue`
+or `rig-review parts <dir> --format json|issue`. The exports report the saved
+location and mark sends against a different source with `earlierSource: true`.
+
+`rig-review/local-comments@1` carries an append-only `sends` array. Each send
+has a `sendId`, a server-recorded `at`, its own `source`, and a `value` with the
+[comment-only act value shape](#comment-only-act-act10). Parts sends can also
+record `by` from `--by`. Package sends bind the package ID, revision, source hash
+and reviewed source. Parts sends bind the parts mode and verdict source hash.
+A retry with the same `sendId` and value returns the saved send. Reusing a
+`sendId` for a different value refuses with `JOB_IDEMPOTENCY_CONFLICT`.
+A malformed saved record refuses with `LOCAL_COMMENTS_FILE_INVALID` and is
+preserved. Existing session statuses and parts verdicts remain readable
+through their existing exports.
 
 ## Read-only rig-pose report markers
 
@@ -2126,8 +2144,8 @@ and [Parts #1382](https://github.com/rig-c/parts/issues/1382).
 
 `rig-review/act@10` carries a person's comments on the publication that was on
 screen, sent without an ask. It has `kind: "comments"` and is read with
-`parseCommentOnlyAct`. No existing act schema changes, and asking still works
-as before. [Review #1226](https://github.com/rig-c/review/issues/1226),
+`parseCommentOnlyAct`. Historical acts retain their original schemas.
+[Review #1226](https://github.com/rig-c/review/issues/1226),
 [Create #982](https://github.com/rig-c/create/issues/982).
 
 | Field | Rule |
@@ -2158,10 +2176,12 @@ Refusals:
   seed, refuses `JOB_ACT_INVALID`. These are the act@8 and act@9 writer checks
   without the verdict.
 
-The review page puts its pending Edit Mesh and chest landmark drafts in
-`carriers` when a person sends comments. Request changes sends them first as
-an act@10 with no comments, then sends the verdict without them, so a verdict
-from the page carries no edits ([Review #1231](https://github.com/rig-c/review/issues/1231)).
+The live review page puts its pending Edit Mesh and chest landmark drafts in
+`carriers` when a person sends comments
+([Review #1231](https://github.com/rig-c/review/issues/1231)). Fresh
+`review-verdict` and `parts-verdict` asks refuse with `JOB_ASK_INVALID`.
+Existing verdict asks, acts and replays stay readable
+([Review #1232](https://github.com/rig-c/review/issues/1232)).
 Parts reads the chest carrier. Create reads the mesh-edit carrier from
 [Create #982](https://github.com/rig-c/create/issues/982); until then Create
 records it without applying it.

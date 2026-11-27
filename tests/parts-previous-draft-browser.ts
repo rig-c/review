@@ -4,7 +4,7 @@ import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {PNG} from 'pngjs';
-import {JOB_COMMENTS_ACT_SCHEMA} from '../src/job-contract.ts';
+import {JOB_COMMENT_ONLY_ACT_SCHEMA} from '../src/job-contract.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 import {
   partsDifferenceJobFixture, partsDifferenceOwnerUrl, previousDraftRasterProbes, previousDraftRasterSize,
@@ -313,17 +313,17 @@ async function pinComment(page: InputCdpSession, fixture: Fixture, lang: Languag
   return pinned;
 }
 
-async function finalize(page: InputCdpSession, fixture: Fixture, pinned: PartsIssue, askId: string, key: string) {
-  await wait(page, `document.querySelector('#request-changes')?.checkVisibility()&&!document.querySelector('#request-changes').disabled`, 'parts verdict ready');
-  await click(page, '#request-changes');
+async function finalize(page: InputCdpSession, fixture: Fixture, pinned: PartsIssue, key: string) {
+  await wait(page, `document.querySelector('#send-comments')?.checkVisibility()&&!document.querySelector('#send-comments').disabled`, 'parts comments ready');
+  await click(page, '#send-comments');
   const deadline = Date.now() + 15_000;
   do {
-    const event = (await fixture.next()).events.find(e => e.type === 'act' && e.act.askId === askId);
+    const event = (await fixture.next()).events.find(e => e.type === 'act' && e.act.kind === 'comments');
     if (event?.type === 'act') {
       const act = event.act;
-      assert.equal(act.schema, JOB_COMMENTS_ACT_SCHEMA);
-      assert.equal(act.kind, 'parts-verdict');
-      assert.equal(act.value.verdict, 'changes-requested');
+      assert.equal(act.schema, JOB_COMMENT_ONLY_ACT_SCHEMA);
+      assert.equal(act.kind, 'comments');
+      assert.equal('askId' in act, false);
       assert.equal(act.publicationId, fixture.publication.publicationId);
       assert.equal(act.source.sourceHash, fixture.publication.source.sourceHash);
       assert.deepEqual('previousDraft' in act.source ? act.source.previousDraft : undefined, fixture.previousDraft);
@@ -331,14 +331,14 @@ async function finalize(page: InputCdpSession, fixture: Fixture, pinned: PartsIs
       const comment = act.value.comments[0]!;
       const {summary, ...anchor} = pinned;
       assert.deepEqual(comment, {text: summary, anchor}, 'finalized consumer act preserves the pointed comment');
-      report[key + '-act'] = {schema: act.schema, kind: act.kind, verdict: act.value.verdict,
+      report[key + '-act'] = {schema: act.schema, kind: act.kind,
         sourceHash: act.source.sourceHash, previousDraft: fixture.previousDraft, commentId: pinned.id,
         comparison: pinned.view.comparison, cropSha256: pinned.crop.sha256};
       return;
     }
     await Bun.sleep(50);
   } while (Date.now() < deadline);
-  throw new Error('No finalized parts-verdict act: ' + await page.evaluate<string>('document.body.innerText'));
+  throw new Error('No finalized parts comments act: ' + await page.evaluate<string>('document.body.innerText'));
 }
 
 async function runCase(page: InputCdpSession, lang: Language, variant: Case) {
@@ -348,7 +348,6 @@ async function runCase(page: InputCdpSession, lang: Language, variant: Case) {
   });
   const shot = async (suffix: string) => writeFile(join(output, key + '-' + suffix + '.png'), await page.screenshot());
   try {
-    const ask = await fixture.ask(fixture.publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
     await page.goto(partsDifferenceOwnerUrl(fixture, lang));
     await settled(page);
     assert.equal(await page.evaluate<string>('document.documentElement.lang'), lang);
@@ -415,7 +414,7 @@ async function runCase(page: InputCdpSession, lang: Language, variant: Case) {
       const soloReads = (await differenceReads(page)).slice(before);
       assertPaintingReads(soloReads);
       await shot('solo');
-      await finalize(page, fixture, pinned, ask.askId, key);
+      await finalize(page, fixture, pinned, key);
     }
   } catch (error) {
     try {await shot('failure');} catch (captureError) {report[key + '-capture-error'] = String(captureError);}
