@@ -16,7 +16,7 @@
 | [Host-bound act wait](#host-bound-act-wait) | `waitForJobAct` | Uses the host's API schema and existing agent capability. | Review #1005 |
 | [Parts enumeration](#parts-enumeration-boundary) | `rig-review-job-source/2` and `JOB_PARTS_ENUMERATOR_RANGE` | Binds official Parts references in their original order, with roles and retained-byte hashes. | C4 (Review #501) |
 | [Publication commit](REVIEW_PACKAGE.md#publication-commit) | Optional `commit` in the trusted reader's publication context | 40 lowercase hex, sealed into `source.sourceHash` and echoed as `source.commit`. Absent stays absent, and the publication keeps its bytes. | Review #1226 |
-| [Current output selector](REVIEW_PACKAGE.md#current-output-selector) | `{kind: 'current', output, record}` in `JobSelector` | Additive selector arm under `rig-review/job-api@2` and `@3` for unnumbered current `parts`, `rig` and `direction` outputs, with no ask (`JOB_ASK_INVALID`), `rig-review/act@10` comments whose send-time check re-hashes every seal except `project.json`, and three `JOB_CURRENT_*` publication refusal codes. | Review #1267 |
+| [Current output selector](REVIEW_PACKAGE.md#current-output-selector) | `{kind: 'current', output, record}` in `JobSelector` | Additive selector arm under `rig-review/job-api@2` and `@3` for unnumbered current `parts`, `rig` and `direction` outputs, with no ask (the `ask` verb is removed in 5.0.0, #1225), `rig-review/act@10` comments whose send-time check re-hashes every seal except `project.json`, and three `JOB_CURRENT_*` publication refusal codes. | Review #1267 |
 | [Package manifest `frames`](#package-manifest-frames-declaration) | Optional `rigc-frames/1` in `rig-review/1` | The declared record is validated and hashed. Older manifests without the field keep their source hash. | Review #1018 |
 
 In standalone `rig-review-session/1` records and local package comment sends, a
@@ -87,7 +87,7 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | Interview answer form | #1230 | Live job comments (`rig-review/act@10`); option-set pictures stay in the shared main view. |
 | `--picks-dir`, `POST /api/interview/picks`, the `interviewPicksRecord` export and the per-question `saved` field in `GET /api/interview` | #1225 | Project opening uses `--project` without a picks directory. Historical `rig-review/interview-picks@1` files keep their parser. |
 | Historical interview answer display | #1230 | A person can no longer see an old interview answer or its note on a Review screen; agents and the CLI read them byte for byte. |
-| Fresh `review-verdict` and `parts-verdict` asks | #1232 | Fresh asks refuse with `JOB_ASK_INVALID`. Send comments on the displayed publication produces an act@10. |
+| Fresh `review-verdict` and `parts-verdict` asks | #1232 | Until 5.0.0, fresh asks refused with `JOB_ASK_INVALID`; 5.0.0 removes the `ask` verb (#1225). Send comments on the displayed publication produces an act@10. |
 | CLI `session ask`, API `ask` and `ask-batch`, and `capabilities.askBatch` | 5.0.0 (#1225, breaking) | Request and response types for these verbs are removed. Readers retain recorded asks, events and acts. |
 | Fresh verdict submissions | #1233 | Stored verdict acts retain their readers and replay behavior. |
 | Public decision submission exports | 5.0.0 (#1225, breaking) | `@rig-c/review/job-host` removes `prepareJobRecordAct`, `JobUIActValues`, `JobRigCapture`, `JobUISubmission`, `JobRecordUIActValues`, `JobRecordUISubmission`, `RecordUIActValues` and `RecordUISubmission`. `JobUISubmissionV3` and `UISubmissionV3` describe comment-only submissions. Stored act readers and replay remain supported. |
@@ -961,10 +961,10 @@ submission type.
 - `JobRecordPartsIdentity`
 - `JobRecordActKind`
 - `JobRecordSignoffStage` (read-only compatibility: retained for declared subject parsing and historical record and act decoders, #1227)
-- `JobRecordPicksSubject` (read-only compatibility: declared subjects and old records and acts parse; new `interview-picks` asks refuse with `JOB_ASK_INVALID` and page submissions refuse with `JOB_ACT_KIND_DISABLED`, #1230)
-- `JobRecordCheckpointSubject` (read-only compatibility: declared subjects and old records and acts parse; new `checkpoint` asks refuse with `JOB_ASK_INVALID` and page submissions refuse with `JOB_ACT_KIND_DISABLED`, #1229)
-- `JobRecordSignoffSubject` (read-only compatibility: declared subjects and old records and acts parse; new `signoff` asks refuse with `JOB_ASK_INVALID` and page submissions refuse with `JOB_ACT_KIND_DISABLED`, #1227)
-- `JobRecordReopenSubject` (read-only compatibility: old records and acts parse; new `reopen` asks refuse with `JOB_ASK_INVALID` and Review neither renders nor builds `reopen`, #989)
+- `JobRecordPicksSubject` (read-only compatibility: declared subjects and old records and acts parse; new `interview-picks` asks refused with `JOB_ASK_INVALID` until 5.0.0 removed the `ask` verb and page submissions refuse with `JOB_ACT_KIND_DISABLED`, #1230)
+- `JobRecordCheckpointSubject` (read-only compatibility: declared subjects and old records and acts parse; new `checkpoint` asks refused with `JOB_ASK_INVALID` until 5.0.0 removed the `ask` verb and page submissions refuse with `JOB_ACT_KIND_DISABLED`, #1229)
+- `JobRecordSignoffSubject` (read-only compatibility: declared subjects and old records and acts parse; new `signoff` asks refused with `JOB_ASK_INVALID` until 5.0.0 removed the `ask` verb and page submissions refuse with `JOB_ACT_KIND_DISABLED`, #1227)
+- `JobRecordReopenSubject` (read-only compatibility: old records and acts parse; new `reopen` asks refused with `JOB_ASK_INVALID` until 5.0.0 removed the `ask` verb and Review neither renders nor builds `reopen`, #989)
 - `JobRecordPlanSubject`
 - `JobRecordSubject`
 - `JobRecordContextBase`
