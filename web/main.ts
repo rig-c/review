@@ -50,7 +50,7 @@ import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {animationAppliedRecord,animationOutcomeLine,retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type AnimationJobView,type AnimationRequestBody,type AnimationSourceOp,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuildApply,seedFields,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {mountWorkspaceShell,mountStatusBar,bindWorkspaceUI,bindHeaderModeAvailability,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -2918,18 +2918,17 @@ async function applyRetarget(body:{sequence:string;map:PoseMap;flags:RetargetFla
  rebuildBusy=true;rebuildState();retargetPanel?.busy(true);retargetPanel?.result(null);
  retargetPanel?.status(`Retargeting ${body.sequence} as "${body.flags.animation}" with ${status.retarget?.producer?.package??'@rig-c/pose'} ${status.retarget?.producer?.version??''}: ${body.flags.clean?'clean, ':''}retarget, compile…`,false);
  try{
-  const result=await runRebuild<RetargetRequestBody,RetargetJobView>(request,{post:value=>api<RetargetJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<RetargetJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),onLine:text=>retargetPanel?.line(text)});
-  const outcome=retargetOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
+  const {result,outcome,next}=await runRebuildApply(request,{api,path:'/api/rebuild',formatOutcome:retargetOutcomeLine,onLine:text=>retargetPanel?.line(text)});
   retargetPanel?.result(result);retargetPanel?.status(outcome.text,outcome.error);
-  if(next.id===null||!('id' in result)){message(outcome.text,true);return result;}
+  if(!next){message(outcome.text,true);return result;}
   await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
   // The new animation's own clock (the run's report frameTimes), bound to this build: the transport counter and the rig pane read it.
-  stageClock=retargetStage(result,next.hash)?.clock??null;
-  appliedOnStage=retargetAppliedRecord(result);stageCheck=null;stageChanged({kind:'apply',via:'retarget'});
+  stageClock=retargetStage(next.job,next.hash)?.clock??null;
+  appliedOnStage=retargetAppliedRecord(next.job);stageCheck=null;stageChanged({kind:'apply',via:'retarget'});
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   // The new animation plays against the reference: choose it, and show the sequence it was made from beside it.
-  const name=result.request.record.flags.animation;if(assets?.animations.some(clip=>clip.name===name))chooseAnimation(name);
-  const ref=result.request.record.sequence.reference;if(data.manifest.references.some(r=>r.id===ref)&&select('reference-select').value!==ref){select('reference-select').value=ref;await showReference(ref);}
+  const name=next.job.request.record.flags.animation;if(assets?.animations.some(clip=>clip.name===name))chooseAnimation(name);
+  const ref=next.job.request.record.sequence.reference;if(data.manifest.references.some(r=>r.id===ref)&&select('reference-select').value!==ref){select('reference-select').value=ref;await showReference(ref);}
   message(outcome.text,outcome.error);
   return result;
  }catch(error){const text=`REBUILD_FAILED: ${errorText(error)}`;retargetPanel?.status(text,true);message(text,true);return {status:'refused',error:text,producerLine:null};}
@@ -2952,12 +2951,11 @@ async function applyMeshDelta(doc:MeshEditDocument,line:(text:string)=>void):Pro
  const priorBuildId=appliedOnStage?.buildId??'inspected',priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
  rebuildBusy=true;rebuildState();
  try{
-  const result=await runRebuild<DeltaRequestBody,DeltaJobView>(body,{post:value=>api<DeltaJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<DeltaJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),onLine:text=>line(text)});
-  const outcome=deltaOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
-  if(next.id===null||!('id' in result)){message(outcome.text,true);return {built:false,text:outcome.text,error:true};}
+  const {outcome,next}=await runRebuildApply(body,{api,path:'/api/rebuild',formatOutcome:deltaOutcomeLine,onLine:text=>line(text)});
+  if(!next){message(outcome.text,true);return {built:false,text:outcome.text,error:true};}
   if(inspectedModel)await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
-  else{const target=draftScratchTarget(result.id,result.build?.modelUrl,result.build?.modelHash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart},world});}
-  appliedOnStage=deltaAppliedRecord(result);stageCheck=null;stageChanged({kind:'apply',via:'delta'});
+  else{const target=draftScratchTarget(next.id,next.url,next.hash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart},world});}
+  appliedOnStage=deltaAppliedRecord(next.job);stageCheck=null;stageChanged({kind:'apply',via:'delta'});
   if(!inspectedModel)refreshStageParts?.();
   meshEditor?.setStatusNote(outcome.text,false);
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
@@ -3194,14 +3192,13 @@ async function applyRebuild():Promise<void> {
  const priorBuildId=appliedOnStage?.buildId??'inspected',priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
  rebuildBusy=true;rebuildState();chestEditor?.notify(`Rebuilding ${part} with ${status.producer?.package} ${status.producer?.version}…`,false,[]);
  try{
-  const result=await runRebuild(body,{post:value=>api<RebuildJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<RebuildJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+  const {outcome,next}=await runRebuildApply(body,{api,path:'/api/rebuild',formatOutcome:outcomeLine,
    onLine:line=>{lines.push(line);chestEditor?.notify(line.trim()||'…',false,lines.slice(-6));}});
-  const outcome=outcomeLine(result);
   // A refusal stays readable in full: the bar's status line is one line, so the log ends with the producer's line verbatim.
-  if(!('id' in result)||result.status!=='built'||!result.build){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return;}
-  if(inspectedModel)await swapRig(new URL(access.route(result.build.modelUrl),location.href).href,access.route(`/rebuild/${result.id}/`),result.build.modelHash);
-  else{const target=draftScratchTarget(result.id,result.build.modelUrl,result.build.modelHash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart}});}
-  appliedOnStage=appliedRecord(result);stageCheck=null;stageChanged({kind:'apply',via:'regions'});
+  if(!next){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return;}
+  if(inspectedModel)await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash);
+  else{const target=draftScratchTarget(next.id,next.url,next.hash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart}});}
+  appliedOnStage=appliedRecord(next.job);stageCheck=null;stageChanged({kind:'apply',via:'regions'});
   if(!inspectedModel)refreshStageParts?.();
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   // The log closes on success so nothing floats over the rebuilt stage; a refusal keeps it open.
@@ -3225,13 +3222,12 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   // #112: with "Use for readings" on, Apply's check reads the exported schedule of the clip check renders (its idle).
   const scheduled=useWorld()?worldFor(checkAnimation()):null;
   if(scheduled&&'error' in scheduled){chestEditor?.notify(scheduled.error,true);message(scheduled.error,true);return {status:'refused',error:scheduled.error,producerLine:scheduled.error};}
-  const result=await runRebuild<{patch:ConfigPatch;environment?:WorldExport['schedule']},PatchJobView>({patch,...(scheduled?{environment:scheduled.schedule}:{})},{post:value=>api<PatchJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<PatchJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+  const {result,outcome,next}=await runRebuildApply({patch,...(scheduled?{environment:scheduled.schedule}:{})},{api,path:'/api/rebuild',formatOutcome:patchOutcomeLine,
    onLine:line=>{lines.push(line);chestEditor?.notify(line.trim()||'…',false,lines.slice(-6));}});
-  const outcome=patchOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
-  if(next.id===null||!('id' in result)){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return result;}
+  if(!next){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return result;}
   if(inspectedModel)await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
-  else{const target=draftScratchTarget(result.id,result.build?.modelUrl,result.build?.modelHash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart},world});}
-  appliedOnStage=patchAppliedRecord(result);stageCheck={lines:[...result.lines],check:result.check};stageChanged({kind:'apply',via:'patch'});
+  else{const target=draftScratchTarget(next.id,next.url,next.hash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart},world});}
+  appliedOnStage=patchAppliedRecord(next.job);stageCheck={lines:[...next.job.lines],check:next.job.check};stageChanged({kind:'apply',via:'patch'});
   if(!inspectedModel)refreshStageParts?.();
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   chestEditor?.notify(outcome.text,outcome.error,[]);message(outcome.text,outcome.error);
@@ -3620,21 +3616,18 @@ async function applyAnimation(ops:readonly AnimationSourceOp[]):Promise<Animatio
  rebuildBusy=true;rebuildState();animationPanel?.busy(true);
  animationPanel?.setEditorStatus(`Applying ${ops.length} animation op(s) on ${animSource.path??'animations_from'} (rig-parts rig → rigc build → rig-parts check)…`,false);
  try{
-  const result=await runRebuild<AnimationRequestBody,AnimationJobView>(request,{
-   post:value=>api<AnimationJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),
-   get:id=>api<AnimationJobView>(`/api/rebuild/${id}`),
-   sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+  const {result,outcome,next}=await runRebuildApply(request,{
+   api,path:'/api/rebuild',formatOutcome:animationOutcomeLine,
    onLine:line=>animationPanel?.setEditorStatus(line.trim()||'…',false),
   });
-  const outcome=animationOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
-  if(next.id===null||!('id' in result)){
+  if(!next){
    animationPanel?.setEditorStatus(outcome.text,true);
    message(outcome.text,true);
    return result;
   }
   animationPanel?.markApplied(ops,outcome.text,outcome.error);
   await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
-  appliedOnStage=animationAppliedRecord(result);stageCheck={lines:[...result.lines],check:result.check};stageChanged({kind:'apply',via:'animation'});
+  appliedOnStage=animationAppliedRecord(next.job);stageCheck={lines:[...next.job.lines],check:next.job.check};stageChanged({kind:'apply',via:'animation'});
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   animationPanel?.setEditorStatus(outcome.text,outcome.error);
   message(outcome.text,outcome.error);

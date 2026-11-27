@@ -267,6 +267,24 @@ export async function runRebuild<B,J extends AnyJobView>(body:B,deps:RebuildDeps
  return job;
 }
 
+/** Run an Apply against the selected rebuild endpoint and resolve its outcome before the caller updates the stage. */
+export async function runRebuildApply<B,J extends AnyJobView>(body:B,options:{
+ path:string;
+ api:<T>(path:string,init?:RequestInit)=>Promise<T>;
+ onLine:RebuildDeps<B,J>['onLine'];
+ formatOutcome:(result:J|RebuildRefusal)=>{text:string;error:boolean};
+ sleep?:RebuildDeps<B,J>['sleep'];
+}) {
+ const {path,api,onLine,formatOutcome,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}=options;
+ const result=await runRebuild<B,J>(body,{
+  post:value=>api<J|RebuildRefusal>(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),
+  get:id=>api<J>(`${path}/${id}`),
+  onLine,sleep,
+ });
+ const outcome=formatOutcome(result),next=stageModel(result,{url:'',hash:''});
+ return {result,outcome,next:next.id!==null&&'id' in result?{job:result,id:next.id,url:next.url,hash:next.hash}:null};
+}
+
 /**
  * A patch from the config the status read: `config_sha256` is the handoff config's hash and the producer is the
  * installed one, so an edit card only states its ops and the op. Null when Apply cannot run here.
