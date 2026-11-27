@@ -3,7 +3,9 @@ import { cp, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, utimes, wri
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadCompare, assertCompareUnchanged, type ComparePackage } from '../src/compare.ts';
-import { freshCompareSession, parseCompareSession, readCompareSession, saveCompareSession } from '../src/compare-session.ts';
+import { compareSessionFile, freshCompareSession, parseCompareSession, readCompareSession, saveCompareSession } from '../src/compare-session.ts';
+import { parseCommentsCompareSession } from '../src/job-host.ts';
+import { readFeedbackCompareSession } from '../src/session-history.ts';
 import { startCompareServer } from '../src/compare-server.ts';
 import { buildWeb, entryHtml } from '../src/build.ts';
 import { compareWorkspaceMarkup } from '../web/compare-markup.ts';
@@ -18,10 +20,45 @@ test('comparison binds ordered package and reference identities without writing 
  const swapped=await loadCompare({...f.inputs,a:f.inputs.b,b:f.inputs.a});expect(swapped.response.sourceHash).not.toBe(p.response.sourceHash);expect(freshCompareSession(p).status).toBe('pending');expect(await inventory(f.root)).toEqual(before);
 });
 test('comparison session requires side and exact complete immutable provenance on save',async()=>{
- const f=await fixture(),p=await loadCompare(f.inputs),state=join(f.root,'state');const input={...freshCompareSession(p),status:'changes-requested',feedback:[note()]};const saved=await saveCompareSession(p,input,state);expect(saved.feedback[0]?.side).toBe('b');expect(saved.binding).toEqual(p.response.binding);expect(saved.updatedAt).toBeString();expect((await readCompareSession(p,state)).binding).toEqual(p.response.binding);
+ const f=await fixture(),p=await loadCompare(f.inputs),state=join(f.root,'state');const input={...freshCompareSession(p),status:'changes-requested',feedback:[note()]};const saved=await saveCompareSession(p,input,state);expect(saved.status).toBe('pending');expect(saved.feedback[0]?.side).toBe('b');expect(saved.binding).toEqual(p.response.binding);expect(saved.updatedAt).toBeString();expect(Object.hasOwn(JSON.parse(await readFile(compareSessionFile(p,state),'utf8')),'status')).toBe(false);expect((await readCompareSession(p,state)).binding).toEqual(p.response.binding);
  for(const side of [undefined,'both','c'])expect(()=>parseCompareSession({...input,feedback:[{...note(),side}]},p)).toThrow('feedback.side');
  for(const binding of [{...p.response.binding,a:{...p.response.binding.a,sourceHash:'forged'}},{...p.response.binding,b:{...p.response.binding.b,reviewedSource:{...p.response.binding.b.reviewedSource,motion:null}}},{...p.response.binding,reference:{...p.response.binding.reference,sha256:'forged'}},{...p.response.binding,animation:'other'}])expect(()=>parseCompareSession({...input,binding},p)).toThrow('session.binding');
  expect(()=>parseCompareSession({...input,feedback:[note(),note()]},p)).toThrow('duplicate ids');
+});
+test('compare session omits status on save, ignores status in PUT, reads historical status and keeps compare-session/2 pinned',async()=>{
+ const f=await fixture(),p=await loadCompare(f.inputs),state=join(f.root,'state'),file=compareSessionFile(p,state);
+ const saved=await saveCompareSession(p,{...freshCompareSession(p),feedback:[note()]},state);
+ expect(saved.status).toBe('pending');
+ const written=JSON.parse(await readFile(file,'utf8'));
+ expect(Object.hasOwn(written,'status')).toBe(false);
+ expect((await readCompareSession(p,state)).status).toBe('pending');
+ expect((await readFeedbackCompareSession(p,state)).status).toBe('pending');
+
+ for(const historicalStatus of ['approved','changes-requested'] as const){
+  await writeFile(file,JSON.stringify({...written,status:historicalStatus},null,2)+'\n');
+  expect((await readCompareSession(p,state)).status).toBe(historicalStatus);
+  expect((await readFeedbackCompareSession(p,state)).status).toBe(historicalStatus);
+ }
+
+ const server=await startCompareServer(p,{port:0,stateDir:state}),base=`http://127.0.0.1:${server.port}`,headers={Origin:base,'Content-Type':'application/json'};
+ try{
+  const {status:_drop,...baseBody}=freshCompareSession(p);
+  const secondNote={...note(),id:'two',summary:'Second note'};
+  for(const candidate of ['approved','changes-requested','bogus-status',123,null,{nested:true}]){
+   const res=await fetch(base+'/api/compare/session',{method:'PUT',headers,body:JSON.stringify({...baseBody,status:candidate,feedback:[note(),secondNote]})});
+   expect(res.status).toBe(200);
+   const body=await res.json();
+   expect(body.status).toBe('pending');
+   const disk=JSON.parse(await readFile(file,'utf8'));
+   expect(Object.hasOwn(disk,'status')).toBe(false);
+   expect((await (await fetch(base+'/api/compare/session')).json()).status).toBe('pending');
+  }
+ }finally{await server.stop(true);}
+
+ const v2={schema:'rig-review-compare-session/2',id:p.response.id,revision:'compare/1',sourceHash:p.response.sourceHash,binding:p.response.binding,status:'approved',comments:[],feedbackWarnings:[],updatedAt:saved.updatedAt};
+ expect(parseCommentsCompareSession(v2).status).toBe('approved');
+ const {status:_omit,...v2WithoutStatus}=v2;
+ expect(()=>parseCommentsCompareSession(v2WithoutStatus)).toThrow('JOB_ACT_INVALID');
 });
 test('changing A or B model page, motion, model, or reference refuses both read and save',async()=>{
  for(const path of ['a/build/page.png','b/build/page.png','a/motion.json','b/motion.json','a/build/skeleton.model.json','b/build/skeleton.model.json','ref.mp4']){const f=await fixture(),p=await loadCompare(f.inputs),file=join(f.root,path),old=await readFile(file,'utf8');await writeFile(file,old+' ');await expect(assertCompareUnchanged(p)).rejects.toThrow('inputs changed');await expect(saveCompareSession(p,{...freshCompareSession(p),feedback:[note()]},join(f.root,'state'))).rejects.toThrow('inputs changed');await expect(readCompareSession(p,join(f.root,'state'))).rejects.toThrow('inputs changed');}
