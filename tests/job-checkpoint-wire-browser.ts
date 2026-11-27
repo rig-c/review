@@ -220,14 +220,15 @@ try {
     assert.equal(initialState.images,true);assert.equal(initialState.mesh,false);assert.equal(initialState.bones,false);
     assert.equal(initialState.overlayPixels,0,'initial shared overlay is empty');
     await record('initial-shared-layer-state',initialState);
-    // #1229: fresh checkpoint asks refuse JOB_ASK_INVALID; shared layer controls and shortcuts run directly on the published rig screen.
+    // #1229: fresh checkpoint asks refuse JOB_REQUEST_INVALID; shared layer controls and shortcuts run directly on the published rig screen.
     const cpRefused = await (await fixture.call({
         ...fixture.input.base(), verb: 'ask', expectedGeneration: fixture.host.session.status().generation,
         idempotencyKey: 'ask-refused-checkpoint', publicationId: rig.publicationId,
         subject: {kind: 'checkpoint', checkpointId: 'meshes', planStepId: 'inspect-body'},
     })).json();
     assert.equal(cpRefused.ok, false, JSON.stringify(cpRefused));
-    assert.equal(cpRefused.error.code, 'JOB_ASK_INVALID');
+    assert.equal(cpRefused.error.code, 'JOB_REQUEST_INVALID');
+    assert.equal(cpRefused.error.message, 'Unknown job verb: ask');
     const cpState = await page.evaluate<{disabled:boolean;titles:string[];forms:number}>(`({disabled:['layer-images','layer-mesh','layer-bones'].some(id=>document.getElementById(id).disabled),titles:[...document.querySelectorAll('#layer-controls .layer-toggle')].map(el=>el.title),forms:document.querySelectorAll('form[data-job-ask]').length})`);
     assert.equal(cpState.forms, 0, 'no checkpoint form is mounted');
     assert.equal(cpState.disabled,false,'shared layer checkboxes are enabled');

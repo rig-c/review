@@ -317,7 +317,7 @@ in [the screen specification](https://github.com/rig-c/review/blob/main/docs/SCR
 
 People send comments through Review's UI (`rig-review/act@10`, #1239, #1314;
 until 5.0.0, also verdicts and stage decisions, #1244, #1251, #1252, #1314,
-#1321); agents use semantic `publish`, `ask`, `next` and `close`, and consumer
+#1321); agents use semantic `publish`, `next` and `close`, and consumer
 writers fetch finalized acts directly.
 Opening or navigating never approves. Preserve reviewer authority, exact
 source binding, publication freeze, generation checks, replay and recorded text.

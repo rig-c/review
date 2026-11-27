@@ -77,13 +77,13 @@ import {
  type JobActSources, type JobAct, type JobSubject, type JobPendingAsk,
  type JobInterviewJson, type JobInterviewRecord, type JobInterviewDiagnostic, type JobInterviewDiagnostics,
  type JobPublication,
- type JobStatus, type JobPublishRequest, type JobAskRequest, type JobNextRequest,
+ type JobStatus, type JobPublishRequest, type JobNextRequest,
  type JobCloseRequest, type JobAgentRequest, type JobFetchActRequest, type JobErrorCode,
  type JobFailure, type JobResult, type JobEvent, type JobNextValue, type JobResponseValues,
  type JobApiResponse, type JobDisplayAcknowledgment, type JobDisplayReceipt,
  type JobDisplayPublication, type JobHostPorts, type JobConsumerGrant,
  type JobRecordAct, type JobActV3, type JobPlanSource, type JobFetchActRequestV3, type JobRecordHostHooks,
- type JobCapabilitiesV3, type JobAskBatchRequestV3, type JobAskBatchValueV3,
+ type JobCapabilitiesV3,
  type JobRecordReopenSubject, type JobRecordReopenValue, type JobUISubmissionV3, type UISubmissionV3,
  type RecordSignoffStage, type JobRecordSignoffSubject, type JobRecordSignoffValue,
  type JobComment, type JobCommentAnchor, type JobCommentFeedbackAnchor, type JobCommentPartsAnchor, type JobCommentImageAnchor,
@@ -106,13 +106,13 @@ export type PublicTypes = [
  JobReviewerBinding, JobHumanAuthority, JobVerdict, JobPartOutcome, JobReviewStage,
  JobActValues, JobActSources, JobAct, JobSubject, JobPendingAsk,
  JobInterviewJson, JobInterviewRecord, JobInterviewDiagnostic, JobInterviewDiagnostics,
- JobPublication, JobStatus, JobPublishRequest, JobAskRequest, JobNextRequest,
+ JobPublication, JobStatus, JobPublishRequest, JobNextRequest,
  JobCloseRequest, JobAgentRequest, JobFetchActRequest, JobErrorCode, JobFailure,
  JobResult<JobStatus>, JobEvent, JobNextValue, JobResponseValues, JobApiResponse,
  JobDisplayAcknowledgment, JobDisplayReceipt, JobDisplayPublication,
  JobHostPorts, JobConsumerGrant,
  JobRecordAct, JobActV3, JobPlanSource, JobFetchActRequestV3, JobRecordHostHooks,
- JobCapabilitiesV3, JobAskBatchRequestV3, JobAskBatchValueV3,
+ JobCapabilitiesV3,
  JobRecordReopenSubject, JobRecordReopenValue, JobUISubmissionV3, UISubmissionV3,
  JobComment, JobCommentAnchor, JobCommentFeedbackAnchor, JobCommentPartsAnchor, JobCommentImageAnchor,
  JobCommentsAct, JobCommentsActValues, ReviewCommentsSession, CompareCommentsSession, PartsCommentsVerdict,
@@ -127,15 +127,15 @@ const jobActAdmitsComments: JobActAdmitsComments = true;
 // Verify that both installed V3 submission names admit only comments.
 type PublicSubmissionKind = JobUISubmissionV3['kind'] | UISubmissionV3['kind'];
 const publicSubmissionIsCommentOnly: PublicSubmissionKind extends 'comments' ? true : never = true;
-// Review #963: a newer Create detects ask-batch through this capability, never by probing the verb.
-export type CapabilitiesAdvertiseAskBatch = JobCapabilitiesV3['askBatch'] extends true ? true : never;
-const capabilitiesAdvertiseAskBatch: CapabilitiesAdvertiseAskBatch = true;
+// Review 5.0.0 removes the ask-batch capability from the published contract.
+export type CapabilitiesOmitAskBatch = 'askBatch' extends keyof JobCapabilitiesV3 ? never : true;
+const capabilitiesOmitAskBatch: CapabilitiesOmitAskBatch = true;
 function assert(ok: unknown, name: string): asserts ok {
  if (!ok) throw new Error('SMOKE_PUBLIC_HOST_' + name);
 }
 assert(jobActAdmitsComments, 'JOB_ACT_ADMITS_COMMENTS');
 assert(publicSubmissionIsCommentOnly, 'UI_SUBMISSION_IS_COMMENT_ONLY');
-assert(capabilitiesAdvertiseAskBatch, 'CAPABILITIES_ADVERTISE_ASK_BATCH');
+assert(capabilitiesOmitAskBatch, 'CAPABILITIES_OMIT_ASK_BATCH');
 const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID', 'JOB_PARTS_ENUMERATOR_RANGE',
  'JOB_PREVIOUS_DRAFT_SCHEMA', 'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
  'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordSource',

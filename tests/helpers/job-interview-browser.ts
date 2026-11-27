@@ -236,11 +236,11 @@ export async function verifyInterviewDiagnosticsFixtureDryRun(): Promise<void> {
     );
 
     // #1230: the current scene question is published and shown, but a fresh picks ask refuses by name.
-    await assert.rejects(fixture.ask(publication, {
+    assert.deepEqual(await fixture.requestRemovedAsk(publication, {
       kind: 'interview-picks',
       questionId: probe.editableSceneQuestion.set.question,
       setId: probe.editableSceneQuestion.set.id,
-    }), /JOB_ASK_INVALID/);
+    }), {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'});
     assert.deepEqual(fixture.host.session.status().pending, []);
 
     const ackRes = await fixture.ui('displayed', {

@@ -8,6 +8,7 @@ import { startJobHost, type JobHostOptions, type JobProgressLineV3, type JobProg
 import { JobSession } from '../src/job-session.ts';
 import { JobStore } from '../src/job-store.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
+import { seedHistoricalPicksAsks } from './helpers/historical-picks-act.ts';
 import { seedHistoricalVerdictAsk } from './helpers/historical-verdict-ask.ts';
 import { createSyntheticOptionSetsRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
 
@@ -26,7 +27,7 @@ async function progressFixture() {
   };
   return {
     f, packageRecord, packageResult, options,
-    // #1229: checkpoint asks retired; ask-batch exercises multi-set option-set subjects.
+    // The record publication carries two option sets for the historical pending events.
     writeOptionRecord() {
       const workspace = createSyntheticOptionSetsRecordWorkspace(f.root, { count: 2 });
       optionContext = workspace.context;
@@ -119,7 +120,7 @@ test('#987 V3 progress closes the request shape and enforces the 1024-byte HTTP 
   } finally { session.dispose(); await f.close(); }
 });
 
-test('#987 committed publish and close clear progress while refused and replayed asks preserve it', async () => {
+test('#987 committed publish and close clear progress while removed verbs and historical next reads preserve it', async () => {
   const { f, packageRecord, packageResult, options, writeOptionRecord } = await progressFixture();
   const session = new JobSession(options);
   const api = agentClient(session, f.origin);
@@ -162,17 +163,17 @@ test('#987 committed publish and close clear progress while refused and replayed
     const publicationId = published.value.publicationId;
     const ask = { verb: 'ask', expectedGeneration: 1, idempotencyKey: 'progress-ask', publicationId,
       subject: { kind: 'review-verdict', stage: 'rig-review' } as const };
-    expect((await api.call({ ...ask, expectedGeneration: 0 })).error.code).toBe('JOB_GENERATION_STALE');
+    expect((await api.call({...publish, idempotencyKey: 'stale-progress-publish'})).error.code).toBe('JOB_GENERATION_STALE');
     expect(snapshot().data.progress?.at).toBe(newer.value.at);
     const beforeRefusal = snapshot();
     expect(await api.call({...ask, idempotencyKey: 'fresh-progress-ask'}))
-      .toMatchObject({ok: false, generation: 1, error: {code: 'JOB_ASK_INVALID'}});
+      .toMatchObject({ok: false, generation: 1, error: {code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask'}});
     expect(snapshot()).toEqual(beforeRefusal);
     const historical = seedHistoricalVerdictAsk(session, publicationId, ask.subject, ask.idempotencyKey);
     expect(snapshot().data.progress).toBeUndefined();
 
     await api.progress(4);
-    expect(await api.call(ask)).toMatchObject({ok: true, value: historical});
+    expect((await api.next()).value.events).toContainEqual(expect.objectContaining({type: 'pending', ask: historical}));
     expect(snapshot().data.progress?.seq).toBe(4);
     // #1235: the sample act is the comment-only act@10; it answers no ask.
     const page = session.ackDisplayed({ publicationId, pageId: 'progress-page', sourceHash: published.value.source.sourceHash });
@@ -181,7 +182,7 @@ test('#987 committed publish and close clear progress while refused and replayed
     expect(act.kind).toBe('comments');
     expect(snapshot().data.progress?.seq).toBe(4);
 
-    // #1229 / #1230: all fresh record asks refuse JOB_ASK_INVALID without clearing progress, while a replayed historical ask-batch receipt leaves newer progress intact.
+    // Publishing the record clears progress. Refusing ask-batch and reading historical events preserve progress.
     const workspace = writeOptionRecord();
     const recordPublished = await api.call({ verb: 'publish', expectedGeneration: 3, idempotencyKey: 'progress-record-publish',
       result: workspace.result, freeze: { kind: 'producer-held', holdId: 'progress-record', record: workspace.record } });
@@ -191,33 +192,14 @@ test('#987 committed publish and close clear progress while refused and replayed
     const batch = { verb: 'ask-batch', expectedGeneration: 4, idempotencyKey: 'progress-batch',
       publicationId: recordPublished.value.publicationId, subjects: workspace.context.subjects };
     const refusedBatch = await api.call(batch);
-    expect(refusedBatch).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+    expect(refusedBatch).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask-batch' } });
     expect(snapshot().data.progress?.seq).toBe(5);
-    const { parseJobRequestV3, parseRecordSource, requestDigest } = await import('../src/job-api.ts');
-    let seededBatchValue!: { asks: unknown[] };
-    ((session as unknown as { store: JobStore<{
-      generation: number; progress?: unknown; asks: Record<string, unknown>;
-      publications: Record<string, { retained: { source: unknown } }>;
-      replays: Record<string, unknown>;
-    }> }).store).update(session.jobId, null, current => {
-      const data = structuredClone(current.data);
-      const source = parseRecordSource(data.publications[recordPublished.value.publicationId]!.retained.source);
-      const asks = workspace.context.subjects.map((subject, idx) => {
-        data.generation++;
-        const seeded = { askId: `seeded-batch-ask-${idx}`, publicationId: recordPublished.value.publicationId, status: 'pending', subject, source };
-        data.asks[seeded.askId] = seeded;
-        return seeded;
-      });
-      delete data.progress;
-      seededBatchValue = { asks };
-      const parsed = parseJobRequestV3({ ...api.base, ...batch }) as unknown as Record<string, unknown>;
-      const { requestId: _requestId, ...semantic } = parsed;
-      data.replays['agent:' + batch.idempotencyKey] = { digest: requestDigest(semantic), value: seededBatchValue };
-      return { data };
-    });
-    expect(snapshot().data.progress).toBeUndefined();
+    const historicalPicks = seedHistoricalPicksAsks(session, recordPublished.value.publicationId, workspace.context.subjects);
     await api.progress(6);
-    expect((await api.call(batch)).value).toEqual(seededBatchValue);
+    const beforeRead = snapshot();
+    const events = (await api.next()).value.events as EventV3[];
+    for (const ask of historicalPicks) expect(events).toContainEqual(expect.objectContaining({type: 'pending', ask}));
+    expect(snapshot()).toEqual(beforeRead);
     expect(snapshot().data.progress?.seq).toBe(6);
 
     const beforeClose = await api.next();

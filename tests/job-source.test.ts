@@ -455,7 +455,7 @@ test('#1230 actual readProject pending questions publish while optional answer a
   const asked = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
     idempotencyKey: 'real-pending-ask', publicationId: published.value.publicationId,
     subject: { kind: 'interview-picks', questionId: pending.set.question, setId: pending.set.id } })).json();
-  expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+  expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' } });
   const page = await f.display(published.value);
   const selections = pending.set.asks.map(item => ({ itemId: item.id,
     optionId: item.options.find(option => option.kind === 'value' && option.recommended)!.id, otherText: null }));

@@ -53,7 +53,7 @@ afterEach(() => {
   }
 });
 
-test('#1229 fresh record checkpoint asks refuse JOB_ASK_INVALID, fresh submissions refuse JOB_ACT_KIND_DISABLED, and stored act@4 replays byte-for-byte', async () => {
+test('#1229 fresh record checkpoint asks refuse JOB_REQUEST_INVALID, fresh submissions refuse JOB_ACT_KIND_DISABLED, and stored act@4 replays byte-for-byte', async () => {
   const workRoot = makeTempDir('review-1229-plan-root-');
   const stateRoot = makeTempDir('review-1229-plan-state-');
   const ws = createSyntheticPlanRecordWorkspace(workRoot);
@@ -100,7 +100,7 @@ test('#1229 fresh record checkpoint asks refuse JOB_ASK_INVALID, fresh submissio
       publicationId,
       subject: { kind: 'checkpoint', checkpointId: 'step_layout' },
     });
-    expect(askRes).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+    expect(askRes).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask' } });
 
     const batchRes = await call({
       verb: 'ask-batch',
@@ -109,7 +109,7 @@ test('#1229 fresh record checkpoint asks refuse JOB_ASK_INVALID, fresh submissio
       publicationId,
       subjects: [{ kind: 'checkpoint', checkpointId: 'step_layout' }],
     });
-    expect(batchRes).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+    expect(batchRes).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID', message: 'Unknown job verb: ask-batch' } });
 
     const ackRes = await ports.ackDisplayed(session.jobId, new Request(origin + `/jobs/${session.jobId}/ui/displayed`, {
       method: 'POST',
@@ -277,7 +277,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       bindJobRecordAsk({ kind: 'mesh-edit' }, optRetained),
     ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
 
-    // Declared checkpoints (#1229) and signoffs (#1227) still parse on the source, while fresh asks refuse JOB_ASK_INVALID
+    // Declared checkpoints (#1229) and signoffs (#1227) still parse on the source, while the historical binders refuse JOB_ASK_INVALID
     expect(planRetained.source.subjects).toContainEqual({ kind: 'checkpoint', checkpointId: 'step_layout' });
     expect(() => bindJobRecordAsk({ kind: 'checkpoint', checkpointId: 'step_layout' }, planRetained)).toThrow(
       expect.objectContaining({ code: 'JOB_ASK_INVALID' }),

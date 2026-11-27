@@ -126,7 +126,7 @@ async function openFixture(scratch: string, route: Route, variant: Variant, lang
         }
         assert.ok(host);
         const mountedHost = host;
-        // #1229: fresh checkpoint asks refuse JOB_ASK_INVALID; expose refuseAsk() so #1225/#1229 checks verify named refusal.
+        // #1229: fresh checkpoint asks refuse JOB_REQUEST_INVALID; expose refuseAsk() so #1225/#1229 checks verify named refusal.
         const refuseAsk = async () => {
             const res = await fetch(mountedHost.origin + '/jobs/' + mountedHost.session.jobId + '/api', {
                 method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + mountedHost.session.hostCredentials().agent},
@@ -139,9 +139,10 @@ async function openFixture(scratch: string, route: Route, variant: Variant, lang
         };
         if (!deferAsk) {
             const refused = await refuseAsk();
-            assert.equal(refused.status, 409);
+            assert.equal(refused.status, 400);
             assert.equal(refused.body.ok, false);
-            assert.equal(refused.body.error.code, 'JOB_ASK_INVALID');
+            assert.equal(refused.body.error.code, 'JOB_REQUEST_INVALID');
+            assert.equal(refused.body.error.message, 'Unknown job verb: ask');
         }
         assert.deepEqual(publication.source.checkpointEvidence, packets, 'retained checkpoint evidence identity');
         const display = host.session.displayPublication(publication.publicationId);
@@ -1132,13 +1133,14 @@ async function checkpointViewportControls(page: InputCdpSession, scratch: string
             url.searchParams.set('lang', language);
             await page.goto(url.href, language);
             // #1229: on a record, the first declared pair is up from the start with no checkpoint form;
-            // a producer checkpoint ask refuses JOB_ASK_INVALID while shared viewport controls keep working.
+            // a producer checkpoint ask refuses JOB_REQUEST_INVALID while shared viewport controls keep working.
             await pairView(page, fixture, language, 'after');
             await recordViewportControls(page, command!, language, false);
             const refused = await fixture.refuseAsk();
-            assert.equal(refused.status, 409);
+            assert.equal(refused.status, 400);
             assert.equal(refused.body.ok, false);
-            assert.equal(refused.body.error.code, 'JOB_ASK_INVALID');
+            assert.equal(refused.body.error.code, 'JOB_REQUEST_INVALID');
+            assert.equal(refused.body.error.message, 'Unknown job verb: ask');
             await pairView(page, fixture, language, 'after');
             await recordViewportControls(page, command!, language, false);
             const scale = () => page.evaluate<number>("new DOMMatrix(getComputedStyle(document.querySelector('#reference-content')).transform).a");
@@ -1163,7 +1165,7 @@ async function checkpointViewportControls(page: InputCdpSession, scratch: string
     }
 }
 
-/** #1225 / #1229 owner check: a producer that still sends a checkpoint ask receives JOB_ASK_INVALID,
+/** #1225 / #1229 owner check: a producer that still sends a checkpoint ask receives JOB_REQUEST_INVALID,
  * and the browser page still renders the record pair or package rig screen plus Send comments without breaking. */
 async function checkpointAskRefusalKeepsScreen(page: InputCdpSession, scratch: string) {
     const out: Record<string, unknown> = {};
@@ -1171,9 +1173,10 @@ async function checkpointAskRefusalKeepsScreen(page: InputCdpSession, scratch: s
         const fixture = await openFixture(scratch, route, 'pair', 'en', true);
         try {
             const refused = await fixture.refuseAsk();
-            assert.equal(refused.status, 409, route + ' checkpoint ask HTTP 409');
+            assert.equal(refused.status, 400, route + ' checkpoint ask HTTP 400');
             assert.equal(refused.body.ok, false);
-            assert.equal(refused.body.error.code, 'JOB_ASK_INVALID', route + ' named refusal');
+            assert.equal(refused.body.error.code, 'JOB_REQUEST_INVALID', route + ' named refusal');
+            assert.equal(refused.body.error.message, 'Unknown job verb: ask');
             await showFixture(page, fixture, 'en');
             assert.deepEqual(await inspectionErrors(page), [], route + ' renders without error banner after refused ask');
             assert.equal(await page.evaluate<number>(`document.querySelectorAll('form[data-job-ask],[id="job-record-asks"],[id="workspace-pending-record-ask"]').length`), 0);
