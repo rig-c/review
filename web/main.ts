@@ -2950,6 +2950,80 @@ const rigStageJobState={
   set stripPending(next){stripPending=next;},
   get stripView(){return stripView;},
 };
+const rigStageDraft:NonNullable<StageJobScreen['draft']>={
+ canManage:canManageApplied,
+ deltaRefusal:()=>!inspectedModel&&appliedOnStage?MESH_DELTA_APPLIED_SOURCE:null,
+ begin(kind){
+  const transition={kind,priorBuildId:appliedOnStage?.buildId??'inspected',
+   priorPart:stageCorrectionPart??stageDraftSelection?.part??null,token:++stageDraftRequestToken};
+  return async(next,world)=>{
+   const target=next?draftScratchTarget(next.id,next.url,next.hash):draftInspectedTarget();
+   await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition,world});
+  };
+ },
+ refresh:refreshRigDraft,
+ regionStatus:loaded=>loaded?chestStatusForPart(loaded,stageCorrectionPart??chestFormPart):loaded,
+ regionRefusal:()=>stageCorrectionPart&&(parts?.value()?.slot??stageDraftSelection?.slot??null)!==stageCorrectionPart?'STAGE_DRAFT_MISMATCH':null,
+};
+function refreshRigDraft():void {if(!inspectedModel)refreshStageParts?.();}
+const rigChestOutput={
+ progress:(write:()=>void)=>write(),
+ notice:(text:string,error:boolean,lines?:readonly string[])=>chestEditor?.notify(text,error,lines),
+ message:(text:string,error?:boolean)=>message(text,error),
+};
+const rigStageJobs:StageJobScreen={
+ state:rigStageJobState,api:(path,init)=>api(path,init),path:'/api/rebuild',
+ draft:rigStageDraft,readOnly:()=>readOnly,loadStatus:loadRebuildStatus,selected:()=>true,
+ busy:()=>rebuildBusy,setBusy:setRigRebuildBusy,setScopedBusy:setRigRebuildBusy,
+ world:()=>stageWorld(),swap:({url,prefix,hash},world)=>swapRig(url,prefix,hash,world),
+ target:(next,stripId)=>({url:new URL(access.route(next.url),location.href).href,
+  prefix:access.route(stripId?`/density-strip/${stripId}/${next.id}/`:`/rebuild/${next.id}/`),hash:next.hash}),
+ changed:stageChanged,message:(text,error)=>message(text,error),
+ writeDraft:()=>writeRebuildDraft(el<HTMLTextAreaElement>('rebuild-applied'),appliedOnStage),
+ chest:()=>chestEditor,chestField:(name)=>chestField(name),mesh:()=>meshPanel,
+ meshNote:text=>meshEditor?.setStatusNote(text,false),animation:()=>animationPanel,retarget:()=>retargetPanel,
+ schedule:()=>useWorld()?worldFor(checkAnimation()):null,
+ chestOutput:()=>rigChestOutput,
+ patchStart:patch=>`Applying patch (${patch.op.cmd}, ${patch.ops.length} op(s))…`,
+ resetNote:'Reset: the inspected build is on the stage. The draft keeps the last applied state.',
+ resetMessage:'Reset to the inspected build.',
+ undoStatus:(text,error)=>appliedStatus(text,error),
+ undoText:result=>{
+  const inspectedHash=inspectedModel?.sha256??data.reviewedSource.rig?.sha256??data.sourceHash;
+  return `Undid ${result.undone.slice(0,12)}… · the stage is ${result.status==='inspected'?`the inspected build (model ${inspectedHash.slice(0,12)}…)`:`record ${result.history.depth} (model ${stageModelHash?.slice(0,12)}…)`} · ${result.history.depth} applied record(s) left`;
+ },
+ restoreUndoRetarget:retarget=>{
+  stageClock=retarget?.clock??null;
+  if(retarget&&assets?.animations.some(clip=>clip.name===retarget.animation))chooseAnimation(retarget.animation);
+ },
+ finishUndo:job=>renderAppliedBlocks(job),
+ undoReadouts:(cuts,cloth)=>{cutsPanel?.shown(cuts);clothPanel?.shown(cloth);},
+ redrawUndo:()=>redrawOverlay(true),
+ setRetargetClock:(job,hash)=>{stageClock=retargetStage(job,hash)?.clock??null;},
+ selectRetargetPlayback:job=>{
+  const name=job.request.record.flags.animation;
+  if(assets?.animations.some(clip=>clip.name===name))chooseAnimation(name);
+  const ref=job.request.record.sequence.reference;
+  if(data.manifest.references.some(r=>r.id===ref)&&select('reference-select').value!==ref){
+   select('reference-select').value=ref;return showReference(ref);
+  }
+ },
+ redrawStripBack:()=>redrawOverlay(true),renderStrip:()=>renderStrip(),reportStrip:(text,error)=>densityLine(text,error),
+ animationApplyText:(path,count)=>`Applying ${count} animation op(s) on ${path} (rig-parts rig → rigc build → rig-parts check)…`,
+ animationResetText:'Reset: the inspected build is on the stage; no pending animation ops.',
+ resetForAnimation:()=>resetRebuild(stageWorld()),
+ stripLoad:{
+  densityBusy:()=>densityBusy,
+  draw:()=>{
+   if(!layers.mesh){layers.mesh=true;input('layer-mesh').checked=true;}
+   if(player)drawRig(()=>player!.draw());redrawOverlay(true);
+  },
+  triangles:part=>lastOverlay?.meshTriangles[part]??null,
+  pendingCount:(view,row)=>`${view.field} ${row.value} · ${row.counts?`v ${row.counts.vertices} · t ${row.counts.triangles}`:'no counts'} (remesh.json) — not applied`,
+  pendingStatus:(view,row,index,agreement)=>`Pending on the stage: ${view.part} ${view.field} ${row.value} (strip row ${index+1}) — not applied. The Mesh panel's Apply applies it; Back returns the stage. ${agreement}`,
+ },
+};
+function setRigRebuildBusy(value:boolean):void {rebuildBusy=value;rebuildState();}
 function readAppliedStage(){return rigStageJobState;}
 function renderAppliedBlocks(restoredJob:AnyJobView|null=null):void {
  reconcileAppliedBlocks(readAppliedStage(),{
@@ -3444,80 +3518,6 @@ function draftScratchTarget(buildId:unknown,modelUrl:unknown,modelHash:unknown):
  if(typeof buildId!=='string'||!buildId||buildId==='inspected'||typeof modelUrl!=='string'||!modelUrl||typeof modelHash!=='string'||!modelHash)throw new Error('STAGE_DRAFT_MISMATCH');
  return {buildId,url:new URL(access.route(modelUrl),location.href).href,prefix:access.route(`/rebuild/${buildId}/`),sha256:modelHash};
 }
-const rigStageDraft:NonNullable<StageJobScreen['draft']>={
- canManage:canManageApplied,
- deltaRefusal:()=>!inspectedModel&&appliedOnStage?MESH_DELTA_APPLIED_SOURCE:null,
- begin(kind){
-  const transition={kind,priorBuildId:appliedOnStage?.buildId??'inspected',
-   priorPart:stageCorrectionPart??stageDraftSelection?.part??null,token:++stageDraftRequestToken};
-  return async(next,world)=>{
-   const target=next?draftScratchTarget(next.id,next.url,next.hash):draftInspectedTarget();
-   await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition,world});
-  };
- },
- refresh:refreshRigDraft,
- regionStatus:loaded=>loaded?chestStatusForPart(loaded,stageCorrectionPart??chestFormPart):loaded,
- regionRefusal:()=>stageCorrectionPart&&(parts?.value()?.slot??stageDraftSelection?.slot??null)!==stageCorrectionPart?'STAGE_DRAFT_MISMATCH':null,
-};
-function refreshRigDraft():void {if(!inspectedModel)refreshStageParts?.();}
-const rigChestOutput={
- progress:(write:()=>void)=>write(),
- notice:(text:string,error:boolean,lines?:readonly string[])=>chestEditor?.notify(text,error,lines),
- message:(text:string,error?:boolean)=>message(text,error),
-};
-const rigStageJobs:StageJobScreen={
- state:rigStageJobState,api:(path,init)=>api(path,init),path:'/api/rebuild',
- draft:rigStageDraft,readOnly:()=>readOnly,loadStatus:loadRebuildStatus,selected:()=>true,
- busy:()=>rebuildBusy,setBusy:setRigRebuildBusy,setScopedBusy:setRigRebuildBusy,
- world:()=>stageWorld(),swap:({url,prefix,hash},world)=>swapRig(url,prefix,hash,world),
- target:(next,stripId)=>({url:new URL(access.route(next.url),location.href).href,
-  prefix:access.route(stripId?`/density-strip/${stripId}/${next.id}/`:`/rebuild/${next.id}/`),hash:next.hash}),
- changed:stageChanged,message:(text,error)=>message(text,error),
- writeDraft:()=>writeRebuildDraft(el<HTMLTextAreaElement>('rebuild-applied'),appliedOnStage),
- chest:()=>chestEditor,chestField:(name)=>chestField(name),mesh:()=>meshPanel,
- meshNote:text=>meshEditor?.setStatusNote(text,false),animation:()=>animationPanel,retarget:()=>retargetPanel,
- schedule:()=>useWorld()?worldFor(checkAnimation()):null,
- chestOutput:()=>rigChestOutput,
- patchStart:patch=>`Applying patch (${patch.op.cmd}, ${patch.ops.length} op(s))…`,
- resetNote:'Reset: the inspected build is on the stage. The draft keeps the last applied state.',
- resetMessage:'Reset to the inspected build.',
- undoStatus:(text,error)=>appliedStatus(text,error),
- undoText:result=>{
-  const inspectedHash=inspectedModel?.sha256??data.reviewedSource.rig?.sha256??data.sourceHash;
-  return `Undid ${result.undone.slice(0,12)}… · the stage is ${result.status==='inspected'?`the inspected build (model ${inspectedHash.slice(0,12)}…)`:`record ${result.history.depth} (model ${stageModelHash?.slice(0,12)}…)`} · ${result.history.depth} applied record(s) left`;
- },
- restoreUndoRetarget:retarget=>{
-  stageClock=retarget?.clock??null;
-  if(retarget&&assets?.animations.some(clip=>clip.name===retarget.animation))chooseAnimation(retarget.animation);
- },
- finishUndo:job=>renderAppliedBlocks(job),
- undoReadouts:(cuts,cloth)=>{cutsPanel?.shown(cuts);clothPanel?.shown(cloth);},
- redrawUndo:()=>redrawOverlay(true),
- setRetargetClock:(job,hash)=>{stageClock=retargetStage(job,hash)?.clock??null;},
- selectRetargetPlayback:job=>{
-  const name=job.request.record.flags.animation;
-  if(assets?.animations.some(clip=>clip.name===name))chooseAnimation(name);
-  const ref=job.request.record.sequence.reference;
-  if(data.manifest.references.some(r=>r.id===ref)&&select('reference-select').value!==ref){
-   select('reference-select').value=ref;return showReference(ref);
-  }
- },
- redrawStripBack:()=>redrawOverlay(true),renderStrip:()=>renderStrip(),reportStrip:(text,error)=>densityLine(text,error),
- animationApplyText:(path,count)=>`Applying ${count} animation op(s) on ${path} (rig-parts rig → rigc build → rig-parts check)…`,
- animationResetText:'Reset: the inspected build is on the stage; no pending animation ops.',
- resetForAnimation:()=>resetRebuild(stageWorld()),
- stripLoad:{
-  densityBusy:()=>densityBusy,
-  draw:()=>{
-   if(!layers.mesh){layers.mesh=true;input('layer-mesh').checked=true;}
-   if(player)drawRig(()=>player!.draw());redrawOverlay(true);
-  },
-  triangles:part=>lastOverlay?.meshTriangles[part]??null,
-  pendingCount:(view,row)=>`${view.field} ${row.value} · ${row.counts?`v ${row.counts.vertices} · t ${row.counts.triangles}`:'no counts'} (remesh.json) — not applied`,
-  pendingStatus:(view,row,index,agreement)=>`Pending on the stage: ${view.part} ${view.field} ${row.value} (strip row ${index+1}) — not applied. The Mesh panel's Apply applies it; Back returns the stage. ${agreement}`,
- },
-};
-function setRigRebuildBusy(value:boolean):void {rebuildBusy=value;rebuildState();}
 async function resolveStageDraftTarget(buildId:string):Promise<StageDraftModelTarget>{
  if(buildId==='inspected')return draftInspectedTarget();
  if(!appliedOnStage||appliedOnStage.buildId!==buildId||typeof appliedOnStage.modelHash!=='string'||!appliedOnStage.modelHash)throw new Error('STAGE_DRAFT_STALE');
