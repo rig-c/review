@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+* Review reads the optional sealed `sceneReport` manifest entry. Authored shots play through their camera, and pinned comments and crops follow the displayed frame and projection. This requires `@rig-c/play` 1.28.0. Older Review versions silently skip `sceneReport` without refusing the package, so camera packages require Create's exact Review version pin. Review names report admission failures as `SCENE_REQUIRED`, `SCENE_SOURCE_MISMATCH`, `SCENE_CAMERA_REPORT_INVALID`, `SCENE_CAMERA_REPORT_TOO_LARGE`, `SCENE_CAMERA_MODEL_MISMATCH` or `SCENE_CAMERA_CLIP_MISMATCH`. It reports invalid camera sampling or geometry as `SCENE_CAMERA_CLOCK_INVALID` or `SCENE_CAMERA_VIEW_INVALID`, and a mismatched authored take as `DIRECTION_TAKE_MISMATCH` (#1316).
+
 ### Changed
 
 * Leave comments on live reviews and in Compare without choosing a verdict. Send comments saves feedback locally when you open a package or parts folder (#1232).

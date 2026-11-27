@@ -44,11 +44,12 @@ export function validateFeedbackSelection(catalog:FeedbackCatalog,value:Feedback
   if(last!==null&&value.frameEnd>last)throw new Error(`feedback.frameEnd: ${value.frameEnd} beyond clip last frame ${last}`);
 }
 /** Target/animation validation for a seconds-only comment; no fabricated frame is passed to the integer validator. */
-export function validateTimedFeedbackSelection(catalog:FeedbackCatalog,value:{target:FeedbackSelection['target'];animation:string|null;time:number}):void {
+export function validateTimedFeedbackSelection(catalog:FeedbackCatalog,value:{target:FeedbackSelection['target'];animation:string|null;time:number},authoredDuration?:number):void {
  if(!value.target||!['bone','slot','rig'].includes(value.target.kind))throw new Error('feedback.target.kind: expected bone | slot | rig');
  const names=feedbackTargetNames(catalog,value.target.kind);if(names===null)throw new Error(`feedback.target.name: ${value.target.kind} validation unavailable without model names`);
  if(!names.includes(value.target.name))throw new Error('feedback.target.name: not in inspected model/package');
  if(value.animation!==null&&typeof value.animation!=='string')throw new Error('feedback.context.animation: expected animation name or null');
  const clip=catalog.animations?.find(c=>c.name===value.animation);if(value.animation!==null&&catalog.animations!==null&&!clip)throw new Error('feedback.context.animation: not in model');
- if(!Number.isFinite(value.time)||value.time<0||value.time>Number.MAX_SAFE_INTEGER||clip&&value.time>clip.duration)throw new Error('COMMENT_TIME_ONLY_INVALID: seconds outside inspected animation');
+ const duration=authoredDuration??clip?.duration;
+ if(!Number.isFinite(value.time)||value.time<0||value.time>Number.MAX_SAFE_INTEGER||duration!==undefined&&value.time>duration)throw new Error('COMMENT_TIME_ONLY_INVALID: seconds outside inspected animation');
 }
