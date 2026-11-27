@@ -1526,6 +1526,8 @@ export function jobSourceDraftId(source: SourceV3): string {
         return source.package.id + ':rig:' + source.selector.version;
     if (source.selector?.kind === 'post')
         return source.package.id + ':post:' + source.selector.version + ':' + source.selector.rigVersion;
+    if (source.selector?.kind === 'current')
+        return source.package.id + ':current:' + source.selector.output + ':' + source.selector.record;
     return source.package.id;
 }
 

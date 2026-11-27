@@ -21,8 +21,10 @@ import type {InstanceAccess} from './instance-access.ts';
 /** The shared screen hosts model packages and parts drafts; records have their own shared host seam. */
 export function jobRigScreenSubject(source: SourceV3, rigDraftVerdict = false): boolean {
   if ('record' in source) return false;
-  if(source.selector?.kind==='draft'&&source.parts)return true;
-  return !!source.model && (source.direction ? source.selector?.kind === 'post' : source.selector === null || source.selector.kind === 'rig' || (source.selector.kind === 'draft' && rigDraftVerdict));
+  if((source.selector?.kind==='draft'||source.selector?.kind==='current'&&source.selector.output==='parts')&&source.parts)return true;
+  return !!source.model && (source.direction
+    ? source.selector?.kind === 'post' || (source.selector?.kind === 'current' && source.selector.output === 'direction')
+    : source.selector === null || source.selector.kind === 'rig' || (source.selector.kind === 'current' && source.selector.output === 'rig') || (source.selector.kind === 'draft' && rigDraftVerdict));
 }
 /** The asks the rig screen's act bar answers: the rig or direction verdict. A checkpoint is no longer an ask (#1229). */
 export function jobRigScreenAnswers(ask: Pick<PendingAskV3, 'subject'>, _checkpoints: ReadonlySet<string>): boolean {
@@ -50,7 +52,7 @@ export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readon
   checkpoints: ReadonlySet<string>): boolean {
   const source=display.publication.source,id=display.publication.publicationId;
   if('record' in source)return false;
-  if(source.selector?.kind==='draft'&&source.parts&&!display.rigDraftVerdict)return true;
+  if(source.parts&&(source.selector?.kind==='draft'&&!display.rigDraftVerdict||source.selector?.kind==='current'&&source.selector.output==='parts'))return true;
   const legacyModelCheckpoint=(ask:PendingAskV3)=>{
     if(ask.subject.kind!=='checkpoint'||!source.model)return false;
     const stepId='planStepId' in ask.subject&&ask.subject.planStepId?ask.subject.planStepId:ask.subject.checkpointId;
@@ -210,7 +212,7 @@ export function createJobRigScreen(options: {
     const checkpoints = new Set(review.manifest.checkpoints.map(item => item.id));
     const refusal=backdropOnly?null:jobRigScreenRefusal(display,options.window.state().pending,checkpoints);
     let parts:PartsSubjectData|undefined;
-    if(source.selector?.kind==='draft'&&source.parts&&!display.rigDraftVerdict){
+    if(source.parts&&(source.selector?.kind==='draft'&&!display.rigDraftVerdict||source.selector?.kind==='current'&&source.selector.output==='parts')){
       const response=await fetch(routes.api('stage-parts'),{signal});if(!response.ok)throw new Error('JOB_VISUAL_UNAVAILABLE');
       parts=await response.json() as PartsSubjectData;
       if(parts.sourceHash!==source.sourceHash||parts.mode!=='parts')throw new Error('JOB_DISPLAY_MISMATCH');
