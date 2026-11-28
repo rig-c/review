@@ -1117,6 +1117,10 @@ direction's recorded duration and loop exactly with the bound `idle` track's
 authored duration and loop. A mismatch refuses with `DIRECTION_TAKE_MISMATCH`.
 A known clip with no camera track uses the existing view. Review uses the
 producer's recorded coverage through Play's binding.
+Pinned comments and crops follow the displayed camera frame and
+projection. A pin placed while the authored camera moves replays at the same
+time within 0.75 CSS px per axis of its world point, at device pixel ratio 1
+and 2.
 
 Missing or unreadable reports refuse with `SCENE_REQUIRED`. Invalid paths or
 report digest mismatches refuse with `SCENE_SOURCE_MISMATCH`. Invalid report
