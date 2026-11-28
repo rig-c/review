@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 5.0.0
+
+Review is now a comment-only inspection tool. Reviewers leave comments; Review no longer records new verdicts, sign-offs, checkpoints or asks, and every stored decision stays readable and replayable. Review also plays an authored scene camera from Create's sealed `sceneReport`.
+
+**Read before upgrading:**
+
+* **Fresh decision submissions refuse.** New `review-verdict`, `parts-verdict`, sign-off and checkpoint submissions through the job act port refuse with `JOB_ACT_KIND_DISABLED`, and the standalone and joined parts verdict writes are retired. Callers that wrote decisions through Review must stop; replaying a committed act is unchanged.
+* **Removed public API.** The job API drops `ask`, `ask-batch` and the `askBatch` capability; the CLI drops `session ask`; `--picks-dir`, `POST /api/interview/picks` and `interviewPicksRecord` are gone; `@rig-c/review/job-host` drops the decision submission exports; `JobStatus` drops `enabledActKinds`; review-verdict types drop `image-review`; `GET /api/stage-parts` drops `verdictReadOnlyReason`; and `GET /api/interview` drops `questions[].set.context` for standalone reviews and package publications. Each entry below names its replacement or the reader that remains.
+* **Camera packages need the exact pins.** A package with `sceneReport` needs `@rig-c/play` 1.28.0, and Create must pin this Review version: earlier Review versions skip `sceneReport` without refusing the package.
 
 ### Added
 
@@ -37,6 +45,10 @@
 * **Breaking in 5.0.0.** `JobReviewStage` and the review-verdict values in `JobActValues`, `JobUIActValues` and `JobCommentsActValues` drop `image-review`. Stored image-review asks and `JobLegacyAct` image verdicts at act@2 remain readable and replayable (#1104).
 * **BREAKING in 5.0.0.** `@rig-c/review/job-host` removes the retired decision submission exports `prepareJobRecordAct`, `JobUIActValues`, `JobRigCapture`, `JobUISubmission`, `JobRecordUIActValues`, `JobRecordUISubmission`, `RecordUIActValues` and `RecordUISubmission`. `JobUISubmissionV3` and `UISubmissionV3` now describe comment-only submissions. Stored decision acts remain readable and replayable (#1225).
 * **Breaking in 5.0.0.** `GET /api/interview` drops `questions[].set.context` for standalone (including joined) reviews and package job publications. Explicit record `option-set` publications still return it. Package publication skips pending context validation and sealing. Pending questions carry empty `images` and `hasParts: false` and contribute no context diagnostics. New package publications can have a different `sourceHash` when pending-only context files leave the sealed file set.
+
+### Internal
+
+* The `@rig-c/parts` dev pin moves to 2.63.1 (#1170).
 
 ## 4.24.0
 
