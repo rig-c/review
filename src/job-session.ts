@@ -155,7 +155,7 @@ function hasStoredEvidence(source: object | undefined): boolean {
 
 function needsSnapshotRecheck(retained: JobRetainedSourceV3): boolean {
   return isRetainedRecordSource(retained) || hasStoredEvidence(retained.source) || retained.chestLandmarks !== undefined ||
-    Object.hasOwn(retained, 'previousBuild');
+    Object.hasOwn(retained, 'previousBuild') || retained.source.selector?.kind === 'candidate';
 }
 
 function assertStoredEvidenceCopy(value: unknown, data: JobData, publication = false): void {
@@ -639,7 +639,7 @@ export class JobSession {
         this.active(fresh, input.expectedGeneration);
         const data = fresh.data;
         data.generation++;
-        assertJobSourceCurrent(candidate!);
+        assertJobSourceCurrent(candidate!, {publishing: true});
         if (needsSnapshotRecheck(candidate!)) {
           assertRetainedSnapshotIntact(
             candidate!.snapshotRoot,

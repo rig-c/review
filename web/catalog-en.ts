@@ -3456,6 +3456,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "JOB_ASK_SUPERSEDED": "JOB_ASK_SUPERSEDED",
   "JOB_AUTHORITY_REFUSED": "JOB_AUTHORITY_REFUSED",
   "JOB_BODY_LIMIT": "JOB_BODY_LIMIT",
+  "JOB_CANDIDATE_RECEIPT_MISMATCH": "JOB_CANDIDATE_RECEIPT_MISMATCH",
+  "JOB_CANDIDATE_TAKE_SEAL_MISMATCH": "JOB_CANDIDATE_TAKE_SEAL_MISMATCH",
   "client: submission": "client: submission",
   "client: event stream": "client: event stream",
   "client: preload": "client: preload",

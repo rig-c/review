@@ -16,13 +16,15 @@ export async function jobFixture(options: {
   afterSnapshot?: (root: string) => void | Promise<void>;
   afterDirectorySync?: (path: string) => void;
   plain?: boolean;
+  packageAtRoot?: boolean;
   partsEnumerator?: JobPartsEnumerator;
   scratchParent?: string;
 } = {}) {
   const scratch = await mkdtemp(join(realpathSync(options.scratchParent ?? tmpdir()), 'review-job-'));
   const root = join(scratch, 'input'), state = join(scratch, 'state');
   await mkdir(root);
-  await cp(new URL('../fixtures/viewport-387/package', import.meta.url), join(root, 'out'), { recursive: true });
+  const packagePath = options.packageAtRoot ? 'review.json' : 'out';
+  await cp(new URL('../fixtures/viewport-387/package', import.meta.url), options.packageAtRoot ? root : join(root, packagePath), { recursive: true });
   await writeFile(join(root, 'record.json'), '{"syntheticPublication":1}\n');
   let context: JobPublishedContext = {
     selector: { kind: 'rig', version: 1 },
@@ -61,7 +63,7 @@ export async function jobFixture(options: {
   async function publishRequest(key = `publish-${++sequence}`): Promise<JobAgentRequest> {
     return {
       ...base(), verb: 'publish', expectedGeneration: session.status().generation, idempotencyKey: key,
-      result: { path: 'out', selector: context.selector },
+      result: { path: packagePath, selector: context.selector },
       freeze: { kind: 'producer-held', holdId: 'synthetic-held-freeze',
         record: { path: recordPath, sha256: jobHash(await readFile(join(root, recordPath))) } },
     };

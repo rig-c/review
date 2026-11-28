@@ -1,5 +1,5 @@
 import {readSceneInspection,scenePlateBytes,type SceneInspection} from './scene-inspection.ts';
-import {DIRECTION_MAX_BYTES, readDirectionInspection, type DirectionInspection} from './direction-inspection.ts';
+import {DIRECTION_MAX_BYTES, readCandidateDirection, readDirectionInspection, type DirectionInspection} from './direction-inspection.ts';
 import {discoverTurnDials} from './turn-pad.ts';
 import {fileURLToPath} from 'node:url';
 import { createHash } from 'node:crypto';
@@ -12,11 +12,11 @@ import { readFile, realpath, stat, lstat, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, posix } from 'node:path';
 import { isBuildRoot, parseHandoffDeclaration, resolveHandoff, type Handoff, type HandoffDeclaration, type HandoffFlags, type HandoffRecord } from './handoff.ts';
-import { JOB_PREVIOUS_BUILD_SCHEMA, parsePanelComposition, type JobFileIdentity, type JobPanelComposition,
+import { JOB_PREVIOUS_BUILD_SCHEMA, parsePanelComposition, type JobErrorCode, type JobFileIdentity, type JobPanelComposition,
   type JobPreviousBuild, type JobSelector } from './job-contract.ts';
 import { exactObject, jobHash, parseFileRow } from './job-api.ts';
 import { readCheckpointEvidenceBytes } from './job-checkpoint-evidence.ts';
-import { JobError, jobPath, jobPathTextLimit, jobSha } from './job-validation.ts';
+import { JobError, jobId, jobPath, jobPathTextLimit, jobSha } from './job-validation.ts';
 import { SCENE_CAMERA_REPORT_MAX_BYTES, type BoundSceneCamera } from '@rig-c/play/composed-take';
 import { checkedPath } from './interview-project.ts';
 export { isPanelComponent, parsePanelComposition } from './job-contract.ts';
@@ -227,13 +227,60 @@ function parseSceneReportPointer(value: unknown, parsePath: typeof packagePath):
   }
 }
 
+type CandidateSelector = Extract<JobSelector, {kind: 'candidate'}>;
+type CandidateSealRefusal = Extract<JobErrorCode, 'JOB_CANDIDATE_RECEIPT_MISMATCH' | 'JOB_CANDIDATE_TAKE_SEAL_MISMATCH'>;
+
+export function readCandidateSealedBytes(root: string, file: JobFileIdentity, code: CandidateSealRefusal): Buffer {
+  return readCheckpointEvidenceBytes(root, file, DIRECTION_MAX_BYTES, () => new JobError(code));
+}
+
+function readCandidateReceipt(root: string, selector: CandidateSelector) {
+  const code = 'JOB_CANDIDATE_RECEIPT_MISMATCH';
+  const bytes = readCandidateSealedBytes(root, selector.receipt, code);
+  let receipt: Record<string, unknown>;
+  try {
+    receipt = exactObject(JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes)),
+      ['schema', 'setSha256', 'askId', 'optionId', 'camera', 'model', 'take', 'sceneReport'], code);
+    if (receipt.schema !== 'rig-create/candidate-preview@1' || jobSha(receipt.setSha256) !== selector.setSha256 ||
+        jobId(receipt.askId) !== selector.askId || jobId(receipt.optionId) !== selector.optionId ||
+        (receipt.camera !== 'keyed' && receipt.camera !== 'unkeyed')) throw new JobError(code);
+  } catch { throw new JobError(code); }
+  return {bytes, keyed: receipt.camera === 'keyed', model: parseFileRow(receipt.model, 'JOB_SOURCE_MISMATCH'),
+    take: parseFileRow(receipt.take, 'JOB_CANDIDATE_TAKE_SEAL_MISMATCH'),
+    sceneReport: receipt.sceneReport === null ? null : parseFileRow(receipt.sceneReport, 'SCENE_SOURCE_MISMATCH')};
+}
+
+function admitCandidateTake(root: string, raw: Record<string, unknown>, selector: CandidateSelector) {
+  const receipt = readCandidateReceipt(root, selector);
+  if (raw.direction !== receipt.take.path) throw new JobError('JOB_CANDIDATE_TAKE_SEAL_MISMATCH');
+  const takeBytes = readCandidateSealedBytes(root, receipt.take, 'JOB_CANDIDATE_TAKE_SEAL_MISMATCH');
+  if (raw.model !== receipt.model.path ||
+      ['scene', 'motion', 'producer', 'previousBuild', 'frames', 'sets'].some(key => Object.hasOwn(raw, key)) ||
+      (raw.authoring !== undefined && (!Array.isArray(raw.authoring) || raw.authoring.length > 0)))
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  const report = Object.hasOwn(raw, 'sceneReport') ? parseSceneReportPointer(raw.sceneReport, jobPath) : null;
+  if ((!receipt.keyed && (report || receipt.sceneReport)) ||
+      report?.path !== receipt.sceneReport?.path || report?.sha256 !== receipt.sceneReport?.sha256)
+    throw new JobError('SCENE_SOURCE_MISMATCH');
+  const paths = ['review.json', selector.receipt.path, receipt.take.path, receipt.model.path, ...(report ? [report.path] : [])];
+  if (new Set(paths).size !== paths.length) throw new JobError('JOB_SOURCE_MISMATCH');
+  let take: unknown;
+  try { take = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(takeBytes)); }
+  catch { throw new JobError('JOB_SOURCE_MISMATCH'); }
+  const direction = readCandidateDirection(take, receipt.take, receipt.model, report, receipt.keyed);
+  if (receipt.keyed && !report) throw new JobError('SCENE_REQUIRED');
+  return {direction, bytes: new Map([[selector.receipt.path, receipt.bytes], [receipt.take.path, takeBytes]])};
+}
+
 async function admitSceneReport(bytes: Uint8Array, path: string, root: string, model: JobFileIdentity, modelBytes: Buffer,
   readAsset: (path: string) => Promise<string>, direction: DirectionInspection | undefined): Promise<BoundSceneCamera | null> {
   const {bindSceneCamera, ComposedTakeError} = await import('@rig-c/play/composed-take');
   try {
     // Play admits /1 before checking stage metadata. Retry /2 with the actual decoded stage and clips.
     try {
-      return bindSceneCamera(bytes, {sha256: model.sha256, stage: null, animations: []});
+      const bound = bindSceneCamera(bytes, {sha256: model.sha256, stage: null, animations: []});
+      if (direction?.candidateClip && !bound) throw new JobError('SCENE_CAMERA_REPORT_INVALID');
+      return bound;
     } catch (error) {
       if (!(error instanceof ComposedTakeError) || error.code !== 'SCENE_CAMERA_VIEW_INVALID') throw error;
     }
@@ -241,7 +288,8 @@ async function admitSceneReport(bytes: Uint8Array, path: string, root: string, m
     const bound = await withCompiledModel(root, model.path, ({stage, animations}) =>
       bindSceneCamera(bytes, {sha256: model.sha256, stage, animations}), {modelBytes, readAsset});
     if (!direction?.composed || !bound) return bound;
-    const idle = bound.sample('idle', {endpoint: 'terminal'});
+    const idle = bound.sample(direction.candidateClip ?? 'idle', {endpoint: 'terminal'});
+    if (direction.candidateClip && !idle) throw new JobError('SCENE_CAMERA_CLIP_MISMATCH');
     if (!idle) return bound;
     const field = direction.take.duration !== idle.authoredSeconds ? 'duration' :
       direction.take.loop !== idle.loop ? 'loop' : undefined;
@@ -397,9 +445,12 @@ interface ReviewLoadOptions {
 }
 export async function loadReview(input: string, options: ReviewLoadOptions = {}): Promise<ReviewPackage> {
   const {sealedPlayback,previousOpen}=options;
+  const candidateSelector = options.selector?.kind === 'candidate' ? options.selector : undefined;
   if(previousOpen && (await lstat(resolve(input))).isSymbolicLink())
     throw previousBuildFileError(input, 'symlink input');
   const inputPath=await realpath(resolve(input));const directory=(await stat(inputPath)).isDirectory();
+  if (candidateSelector && (directory || basename(inputPath) !== 'review.json' || inputPath !== resolve(input)))
+    throw new JobError('JOB_SOURCE_MISMATCH');
   if(previousOpen && !directory && !(await stat(inputPath)).isFile())
     throw previousBuildFileError(input, 'expected a regular manifest or package directory');
   if(sealedPlayback&&(!directory||options.handoff!==false||inputPath!==resolve(input)))fail('sealed playback','literal folder with handoff disabled');
@@ -427,12 +478,13 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
       throw new Error(`OPEN_PREVIOUS_MODEL_MISSING ${previousOpen.side}: ${root}`);
     throw error;
   }
+  const candidate = candidateSelector && admitCandidateTake(root, rawManifest as Record<string, unknown>, candidateSelector);
   const manifest=directory?rawManifest as ReviewManifest:parseReviewManifest(rawManifest,previousOpen?previousOpenPath:packagePath);
   const adapterManifest=previousOpen&&directory?structuredClone(manifest):undefined;
   if(previousOpen&&!manifest.model)throw new Error(`OPEN_PREVIOUS_MODEL_MISSING ${previousOpen.side}: ${root}`);
   const assetFile=async(path:string):Promise<string>=>{
     if(sealedPlayback&&!sealedPlayback.has(path))fail(path,'sealed playback file');
-    const strictFile=sealedPlayback || (options.strictSceneReport && path===manifest.sceneReport?.path);
+    const strictFile=sealedPlayback || candidate || (options.strictSceneReport && path===manifest.sceneReport?.path);
     const literal=previousOpen?previousOpenFile(root,path):strictFile?checkedPath(root,path):undefined;
     let full:string;
     try{full=await safeFile(root,path);}
@@ -441,13 +493,14 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     return full;
   };
   const files = new Set([...(directory?[]:[relative(root,manifestPath)]),...manifest.references.map(v=>v.path),...manifest.authoring.map(v=>v.path),...manifest.audio.clips.map(v=>v.path)]);
+  if (candidate) for (const path of candidate.bytes.keys()) files.add(path);
   if(manifest.frames)files.add(manifest.frames);
   if(manifest.direction)files.add(manifest.direction);
   if(manifest.sets)files.add(manifest.sets);
   const rootFile=async(name:string):Promise<string|undefined>=>{try{await safeFile(root,name);return name;}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw e;}};
   const authoringPath=(name:string):string|undefined=>{const paths=manifest.authoring.filter(v=>posix.basename(v.path)===name);return paths.length===1?paths[0].path:undefined;};
   const rigPath=manifest.model??await rootFile('skeleton.json')??authoringPath('skeleton.json')??await rootFile('skeleton.skel')??authoringPath('skeleton.skel');
-  const motionPath=sealedPlayback?undefined:manifest.motion??await rootFile('motion.json')??authoringPath('motion.json');
+  const motionPath=sealedPlayback||candidate?undefined:manifest.motion??await rootFile('motion.json')??authoringPath('motion.json');
   if(rigPath)files.add(rigPath);if(motionPath)files.add(motionPath);
   let modelBytesHash:string|null=null;
   let playback:PreviousOpenSource['playback']|undefined;
@@ -466,6 +519,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
       ? readPreviousBuildFile(root,{path:previousOpenPath(manifest.model),sha256:null},0)
       : await readFile(await assetFile(manifest.model));
     modelBytesHash=jobHash(bytes);
+    if (candidate && modelBytesHash !== candidate.direction.model.sha256) throw new JobError('JOB_SOURCE_MISMATCH');
     if(sealedPlayback&&modelBytesHash!==sealedPlayback.get(manifest.model))fail(manifest.model,'sealed playback hash');
     const pages=previousOpen?previousModelPages(manifest.model,bytes,true)
       :modelPagePaths(manifest.model,object(JSON.parse(bytes.toString('utf8')),'model'),!!sealedPlayback);
@@ -482,7 +536,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     }
   }
   for(const r of manifest.references.filter(r=>r.type==='pose')) {
-    const pose=object(JSON.parse(await readFile(await (previousOpen?assetFile(r.path):safeFile(root,r.path)),'utf8')),`pose ${r.id}`);
+    const pose=object(JSON.parse(await readFile(await (previousOpen||candidate?assetFile(r.path):safeFile(root,r.path)),'utf8')),`pose ${r.id}`);
     if(pose.spec==='rig-pose-sequence/1'){validatePoseSequence(pose,`pose ${r.id}`);continue;}
     if(pose.schema!=='rig-review-pose/1'||pose.coordinateSystem!=='image-pixels-y-down') fail(`pose ${r.id}`,'rig-review-pose/1 with image-pixels-y-down coordinates');
     number(pose.width,`pose ${r.id}.width`,Number.EPSILON); number(pose.height,`pose ${r.id}.height`,Number.EPSILON);
@@ -494,7 +548,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   let sceneModelBytes: Buffer | undefined;
   if (manifest.sceneReport) files.add(manifest.sceneReport.path);
   // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
-  const {handoff,reason:handoffReason}=options.handoff===false?{handoff:null,reason:null}:
+  const {handoff,reason:handoffReason}=options.handoff===false||candidate?{handoff:null,reason:null}:
     await resolveHandoff(root,manifest.producer,options.handoff,{starts:options.handoffStarts??[options.cwd??process.cwd()],originalProducerRoot:options.originalProducerRoot});
   // #329: the source painting the handoff knows is the first reference, outside the package's own files.
   const painting=sourcePainting(manifest,handoff,directory);
@@ -520,6 +574,12 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   if (manifest.previousBuild) admitPreviousBuild(root, manifest.previousBuild);
   const hash = createHash('sha256');hash.update(JSON.stringify(manifest));hash.update('\0');const fileHashes=new Map<string,string>();
   for (const p of [...files].sort()) {
+    const candidateBytes = candidate?.bytes.get(p);
+    if (candidateBytes) {
+      hash.update(p).update('\0').update(String(candidateBytes.length)).update('\0').update(candidateBytes);
+      fileHashes.set(p, jobHash(candidateBytes));
+      continue;
+    }
     const sceneReport = manifest.sceneReport?.path === p ? manifest.sceneReport : undefined;
     const fileHash = createHash('sha256');
     const metadataChunks: Buffer[] = [];
@@ -571,14 +631,18 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     if(p===reportPath&&!sceneReport){let value:unknown;try{value=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));}catch(e){throw new Error(`${p}: ${e instanceof Error?e.message:String(e)}`);}report=parseReport(value,p);}
     if(p===manifest.frames)frames=parseFrames(Buffer.concat(metadataChunks).toString('utf8'),p,fileHashes.get(p)!);
   }
+  if (candidate && fileHashes.get('review.json') !== jobHash(manifestBytes!))
+    throw new JobError('JOB_SOURCE_MISMATCH');
   if(painting){hash.update(SOURCE_PAINTING_ID);hash.update('\0');hash.update(painting.sha256);hash.update('\0');}
   // #192: the root is `check/` whether the folder or its review.json was opened, so the build root is kept either way.
-  const buildRoot=!sealedPlayback&&basename(root)==='check'&&await isBuildRoot(dirname(root))?dirname(root):undefined;
+  const buildRoot=!sealedPlayback&&!candidate&&basename(root)==='check'&&await isBuildRoot(dirname(root))?dirname(root):undefined;
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
-  const direction=manifest.direction?readDirectionInspection(directionInput,{path:manifest.direction,sha256:fileHashes.get(manifest.direction)!},reviewedSource.rig,current?{current:true}:undefined):undefined;
+  const direction=candidate?.direction ?? (manifest.direction?readDirectionInspection(directionInput,{path:manifest.direction,sha256:fileHashes.get(manifest.direction)!},reviewedSource.rig,current?{current:true}:undefined):undefined);
   const sceneCamera=manifest.sceneReport?await admitSceneReport(sceneReportBytes!,manifest.sceneReport.path,root,
     reviewedSource.rig!,sceneModelBytes!,assetFile,direction):null;
   const animations=modelAnimations(modelMetadata);
+  if (candidate && !sceneCamera && animations?.find(clip => clip.name === candidate.direction.candidateClip)?.duration !== candidate.direction.take.duration)
+    throw new JobError('DIRECTION_TAKE_MISMATCH');
   if(previousOpen&&playback){
     if(manifestBytes&&fileHashes.get(relative(root,manifestPath))!==jobHash(manifestBytes))
       throw previousBuildFileError(manifestPath,'manifest changed during load');

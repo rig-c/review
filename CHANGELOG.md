@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+* Publish a composed candidate take as its own comment-only Review job. The candidate selector seals the receipt and take, and comments carry the option identity in the existing source binding (#1341).
+
 ## 5.0.0
 
 Review is now a comment-only inspection tool. Reviewers leave comments; Review no longer records new verdicts, sign-offs, checkpoints or asks, and every stored decision stays readable and replayable. Review also plays an authored scene camera from Create's sealed `sceneReport`.

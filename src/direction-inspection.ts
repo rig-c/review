@@ -1,4 +1,7 @@
 import { numberField, object, packagePath } from './manifest.ts';
+import { exactObject, parseFileRow } from './job-api.ts';
+import type { JobFileIdentity } from './job-contract.ts';
+import { JobError } from './job-validation.ts';
 
 export const DIRECTION_MAX_BYTES = 256 * 1024;
 
@@ -21,9 +24,32 @@ export interface DirectionInspection {
    * Composed directions author no camera, timing or scene, so their camera and timing key lists are empty.
    */
   composed?: true;
+  candidateClip?: 'idle';
   camera: { space: 'rig-world-y-up'; keys: { time: number; easing: string; box: { x: number; y: number; width: number; height: number } }[] };
   take: { duration: number; loop: boolean };
   timing: { time: number; source_time: number; easing: string }[];
+}
+
+export function readCandidateDirection(
+  value: unknown,
+  file: JobFileIdentity,
+  model: JobFileIdentity,
+  sceneReport: JobFileIdentity | null,
+  keyed: boolean,
+): DirectionInspection {
+  const code = 'JOB_SOURCE_MISMATCH';
+  const doc = exactObject(value, ['schema', 'model'], code, ['clip', 'duration', 'loop', 'sceneReport']);
+  if (doc.schema !== 'rig-create/candidate-take@1') throw new JobError(code);
+  const declaredModel = parseFileRow(doc.model, code);
+  if (declaredModel.path !== model.path || declaredModel.sha256 !== model.sha256) throw new JobError(code);
+  const declaredReport = doc.sceneReport === null ? null : parseFileRow(doc.sceneReport, 'SCENE_SOURCE_MISMATCH');
+  if (declaredReport?.path !== sceneReport?.path || declaredReport?.sha256 !== sceneReport?.sha256)
+    throw new JobError('SCENE_SOURCE_MISMATCH');
+  const { clip, duration, loop } = doc;
+  if (clip !== 'idle' || typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0 ||
+      typeof loop !== 'boolean' || (!keyed && !loop)) throw new JobError('DIRECTION_TAKE_MISMATCH');
+  return {file, model, candidateClip: clip, composed: true, camera: {space: 'rig-world-y-up', keys: []},
+    take: {duration, loop}, timing: []};
 }
 
 /**

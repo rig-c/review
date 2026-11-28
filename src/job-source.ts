@@ -22,7 +22,7 @@ import type {
 import { checkedPath, inspectSceneQuestion, jsonObject, readProject, readRegular, type InterviewQuestion, type InterviewSet } from './interview-project.ts';
 import { acceptedRigReview } from './interview-scene.ts';
 import { admitPreviousBuild, BUILD_MODEL_PATH, loadJobReview, loadReview, parsePreviousBuild,
-  previousBuildFileError, previousBuildFiles, readPreviousBuildFile } from './manifest.ts';
+  previousBuildFileError, previousBuildFiles, readCandidateSealedBytes, readPreviousBuildFile } from './manifest.ts';
 import { HandoffError } from './handoff.ts';
 import { openKey } from './open.ts';
 import { attachmentHashText, MESH_EDIT_CODES } from './mesh-edit.ts';
@@ -86,7 +86,10 @@ export interface JobPublishedContext {
 
 /** Reload only the identity recorded for this publication; old bindings are never relabelled. */
 export async function loadRetainedJobReview(retained: JobRetainedSource, fingerprint: string) {
+  const candidate = retained.source.selector?.kind === 'candidate';
+  if (candidate) assertRetainedSnapshotRoot(retained.snapshotRoot, retained.snapshotIdentity);
   const review = await loadJobReview(retained.manifestPath, retained.root.path, retained.source.selector);
+  if (candidate && review.sourceHash !== retained.source.sourceHash) throw new JobError('JOB_SOURCE_UNRETAINABLE');
   const found = openKey({mode: 'single', p: {...review, sourceHash: retained.source.sourceHash},
     inputs: {input: join(retained.root.path, relative(retained.snapshotRoot, retained.manifestPath))},
     contentHash: retained.source.sourceHash, selection: null}, fingerprint);
@@ -145,6 +148,15 @@ export interface JobRetainedRecordSource {
 }
 
 export type JobRetainedSourceV3 = JobRetainedSource | JobRetainedRecordSource;
+
+function candidateSealFiles(selector: JobSelector | null | undefined, take: JobFileIdentity | null | undefined) {
+  if (selector?.kind !== 'candidate') return [];
+  if (!take) throw new JobError('JOB_CANDIDATE_TAKE_SEAL_MISMATCH');
+  return [
+    {file: selector.receipt, code: 'JOB_CANDIDATE_RECEIPT_MISMATCH' as const},
+    {file: take, code: 'JOB_CANDIDATE_TAKE_SEAL_MISMATCH' as const},
+  ];
+}
 
 export function isRetainedRecordSource(retained: JobRetainedSourceV3): retained is JobRetainedRecordSource {
   return 'kind' in retained && retained.kind === 'record';
@@ -288,19 +300,26 @@ function assertRecord(root: JobRootIdentity, record: JobFileIdentity | null): vo
  * its external freeze. This does not lock an independent producer's filesystem.
  */
 export function assertJobSourceCurrent(
-  source: Pick<JobRetainedSourceV3, 'root' | 'record' | 'seals'>,
-  options?: { readonly skipRecord?: boolean; readonly staleCode?: JobErrorCode },
+  source: Pick<JobRetainedSourceV3, 'root' | 'record' | 'seals'> & Partial<Pick<JobRetainedSourceV3, 'source' | 'snapshotRoot'>>,
+  options?: { readonly skipRecord?: boolean; readonly staleCode?: JobErrorCode; readonly publishing?: boolean },
 ): void {
   if (options?.skipRecord) assertJobRoot(source.root);
   else assertRecord(source.root, source.record);
+  const candidateFiles = candidateSealFiles(source.source?.selector, source.source?.direction);
+  for (const {file, code} of candidateFiles) {
+    if (options?.publishing && source.snapshotRoot) readCandidateSealedBytes(source.snapshotRoot, file, code);
+  }
   for (const file of source.seals) {
     if (options?.skipRecord && file.path === source.record?.path) continue;
+    const candidateFile = candidateFiles.find(candidate => candidate.file.path === file.path);
     try {
-      if (jobHash(sourceBytes(source.root.path, file.path)) !== file.sha256) throw new Error('Changed');
+      const bytes = candidateFile ? readCandidateSealedBytes(source.root.path, candidateFile.file, candidateFile.code) :
+        sourceBytes(source.root.path, file.path);
+      if (jobHash(bytes) !== file.sha256) throw new Error('Changed');
     } catch (error) {
       if (file.path === source.record?.path) throw new JobError('JOB_RECORD_MOVED');
       if (error instanceof JobError && error.code === 'JOB_ROOT_REPLACED') throw error;
-      throw new JobError(options?.staleCode ?? 'JOB_SOURCE_MISMATCH');
+      throw new JobError(options?.staleCode ?? (options?.publishing ? candidateFile?.code : undefined) ?? 'JOB_SOURCE_MISMATCH');
     }
   }
   if (!options?.skipRecord) assertRecord(source.root, source.record);
@@ -1575,6 +1594,8 @@ export async function prepareJobSource(options: {
   const request = options.request as JobPublishRequest;
   assertJobRoot(root);
   const record = request.freeze.record;
+  const candidate = request.result.selector?.kind === 'candidate' ? request.result.selector : undefined;
+  if (candidate && (record !== null || request.result.path !== 'review.json')) throw new JobError('JOB_SOURCE_MISMATCH');
   if (request.result.selector?.kind === 'current') {
     if (record?.path !== 'project.json') throw new JobError('JOB_CURRENT_RECORD_MISSING');
     if (request.result.selector.record !== record.sha256) throw new JobError('JOB_CURRENT_RECORD_MISMATCH');
@@ -1584,7 +1605,8 @@ export async function prepareJobSource(options: {
     let hasProject = false;
     try { lstatSync(join(root.path, 'project.json')); hasProject = true; }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    if (hasProject && record?.path !== 'project.json') throw new JobError('JOB_FREEZE_REQUIRED');
+    if (hasProject && record?.path !== 'project.json')
+      throw new JobError(candidate ? 'JOB_SOURCE_MISMATCH' : 'JOB_FREEZE_REQUIRED');
     if (record) {
       const bytes = sourceBytes(root.path, record.path);
       if (jobHash(bytes) !== record.sha256) throw new JobError('JOB_RECORD_MOVED');
@@ -1639,9 +1661,11 @@ export async function prepareJobSource(options: {
     review = await loadJobReview(target, root.path, context.selector);
   } catch (error) {
     if (error instanceof JobError && error.code === 'JOB_PREVIOUS_BUILD_INVALID' && context.selector?.kind !== 'current') throw error;
-    if (error instanceof JobError && (error.code.startsWith('SCENE_') || error.code === 'DIRECTION_TAKE_MISMATCH')) throw error;
+    if (error instanceof JobError && (error.code.startsWith('SCENE_') || error.code === 'DIRECTION_TAKE_MISMATCH' ||
+        error.code === 'JOB_CANDIDATE_RECEIPT_MISMATCH' || error.code === 'JOB_CANDIDATE_TAKE_SEAL_MISMATCH')) throw error;
     throw new JobError('JOB_SOURCE_MISMATCH', error instanceof HandoffError ? error.message : undefined);
   }
+  const candidateFiles = candidateSealFiles(candidate, review.direction?.file);
   if (review.manifest.previousBuild && context.selector?.kind === 'current') throw new JobError('JOB_SOURCE_MISMATCH');
   if (review.manifest.previousBuild && requestDigest(review.manifest.previousBuild) !== requestDigest(previousBuild ?? null))
     throw new JobError('JOB_PREVIOUS_BUILD_INVALID');
@@ -1675,6 +1699,8 @@ export async function prepareJobSource(options: {
     const expected = path === review.manifest.sceneReport?.path ? review.manifest.sceneReport.sha256 : undefined;
     add(rootRelative(root.path, resolve(review.root, path)), expected);
   }
+  for (const {file} of candidateFiles) add(file.path, file.sha256);
+  if (candidate && review.reviewedSource.rig) add(review.reviewedSource.rig.path, review.reviewedSource.rig.sha256);
   for (const file of review.handoff?.record.files ?? []) add(rootRelative(root.path, resolve(review.root, file.path)), file.sha256);
   if (review.handoff?.source && review.handoff.record.source) {
     add(rootRelative(root.path, review.handoff.source), review.handoff.record.source.sha256);
@@ -1709,7 +1735,9 @@ export async function prepareJobSource(options: {
     const directories = new Set([snapshotRoot, dirname(snapshotRoot), options.stateRoot]);
     for (const [path, expected] of [...wanted].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
       const previousFile = previousBuildSeals?.get(path);
+      const candidateFile = candidateFiles.find(({file}) => file.path === path);
       const bytes = previousFile ? readPreviousBuildFile(review.root, previousFile) :
+        candidateFile ? readCandidateSealedBytes(root.path, candidateFile.file, candidateFile.code) :
         previousAssets?.get(path) ?? parts.bytes.get(path) ?? sourceBytes(root.path, path);
       const sha256 = previousFile?.sha256 ?? jobHash(bytes);
       size += bytes.length;
@@ -1735,7 +1763,12 @@ export async function prepareJobSource(options: {
       finally { await handle.close(); }
       options.afterDirectorySync?.(directory);
     }
-    await assertReviewUnchanged(review);
+    if (candidate) {
+      // Preserve the named seal refusals when a source moves after the copy.
+      const live = await loadJobReview(review.manifestPath, root.path, context.selector);
+      if (live.sourceHash !== review.sourceHash || requestDigest(live.reviewedSource) !== requestDigest(review.reviewedSource))
+        throw new JobError('JOB_SOURCE_MISMATCH');
+    } else await assertReviewUnchanged(review);
     const retained = await loadJobReview(join(snapshotRoot, request.result.path), root.path, context.selector);
     if (retained.sourceHash !== review.sourceHash || requestDigest(retained.reviewedSource) !== requestDigest(review.reviewedSource)) {
       throw new JobError('JOB_SOURCE_UNRETAINABLE',
@@ -1807,8 +1840,9 @@ export async function prepareJobSource(options: {
       partIds: context.partIds,
     };
     await options.afterSnapshot?.();
-    assertJobSourceCurrent(prepared);
-    if (source.checkpointEvidence || source.previousDraft || chestLandmarks || previousBuild) assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity);
+    assertJobSourceCurrent(prepared, {publishing: true});
+    if (candidate || source.checkpointEvidence || source.previousDraft || chestLandmarks || previousBuild)
+      assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity);
     return prepared;
   } catch (error) {
     if (snapshotIdentity) await removeOwnedJobSnapshot(options.stateRoot, {snapshotRoot, ...snapshotIdentity});
