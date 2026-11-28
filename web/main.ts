@@ -576,9 +576,15 @@ function renderCheckpoint(): void {
   el('checkpoint-detail').hidden=!checkpoint;
   text('checkpoint-title', checkpoint?.title ?? 'Review entire package');
   text('detail-title', checkpoint?.title ?? 'No checkpoint supplied');
-  text('detail-note', checkpoint?.note ?? 'Record checkpoint notes and outcomes.');
+  const detailNote = checkpoint?.note ?? '';
+  el('detail-note').hidden = !detailNote;
+  text('detail-note', detailNote);
   const entry = checkpoint ? session.checkpoints[checkpoint.id] : undefined;
-  el('checkpoint-note').textContent = entry?.note ?? '';
+  const reviewNote = entry?.note ?? '';
+  const noteNode = el('checkpoint-note');
+  noteNode.hidden = !reviewNote;
+  if (noteNode.previousElementSibling instanceof HTMLElement) noteNode.previousElementSibling.hidden = !reviewNote;
+  noteNode.textContent = reviewNote;
 }
 
 function setView(value: typeof view): void {leavePreviousBuild();view=value;renderLayout();}
@@ -1834,7 +1840,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   const label=panelMake('label',{id:'parts-difference-operand-label',hidden:true},tr('Compare with'),operand);
   const localizeOptions=()=>{
    paintingOption.textContent=t('Original painting');
-   previousOption.textContent=t('Previous accepted draft · {0}',[previousDraft.id]);
+   previousOption.textContent=t('Previous draft · {0}',[previousDraft.id]);
   };
   localizeOptions();viewDisposers.push(onLanguageChange(localizeOptions));
   operand.onchange=()=>{

@@ -49,12 +49,14 @@ test('#839 Korean saved readback aliases use the requested conversational ending
 });
 
 test('#788 Setup and historical still refusals retain paired EN/KO messages without exemptions',()=>{
- for(const code of ['JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED','JOB_STILL_BINDING_MISMATCH','JOB_ACT_NOTHING_TO_SUBMIT','PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.'])for(const catalog of [enCatalog,koCatalog]) {
+ for(const code of ['JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED','JOB_STILL_BINDING_MISMATCH','JOB_ACT_NOTHING_TO_SUBMIT','Record checkpoint notes and outcomes.','PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.'])for(const catalog of [enCatalog,koCatalog]) {
   expect(catalog[code]).toBeUndefined();
  }
  for(const code of ['job.submit.JOB_STILL_BINDING_MISMATCH','job.submit.JOB_ACT_NOTHING_TO_SUBMIT'])for(const catalog of [enCatalog,koCatalog]) {
   expect(catalog[code]).toBeUndefined();
  }
+ expect(enCatalog['job.refusal.JOB_MODEL_MISSING']).toBe('This request has no compiled model.');
+ expect(koCatalog['job.refusal.JOB_MODEL_MISSING']).toBe('이 요청에는 컴파일된 모델이 없어요.');
  expect(legacyCompareHeaderContent.actions).toContain('<button id="submit" class="primary" disabled>Send comments</button>');
  for(const code of ['JOB_STILL_CAPTURE_FAILED',
   'JOB_STILL_UNAVAILABLE','JOB_STILL_OUTPUT_FAILED']) {

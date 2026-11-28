@@ -118,7 +118,7 @@ act bar, not another mode switch.
   reference. Parts additionally require the declared rig-space painting operand;
   rig Difference requires a loaded painting aligned to the declared native canvas.
   Rig Difference outside Setup names `RIG_DIFFERENCE_SETUP_ONLY`.
-- **Shipped (#957):** when a publication binds a previous accepted draft, parts
+- **Shipped (#957):** when a publication binds a previous draft, parts
   Difference can also compare with that draft.
 - Overlay is a secondary-toolbar control, not another menu group. Do not restore
   the superseded grouped Part/Overlay/Atlas menu.
