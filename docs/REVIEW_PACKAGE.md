@@ -1310,7 +1310,7 @@ composite hashes among the JSON string values. Review displays no figures
 for this operand.
 
 In assembled Difference, Painting is the default when `painting_in_rig`
-is available. The Previous accepted draft operand is offered only when
+is available. The Previous draft operand is offered only when
 `previousDraft` is present. If only the previous draft is available,
 assembled Difference opens on that operand. Single-part Difference
 continues to use the painting. The existing Difference route uses

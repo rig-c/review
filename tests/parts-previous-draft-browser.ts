@@ -150,7 +150,7 @@ function operandRowGeometry(page: InputCdpSession, viewportWidth: number, viewpo
 }
 
 async function measureOperandRowViewports(page: InputCdpSession, lang: Language, key: string, shot: (suffix: string) => Promise<void>) {
-  const prefix = lang === 'ko' ? '이전 승인 초안' : 'Previous accepted draft';
+  const prefix = lang === 'ko' ? '이전 초안' : 'Previous draft';
   const sizes: [number, number][] = [[1024, 768], [1120, 800], [1280, 800]];
   const measurements: Record<string, OperandRowGeometry> = {};
   for (const [w, h] of sizes) {
@@ -175,7 +175,7 @@ async function measureOperandRowViewports(page: InputCdpSession, lang: Language,
   if (lang === 'ko') {
     assert.equal(measurements['1120x800']?.sameRow, true, 'KO operand select must stay on one row with Overlay at 1120x800');
     assert.equal(measurements['1280x800']?.sameRow, true, 'KO operand select must stay on one row with Overlay at 1280x800');
-    assert.equal(measurements['1120x800']?.prefixFitsInMinWidth, true, 'min-width must show "이전 승인 초안" in full');
+    assert.equal(measurements['1120x800']?.prefixFitsInMinWidth, true, 'min-width must show "이전 초안" in full');
   }
 }
 
@@ -196,7 +196,7 @@ function assertPreviousIdentity(control: OperandControl, fixture: Fixture, lang:
   assert.ok(choice && !choice.disabled, 'the previous draft option is available');
   const draft = fixture.previousDraft?.draft;
   assert.ok(draft);
-  const previous = lang === 'ko' ? '이전 승인 초안' : 'Previous accepted draft';
+  const previous = lang === 'ko' ? '이전 초안' : 'Previous draft';
   assert.equal(choice.label, `${previous} · ${draft.id}`);
   assert.equal(choice.label.includes(draft.revision.slice(0, 12)), false, 'option label must not carry the hash prefix');
   assert.equal(choice.title, `${draft.id} · ${draft.revision}`);
@@ -240,7 +240,7 @@ function differenceReads(page: InputCdpSession) {
 
 async function assertPreviousRaster(page: InputCdpSession, reads: DifferenceReadback[], key: string) {
   const response = reads.at(-1);
-  assert.ok(response, 'Previous accepted draft must request a raster');
+  assert.ok(response, 'Previous draft must request a raster');
   const {bytes, ...wire} = response;
   report[key + '-wire'] = wire;
   assert.match(wire.path, /\/stage-parts\/difference\/0$/);
@@ -367,7 +367,7 @@ async function runCase(page: InputCdpSession, lang: Language, variant: Case) {
     }
 
     // The same files publish on pre-feature main. It must fail here for the missing UI.
-    assert.ok(control?.visible, 'assembled Difference is missing the Previous accepted draft operand control');
+    assert.ok(control?.visible, 'assembled Difference is missing the Previous draft operand control');
     assert.deepEqual('previousDraft' in fixture.publication.source ? fixture.publication.source.previousDraft : undefined, fixture.previousDraft);
     assert.equal(await thresholdControls(page), 0, 'Parts Difference keeps the fixed threshold without an input');
 

@@ -19,6 +19,9 @@
 * Compare keeps the selected chest-row bones when Apply, Undo or Reset reloads the picked build (#1304).
 * Compare shows the Idle refusal instead of the other side's tracks when the picked side has no producer handoff (#1305).
 * Idle, dial, and animation previews stay visible in Compare while you use the turn pad (#1303).
+* A checkpoint without a note no longer shows the "Record checkpoint notes and outcomes." placeholder, and the empty Review notes row is hidden (#1225).
+* The missing-model refusal keeps only its first sentence, "This request has no compiled model." (#1225).
+* The parts Difference operand reads "Previous draft · <id>" instead of "Previous accepted draft · <id>" (#1225).
 
 ### Removed
 
