@@ -5,13 +5,14 @@ export async function readPlayCoverageFrame(
   modelUrl: string, sceneReportUrl: string, figure: string[], width: number, height: number,
   compiledSeconds: number, camera: CameraMode, horizontalExcursion: number,
 ) {
+  const dpr = window.devicePixelRatio || 1;
   const root = document.createElement('div');
-  Object.assign(root.style, {position: 'fixed', left: '-10000px', top: '0', width: `${width}px`, height: `${height}px`});
+  Object.assign(root.style, {position: 'fixed', left: '-10000px', top: '0', width: `${width / dpr}px`, height: `${height / dpr}px`});
   document.body.appendChild(root);
   try {
     const take = await mountComposedTake(root, {
       modelUrl, sceneReportUrl, animation: 'idle', loop: true, camera, autoStart: false,
-      pointerTurn: false, backend: 'canvas2d', maxDisplacement: {x: horizontalExcursion, y: 0},
+      pointerTurn: false, backend: 'canvas2d', maxDisplacement: {x: horizontalExcursion / dpr, y: 0},
       planes: {
         backdrop: {role: 'backdrop', slots: ['backdrop']},
         figure: {role: 'figure', slots: figure},

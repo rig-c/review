@@ -92,7 +92,7 @@ export interface PanelMeasurement {
 }
 
 export interface CdpSession {
-  setViewport(width: number, height: number): Promise<void>;
+  setViewport(width: number, height: number, deviceScaleFactor?: number): Promise<void>;
   goto(url: string, locale?: 'en' | 'ko', observe?: (result: {loaderId?: string}) => void): Promise<void>;
   evaluate<T>(expression: string): Promise<T>;
   screenshot(clip?: { x: number; y: number; width: number; height: number }): Promise<Buffer>;
@@ -319,10 +319,10 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
     await send('Runtime.enable', {}, sessionId);
 
     return {
-      async setViewport(width: number, height: number) {
+      async setViewport(width: number, height: number, deviceScaleFactor = 1) {
         await send(
           'Emulation.setDeviceMetricsOverride',
-          { width, height, deviceScaleFactor: 1, mobile: false },
+          { width, height, deviceScaleFactor, mobile: false },
           sessionId,
         );
       },
