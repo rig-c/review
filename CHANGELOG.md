@@ -9,6 +9,7 @@ Review is now a comment-only inspection tool. Reviewers leave comments; Review n
 * **Fresh decision submissions refuse.** New `review-verdict`, `parts-verdict`, sign-off and checkpoint submissions through the job act port refuse with `JOB_ACT_KIND_DISABLED`, and the standalone and joined parts verdict writes are retired. Callers that wrote decisions through Review must stop; replaying a committed act is unchanged.
 * **Removed public API.** The job API drops `ask`, `ask-batch` and the `askBatch` capability; the CLI drops `session ask`; `--picks-dir`, `POST /api/interview/picks` and `interviewPicksRecord` are gone; `@rig-c/review/job-host` drops the decision submission exports; `JobStatus` drops `enabledActKinds`; review-verdict types drop `image-review`; `GET /api/stage-parts` drops `verdictReadOnlyReason`; and `GET /api/interview` drops `questions[].set.context` for standalone reviews and package publications. Each entry below names its replacement or the reader that remains.
 * **Camera packages need the exact pins.** A package with `sceneReport` needs `@rig-c/play` 1.28.0, and Create must pin this Review version: earlier Review versions skip `sceneReport` without refusing the package.
+* **`current` direction@4 opens only as a job publication.** `rig-review <manifest>` on a package whose direction is `rig-create/direction@4` refuses with `DIRECTION_SCHEMA`, as 4.24.0 specified: direction@4 is read on a `current` publication from `job open`, and the standalone and numbered paths keep @1 to @3. This is not a regression.
 
 ### Added
 
