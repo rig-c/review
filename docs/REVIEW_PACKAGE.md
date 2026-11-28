@@ -1469,7 +1469,7 @@ The manifest and complete retained image rows enter the composite source hash. L
 - **Sibling binding ownership.** `JOB_CONSUMER_AUTH_MODE` is `'writer-owned-sibling-fetch-capability'` (`JobConsumerGrant` with `jobId`, `operation` set to `'fetch-act'`, `actKinds` and `lifetime` set to `'until-explicit-close'`). [Create #184](https://github.com/rig-c/create/issues/184) owns creation and path of a private writer-owned sibling binding outside `project.json`. The versioned record carries only the semantic job locator, and the Create writer uses the binding to fetch finalized acts. The binding is never tracked in version control, never present in unstaged project output and never shipped in templates, public examples or fixtures.
 - **Agent isolation and capability lifecycle.** The consumer writer reads its own sibling binding directly. Agents never construct, parse or carry Review session, picks, verdict, applied-record or sibling-binding files. Actual separate-UID isolation remains required for Review's distinct state unreadability test (`JOB_AGENT_ISOLATION_HOLE`), and no same-user forger-resistance claim is made. The random per-job bearer capability grants finalized act fetch (`fetch-act`) only, via exact loopback routes and `Authorization`. Neither `next` nor `status` returns it, and human metadata alone never authenticates a fetch. The capability dies at explicit `close`, old project history cannot restore it, each new job incarnation receives a new grant, invalid grants refuse with `JOB_CAPABILITY_REQUIRED` or `JOB_AUTHORITY_REFUSED` and closed-job fetches refuse with `JOB_CLOSED`. No self-service grant API exists.
 - **Consumer deduplication and in-process mesh consumption.** Verdict, signoff and stage transition remain separate consumer writes. For these writes, consumers deduplicate `actId` before checking the current source, then validate each new source and atomically commit the result with its replay identity. Replaying an applied `actId` returns the existing record. A new stale act refuses before mutation. The typed mesh relay uses per-edit identity as defined in [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8).
-- **Error codes.** `JOB_ERROR_CODES` enumerates the closed refusal set (`JOB_REQUEST_INVALID`, `JOB_BODY_LIMIT`, `JOB_LOOPBACK_REQUIRED`, `JOB_SAME_ORIGIN_REQUIRED`, `JOB_CAPABILITY_REQUIRED`, `JOB_AUTHORITY_REFUSED`, `JOB_UNKNOWN`, `JOB_CLOSED`, `JOB_GENERATION_STALE`, `JOB_IDEMPOTENCY_CONFLICT`, `JOB_FREEZE_REQUIRED`, `JOB_RECORD_INCOMPLETE`, `JOB_RECORD_MOVED`, `JOB_SOURCE_INVALID`, `JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID`, `JOB_PREVIOUS_BUILD_INVALID`, `JOB_SOURCE_MISMATCH`, `SCENE_REQUIRED`, `SCENE_SOURCE_MISMATCH`, `SCENE_CAMERA_REPORT_INVALID`, `SCENE_CAMERA_REPORT_TOO_LARGE`, `SCENE_CAMERA_MODEL_MISMATCH`, `SCENE_CAMERA_CLIP_MISMATCH`, `SCENE_CAMERA_CLOCK_INVALID`, `SCENE_CAMERA_VIEW_INVALID`, `DIRECTION_TAKE_MISMATCH`, `JOB_SOURCE_UNRETAINABLE`, `JOB_ROOT_REPLACED`, `JOB_PUBLICATION_UNKNOWN`, `JOB_SNAPSHOT_RECLAIMED`, `JOB_ASK_INVALID`, `JOB_ASK_SUPERSEDED`, `JOB_ACT_UNKNOWN`, `JOB_ACT_INVALID`, `JOB_ACT_KIND_DISABLED`, `JOB_ACT_SOURCE_STALE`, `JOB_DISPLAY_MISMATCH`, `JOB_STILL_CAPTURE_FAILED`, `JOB_STILL_CAMERA_NOT_FIXED`, `JOB_STILL_VIEW_UNSUPPORTED`, `JOB_STILL_BINDING_MISMATCH`, `JOB_STILL_UNAVAILABLE`, `JOB_STILL_OUTPUT_FAILED`, `JOB_CURSOR_INVALID`, `JOB_STORAGE_FAILED`, `JOB_AGENT_ISOLATION_HOLE`, `JOB_OPTION_SET_DUPLICATE`, `JOB_CURRENT_RECORD_MISSING`, `JOB_CURRENT_RECORD_MISMATCH`, `JOB_CURRENT_OUTPUT_MISMATCH`), each returning bounded safe detail with no arbitrary worker text or private paths.
+- **Error codes.** `JOB_ERROR_CODES` enumerates the closed refusal set (`JOB_REQUEST_INVALID`, `JOB_BODY_LIMIT`, `JOB_LOOPBACK_REQUIRED`, `JOB_SAME_ORIGIN_REQUIRED`, `JOB_CAPABILITY_REQUIRED`, `JOB_AUTHORITY_REFUSED`, `JOB_UNKNOWN`, `JOB_CLOSED`, `JOB_GENERATION_STALE`, `JOB_IDEMPOTENCY_CONFLICT`, `JOB_FREEZE_REQUIRED`, `JOB_RECORD_INCOMPLETE`, `JOB_RECORD_MOVED`, `JOB_SOURCE_INVALID`, `JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID`, `JOB_PREVIOUS_BUILD_INVALID`, `JOB_SOURCE_MISMATCH`, `SCENE_REQUIRED`, `SCENE_SOURCE_MISMATCH`, `SCENE_CAMERA_REPORT_INVALID`, `SCENE_CAMERA_REPORT_TOO_LARGE`, `SCENE_CAMERA_MODEL_MISMATCH`, `SCENE_CAMERA_CLIP_MISMATCH`, `SCENE_CAMERA_CLOCK_INVALID`, `SCENE_CAMERA_VIEW_INVALID`, `DIRECTION_TAKE_MISMATCH`, `JOB_SOURCE_UNRETAINABLE`, `JOB_ROOT_REPLACED`, `JOB_PUBLICATION_UNKNOWN`, `JOB_SNAPSHOT_RECLAIMED`, `JOB_ASK_INVALID`, `JOB_ASK_SUPERSEDED`, `JOB_ACT_UNKNOWN`, `JOB_ACT_INVALID`, `JOB_ACT_KIND_DISABLED`, `JOB_ACT_SOURCE_STALE`, `JOB_DISPLAY_MISMATCH`, `JOB_STILL_CAPTURE_FAILED`, `JOB_STILL_CAMERA_NOT_FIXED`, `JOB_STILL_VIEW_UNSUPPORTED`, `JOB_STILL_BINDING_MISMATCH`, `JOB_STILL_UNAVAILABLE`, `JOB_STILL_OUTPUT_FAILED`, `JOB_CURSOR_INVALID`, `JOB_STORAGE_FAILED`, `JOB_AGENT_ISOLATION_HOLE`, `JOB_OPTION_SET_DUPLICATE`, `JOB_CURRENT_RECORD_MISSING`, `JOB_CURRENT_RECORD_MISMATCH`, `JOB_CURRENT_OUTPUT_MISMATCH`, `JOB_CANDIDATE_RECEIPT_MISMATCH`, `JOB_CANDIDATE_TAKE_SEAL_MISMATCH`), each returning bounded safe detail with no arbitrary worker text or private paths.
 
 ### Model-free record mode and source seam
 
@@ -2262,6 +2262,60 @@ and the publication's bytes and source hash are unchanged.
 `source.projectHash` names a record hash only where the publication declares a
 record: a package publication frozen without a `project.json` record has
 `projectHash: null`.
+
+### Candidate package selector
+
+Publish one immutable candidate package per job through the package arm of
+`rig-review/job-api@2` or `rig-review/job-api@3`. Designate the candidate
+directory as the job root and publish its `review.json`.
+
+```text
+{kind: "candidate", receipt: {path, sha256}, setSha256, askId, optionId}
+```
+
+The receipt and take are closed JSON objects with these fields.
+
+```text
+{schema: "rig-create/candidate-preview@1", setSha256, askId, optionId,
+ camera: "keyed" | "unkeyed", model, take, sceneReport: file | null}
+
+{schema: "rig-create/candidate-take@1", clip: "idle", duration, loop,
+ model, sceneReport: file | null}
+```
+
+Each file pointer is `{path, sha256}`, with a literal package-relative path
+and the lowercase SHA-256 of the exact file bytes. The receipt identity fields
+must match the selector. The manifest model path must match the receipt and
+descriptor model paths, and the two digests must match the packed model.
+`manifest.direction` must match the receipt's take path. Create retains the
+producer scene and compose-run provenance privately, bound to the receipt SHA.
+
+A keyed candidate carries the same `sceneReport` pointer in the manifest,
+receipt and descriptor. The sealed Parts report /2 must bind the displayed
+model and contain an `idle` camera track. The descriptor's duration is in
+authored seconds, and its duration and boolean loop must match the track.
+Play checks the compiled timeline separately. A camera-free candidate omits
+the manifest report entry and sets both sealed report fields to `null`. Its
+duration must match the packed idle's declared duration, and `loop` must be
+`true` for the composed idle. Both play through Review's direction workspace.
+
+The option label is `manifest.title`. Opening a link records no choice.
+Pinned comments record time in seconds and are sent through the ordinary
+comment-only act. Its existing `source.selector` carries the option identity.
+The receipt and take enter the source hash and retained seals.
+
+| Refusal | Condition |
+| --- | --- |
+| `JOB_REQUEST_INVALID` | Invalid candidate selector shape |
+| `JOB_CANDIDATE_RECEIPT_MISMATCH` | Missing, unsafe, malformed or incorrectly sealed receipt, or selector identity disagreement |
+| `JOB_CANDIDATE_TAKE_SEAL_MISMATCH` | Missing, unsafe or incorrectly sealed take, or manifest direction path disagreement |
+| `JOB_SOURCE_MISMATCH` | Competing package input or a model path or digest disagreement |
+| `DIRECTION_TAKE_MISMATCH` | Idle clip, duration or loop disagreement |
+| `SCENE_SOURCE_MISMATCH` | Report pointer or camera mode disagreement, or wrong report digest |
+| `SCENE_REQUIRED` | Declared report cannot be read |
+| `SCENE_CAMERA_REPORT_INVALID` | Invalid keyed report or report /1 for a keyed candidate |
+| `SCENE_CAMERA_CLIP_MISMATCH` | Missing idle camera track or compiled clip disagreement |
+| `SCENE_CAMERA_MODEL_MISMATCH` | Report binds a different packed model |
 
 ### Current output selector
 

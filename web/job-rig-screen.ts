@@ -21,7 +21,7 @@ export function jobRigScreenSubject(source: SourceV3, rigDraftVerdict = false): 
   if ('record' in source) return false;
   if((source.selector?.kind==='draft'||source.selector?.kind==='current'&&source.selector.output==='parts')&&source.parts)return true;
   return !!source.model && (source.direction
-    ? source.selector?.kind === 'post' || (source.selector?.kind === 'current' && source.selector.output === 'direction')
+    ? source.selector?.kind === 'post' || source.selector?.kind === 'candidate' || (source.selector?.kind === 'current' && source.selector.output === 'direction')
     : source.selector === null || source.selector.kind === 'rig' || (source.selector.kind === 'current' && source.selector.output === 'rig') || (source.selector.kind === 'draft' && rigDraftVerdict));
 }
 /** Rig and direction verdict subjects still identify which pending asks can accompany the screen. */

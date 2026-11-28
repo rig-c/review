@@ -975,21 +975,34 @@ function drawPlayer(current:RigPlayer):void {
  if(!track||current.current!==track.animation)current.draw();
 }
 
+function candidateTake(name:string):DirectionInspection['take']|undefined {
+ const direction=data?.direction;
+ return direction?.candidateClip===name?direction.take:undefined;
+}
+
 function seekSceneCameraPose(current:RigPlayer,seconds:number):void {
  const track=selectedSceneCamera();
- if(!track){current.seek(seconds);return;}
- const terminal=seconds===track.authoredSeconds;
- const loop=track.loop&&!terminal;
- const sample=boundSceneCamera()!.sample(track.animation,terminal?{endpoint:'terminal'}:{basis:'authored',seconds})!;
- if(current.entry(0)?.loop!==loop)current.play(track.animation,{loop});
- current.seek(sample.compiledSeconds);
+ const take=candidateTake(animation);
+ if(!track&&!take){current.seek(seconds);return;}
+ const terminal=seconds===(track?.authoredSeconds??take?.duration);
+ const loop=(track?.loop??take?.loop??false)&&!terminal;
+ const compiled=track
+  ?boundSceneCamera()!.sample(track.animation,terminal?{endpoint:'terminal'}:{basis:'authored',seconds})!.compiledSeconds
+  :terminal?clipDuration(animation):seconds*current.timeScale;
+ if(current.entry(0)?.loop!==loop)current.play(animation,{loop});
+ current.seek(compiled);
 }
 
 function authoredControlSeek():((seconds:number)=>void)|undefined {
- return selectedSceneCamera()&&player?seconds=>drawRig(()=>seekSceneCameraPose(player!,seconds),'seek'):undefined;
+ return (selectedSceneCamera()||candidateTake(animation))&&player?seconds=>drawRig(()=>{
+  seekSceneCameraPose(player!,seconds);
+  drawPlayer(player!);
+ },'seek'):undefined;
 }
 
 function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): void {
+  const candidateClip=data.direction?.candidateClip;
+  if(candidateClip&&name!==candidateClip)return;
   if(rigDifference){leaveRigDifference();renderLayout();}
   const wasAuthored=!!selectedSceneCamera();
   const oldFrame=boundSceneCamera()?paneFrame('rig'):null;
@@ -998,12 +1011,15 @@ function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): voi
   const runtimeAnimation = assets?.animations.find(item => item.name === name);
   sceneCameraTrack=runtimeAnimation?boundSceneCamera()?.sample(name,{endpoint:'terminal'})??null:null;
   const track=selectedSceneCamera();
-  duration = track?.authoredSeconds??activeScene()?.take.duration??clipDuration(name);
+  const take=candidateTake(name);
+  duration = track?.authoredSeconds??take?.duration??activeScene()?.take.duration??clipDuration(name);
   select('animation-select').value = name;
   // #191: the wind restarts before the clip's first frame is drawn, so the paused stage shows the schedule's t=0 world.
   time = 0; const scene=activeScene();if(!scene)clipMoved(move);
   if (player && runtimeAnimation) {
     restartSetupPlayer(wasAuthored!==!!track);
+    // Camera-free takes step the ordinary player on the authored clock while keeping the compiled loop seam.
+    if(candidateClip)player!.timeScale=!track&&take?runtimeAnimation.duration/take.duration:1;
     if(wasAuthored!==!!track&&inspection){
      const output=paneFrame('rig');
      if(output)viewport.writeCamera('rig',cameraFromSignature(inspection,output));
@@ -1348,20 +1364,24 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith(access.route('/assets/'))) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
     if(data.manifest.sceneReport)sceneCameraBinding=await loadSceneCamera(assets,await inputs.modelDigest());
-    if(data.scene){sceneComposite=bindScenePlates(data.scene,await loadScenePlates(data.scene,assetUrl));input('idle-repeat').checked=data.direction!.take.loop;input('idle-repeat').disabled=true;}
+    const candidateClip=data.direction?.candidateClip;
+    if(candidateClip&&!assets.animations.some(clip=>clip.name===candidateClip&&clip.duration>0))throw new Error('DIRECTION_TAKE_MISMATCH');
+    if(data.scene)sceneComposite=bindScenePlates(data.scene,await loadScenePlates(data.scene,assetUrl));
+    if(data.scene||candidateClip){input('idle-repeat').checked=data.direction!.take.loop;input('idle-repeat').disabled=true;}
     player = createInspectionPlayer(el('rig-root'), assets,sceneComposite?'canvas':undefined,inspectedModel);
     setupChestWorld = readSetupChest(player);
     // Parts inspection is an add-on: a catalog refusal is shown in the explorer and never aborts the rig.
     try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[],inputs.fetch);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
-    animations.disabled = assets.animations.length === 0 || !!data.scene;
+    animations.disabled = assets.animations.length === 0 || !!data.scene || !!candidateClip;
     if(host?.chestLandmarks?.length)updateChestMapping();
-    const names=assets.animations.map(clip=>clip.name),initial=data.scene?.animation??initialIdleAnimation(names,initialPlayerAnimation(names,data.initialAnimation??undefined,initialCheckpoint),!!data.initialAnimation||!!initialCheckpoint?.animation||!!initialCheckpoint?.axis);
+    const names=assets.animations.map(clip=>clip.name),initial=candidateClip??data.scene?.animation??initialIdleAnimation(names,initialPlayerAnimation(names,data.initialAnimation??undefined,initialCheckpoint),!!data.initialAnimation||!!initialCheckpoint?.animation||!!initialCheckpoint?.axis);
     if(initial)chooseAnimation(initial);else drawRig(()=>drawPlayer(player!));
     el('rig-empty').hidden = true; text('player-state', '@rig-c/play · Actual rig');
     configurePartSets();
-    const validAxes = data.manifest.axes.filter(axis => assets?.animations.some(item => item.name === axis.animation));
+    const validAxes = data.manifest.axes.filter(axis => (!candidateClip || axis.animation === candidateClip) &&
+      assets?.animations.some(item => item.name === axis.animation));
     text('axis-state', validAxes.length ? `${validAxes.length} axes` : 'No inspection axes supplied');
     select('axis-select').replaceChildren(); for (const axis of validAxes) select('axis-select').append(option(axis.id, axis.label));
     input('axis-value').disabled = !validAxes.length;
@@ -2502,12 +2522,12 @@ function redrawOverlay(fresh:boolean):void {
  */
 function syncPlayerLoop():void {
  const want=canRepeatIdle();
- if(selectedSceneCamera())return; // A terminal seek may hold a looping take on a non-looping entry until Play seeks to zero.
+ if(selectedSceneCamera()||candidateTake(animation))return; // A terminal seek may hold a looping take on a non-looping entry until Play seeks to zero.
  if(!player?.current||player.composed||player.entry(0)?.loop===want)return;
  try{drawRig(()=>{player!.play(animation,{loop:want});if(!playing)player!.pause();player!.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time);player!.draw();},'seek');}
  catch(error){message(errorText(error),true);}
 }
-function canRepeatIdle():boolean{const track=selectedSceneCamera();if(track)return track.loop;const direction=activeScene();if(direction)return direction.take.loop;return !!player&&!!assets?.animations.some(clip=>clip.name===animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
+function canRepeatIdle():boolean{const track=selectedSceneCamera();if(track)return track.loop;const direction=activeScene();if(direction)return direction.take.loop;if(data?.direction?.candidateClip===animation)return data.direction.take.loop;return !!player&&!!assets?.animations.some(clip=>clip.name===animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
 function renderIdle():void {text('idle-state',canRepeatIdle()?animation&&animation!=='idle'?`${data.manifest?.animations?.find(a=>a.id===animation)?.label??animation} · repeating`:'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
 async function playPreview():Promise<void> {
  if((!player&&!video&&!sequence)||duration<=0)return;
@@ -2617,6 +2637,7 @@ function inspectionTimeLimit(bookmark:InspectionBookmark,info:{duration:number|n
  const selection=bookmark.selection;
  const track=data.manifest.sceneReport&&bookmark.animation&&boundSceneCamera()?.sample(bookmark.animation,{endpoint:'terminal'});
  if(track)return track.authoredSeconds;
+ if(bookmark.animation&&data.direction?.candidateClip===bookmark.animation)return data.direction.take.duration;
  if(activeScene()&&bookmark.animation===data.scene?.animation)return activeScene()!.take.duration;
  const clipDuration=bookmark.animation?assets?.animations.find(a=>a.name===bookmark.animation)?.duration:undefined,referenceId=selection.reference===undefined?select('reference-select').value:selection.reference,isVideo=data.manifest.references.find(r=>r.id===referenceId)?.type==='video';
  return clipDuration===undefined?info.duration??0:isVideo&&info.duration!==null?Math.min(clipDuration,info.duration):clipDuration;

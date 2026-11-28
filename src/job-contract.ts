@@ -542,7 +542,9 @@ export type JobSelector =
   | { readonly kind: 'draft'; readonly id: string }
   | { readonly kind: 'rig'; readonly version: number }
   | { readonly kind: 'post'; readonly version: number; readonly rigVersion: number }
-  | { readonly kind: 'current'; readonly output: 'parts' | 'rig' | 'direction'; readonly record: JobSha256 };
+  | { readonly kind: 'current'; readonly output: 'parts' | 'rig' | 'direction'; readonly record: JobSha256 }
+  | { readonly kind: 'candidate'; readonly receipt: JobFileIdentity; readonly setSha256: JobSha256;
+      readonly askId: JobId; readonly optionId: JobId };
 
 /** The model source keeps required explicit nulls. The daemon derives its binding from
  * validated retained bytes and the actual displayed publication. Clients never
@@ -978,6 +980,8 @@ export const JOB_ERROR_CODES = [
   'JOB_CURRENT_RECORD_MISSING',
   'JOB_CURRENT_RECORD_MISMATCH',
   'JOB_CURRENT_OUTPUT_MISMATCH',
+  'JOB_CANDIDATE_RECEIPT_MISMATCH',
+  'JOB_CANDIDATE_TAKE_SEAL_MISMATCH',
 ] as const;
 export type JobErrorCode = typeof JOB_ERROR_CODES[number];
 

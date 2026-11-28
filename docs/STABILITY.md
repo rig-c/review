@@ -647,6 +647,23 @@ except `project.json` is unchanged on disk (`JOB_ACT_SOURCE_STALE`), and that
 the snapshot is intact, without re-hashing `project.json` on disk. See the
 [current output selector contract](REVIEW_PACKAGE.md#current-output-selector).
 
+### Candidate package selector compatibility
+
+`JobSelector` gains the closed package publication arm
+`{kind: 'candidate', receipt: {path, sha256}, setSha256, askId, optionId}`
+([Review #1341](https://github.com/rig-c/review/issues/1341)). The
+`rig-review/job-api@2`, `rig-review/job-api@3` and `rig-review/act@10`
+schema identifiers stay the same. Older versions refuse the candidate selector
+with `JOB_REQUEST_INVALID`. Consumers reading candidate acts must pin a
+Review version that supports the new selector.
+
+The existing comment act carries candidate identity through `source.selector`.
+The existing send-time freshness check covers the retained candidate seals.
+Standalone direction schema admission, the `current` selector and historical
+act parsing and replay retain their behavior. The additive refusal codes and
+sealed files are specified in the
+[candidate package selector contract](REVIEW_PACKAGE.md#candidate-package-selector).
+
 ### Named export inventory
 
 The backend rig-still extension retains the original twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill` and `JobPartsVerdictAct` at act@5 (`PartsVerdictValue` with pointed `issues` and `words`, while preserving `JobLegacyPartsVerdictValue` at act@2 for historical acts). The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobPartsVerdictAct`, `JobLegacyPartsVerdictValue`, `PartsVerdictValue`, `JobPanelComposition`, `PanelComponent`, `JobRigStill` and `JobRigCapture` exports, [Review #563](https://github.com/rig-c/review/issues/563) adds five type-only exports (`JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`, `JobHostAttachField` and `JobHostAttachFailure`), and [Review #555](https://github.com/rig-c/review/issues/555) adds four type-only interview diagnostic exports (`JobInterviewJson`, `JobInterviewRecord`, `JobInterviewDiagnostic` and `JobInterviewDiagnostics`). [Review #588](https://github.com/rig-c/review/issues/588) activates record mode when `readRecordPublished` and `recordReaderId` are supplied to a host or session (`publicationMode: 'record-and-package'`), serving `rig-review/job-api@3` (`JOB_API_V3_SCHEMA`), `rig-review/act@4` (`JOB_RECORD_ACT_SCHEMA`) and normal owner URL model-free record inspection while keeping default package-only hosts and exact `package-only` `job-ui/<jobId>.json` descriptor bytes at @2 and enforcing `publicationMode` / `recordReaderId` reuse compatibility across ordinary reuse and strict `reuseOnly` attachment. It exports six additional record-mode runtime symbols (`JOB_API_V3_SCHEMA`, `JOB_RECORD_ACT_SCHEMA`, `JOB_RECORD_READER_ID`, `parseRecordAct`, `prepareJobRecordAct` and `prepareJobRecordSource`, for eighteen runtime exports total) and the V3/record type surface listed below. The rig and parts-verdict act revision constants, transport limits and the internal `POST /jobs/<jobId>/host` helper remain internal to their modules. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend) and [Model-free record mode and source seam](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
