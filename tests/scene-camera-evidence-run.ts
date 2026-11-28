@@ -5,11 +5,14 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {PNG} from 'pngjs';
 import {playBuildConditions} from '../src/build.ts';
-import {resolvedCropPath, validateCommentCrop} from '../src/comment-crops.ts';
-import {loadReview} from '../src/manifest.ts';
+import {validateCommentCrop} from '../src/comment-crops.ts';
+import {LOCAL_COMMENTS_SCHEMA, readPackageComments} from '../src/local-comments.ts';
+import {loadReview, type ReviewPackage} from '../src/manifest.ts';
 import {createReviewRequestContext} from '../src/server.ts';
 import type {ReviewSession} from '../src/session.ts';
 import {parseStageComment, type StageComment} from '../src/stage-comment.ts';
+import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
 import {parseBookmark} from '../web/inspection-persistence.ts';
 import {instrumentRigMount} from './helpers/mount-probe.ts';
 import type {readPlayCoverageFrame} from './helpers/play-camera-coverage.ts';
@@ -28,8 +31,19 @@ function arg(name: string, fallback?: string): string {
 const fixture = arg('--fixture', Bun.env.REVIEW_1316_PLAY_FIXTURES);
 const producerPngs = arg('--producer-pngs', Bun.env.REVIEW_1316_PRODUCER);
 const out = arg('--out', 'artifacts/review-1316-scene-camera');
+const dprs: readonly (1 | 2)[] = (() => {
+  const index = Bun.argv.indexOf('--dpr');
+  if (index < 0) return [1, 2];
+  const value = Number(Bun.argv[index + 1]);
+  assert.ok(value === 1 || value === 2, '--dpr requires 1 or 2');
+  return [value];
+})();
 await mkdir(out, {recursive: true});
 const scratch = await mkdtemp(join(tmpdir(), 'review-scene-camera-'));
+
+type Dpr = 1 | 2;
+type SentBarReading = {sendDisabled: boolean; saveState: string | null; stateText: string};
+type PinDistance = {dpr: Dpr; language: 'en' | 'ko'; dx: number; dy: number};
 
 type Reading = {
   time: number; duration: number; compiled: number | null; trackTime: number | null;
@@ -81,6 +95,7 @@ Object.assign(window, {__reviewSceneCamera: {
 `;
 
 const observations: Record<string, unknown>[] = [];
+const pinDistances: PinDistance[] = [];
 const errors: unknown[] = [];
 let page: InputCdpSession | undefined;
 let operation = 'prepare inputs';
@@ -170,23 +185,30 @@ async function gesture(page: InputCdpSession, a: Point, b = a) {
   await settle(page);
 }
 
-function cropReference(screenshot: PNG, pane: Rect, mark: StageComment, crop: PNG) {
-  // DPR 1 and a point give the existing 24 CSS px context on each side. Omit the mark's painted outline.
-  const x = Math.ceil(pane.x + Math.max(0, Math.floor(mark.screen.x - 24)));
-  const y = Math.ceil(pane.y + Math.max(0, Math.floor(mark.screen.y - 24)));
+function artifactPrefix(language: 'en' | 'ko', dpr: Dpr): string {
+  return dpr === 1 ? language : `${language}-dpr${dpr}`;
+}
+
+function cropReference(screenshot: PNG, pane: Rect, mark: StageComment, crop: PNG, dpr: Dpr) {
+  // Point marks keep 24 CSS px context on each side at the active DPR. Omit the mark's painted outline.
+  const x = Math.ceil((pane.x + Math.max(0, Math.floor(mark.screen.x - 24))) * dpr);
+  const y = Math.ceil((pane.y + Math.max(0, Math.floor(mark.screen.y - 24))) * dpr);
   const reference = displayPixels(screenshot, {x, y, width: crop.width, height: crop.height}, crop.width, crop.height);
-  const point = {x: pane.x + mark.screen.x - x, y: pane.y + mark.screen.y - y};
+  const point = {x: (pane.x + mark.screen.x) * dpr - x, y: (pane.y + mark.screen.y) * dpr - y};
+  const radius = 7 * dpr;
   // Mask only the known local annotation. This excludes the label stroke from both rasters.
   for (let py = 0; py < crop.height; py++) for (let px = 0; px < crop.width; px++) {
-    if (Math.abs(px - point.x) > 7 || Math.abs(py - point.y) > 7) continue;
+    if (Math.abs(px - point.x) > radius || Math.abs(py - point.y) > radius) continue;
     const offset = (py * crop.width + px) * 4;
     crop.data.copy(reference.data, offset, offset, offset + 4);
   }
   return reference;
 }
 
-async function checkComment(page: InputCdpSession, language: 'en' | 'ko', stage: Stage, sample: Sample,
-  sourceHash: string, origin: string, stateDir: string) {
+async function checkComment(page: InputCdpSession, language: 'en' | 'ko', dpr: Dpr, stage: Stage, sample: Sample,
+  pkg: ReviewPackage, origin: string, stateDir: string) {
+  const prefix = artifactPrefix(language, dpr);
+  const {sourceHash} = pkg;
   await scrub(page, sample.authored_time);
   // Leave visible margins on all sides for the outside-clip gesture after zoom and pan.
   await click(page, '#zoom-out');
@@ -213,7 +235,7 @@ async function checkComment(page: InputCdpSession, language: 'en' | 'ko', stage:
   assert.ok(box);
   const point = {x: Math.round(box.x + box.width * .5), y: Math.round(box.y + box.height * .5)};
   const screenshot = await page.screenshot();
-  await writeFile(join(out, `${language}-pin-before.png`), screenshot);
+  await writeFile(join(out, `${prefix}-pin-before.png`), screenshot);
   const margin = {x: Math.round(box.x - 8), y: point.y};
   assert.ok(margin.x > captured.pane.x + 1, 'left authored clip margin must be inside the pane');
   await gesture(page, margin);
@@ -231,7 +253,7 @@ async function checkComment(page: InputCdpSession, language: 'en' | 'ko', stage:
   const find = `${key}.comment(${JSON.stringify(summary)})`;
   await wait(page, `!!${find} && !document.querySelector('.stage-comment-composer')`);
   const saved = await page.evaluate<SavedMark>(find);
-  await json(`${language}-pin.json`, saved);
+  await json(`${prefix}-pin.json`, saved);
   const mark = parseStageComment(saved.comment);
   assert.deepEqual([mark.viewport, mark.animation, mark.frame, mark.sourceHash, mark.modelHash, mark.camera.space],
     ['rig', 'idle', null, sourceHash, captured.modelHash, 'world']);
@@ -258,29 +280,58 @@ async function checkComment(page: InputCdpSession, language: 'en' | 'ko', stage:
   near(camera.zoom, inspection.zoom, 1e-8, 'stored inspection zoom');
   assert.ok(mark.slots.some(row => row.slot === 'backdrop') && mark.slots.some(row => row.slot.startsWith('actor:')));
   const bytes = validateCommentCrop(mark);
-  await writeFile(join(out, `${language}-crop.png`), bytes);
+  await writeFile(join(out, `${prefix}-crop.png`), bytes);
   const crop = PNG.sync.read(bytes);
-  assert.ok(crop.width >= 46 && crop.height >= 46, 'native point crop with context');
-  const reference = cropReference(PNG.sync.read(screenshot), captured.pane, mark, crop);
-  await writeFile(join(out, `${language}-crop-screen.png`), PNG.sync.write(reference));
+  assert.ok(crop.width >= 46 * dpr && crop.height >= 46 * dpr, 'native point crop with context');
+  const reference = cropReference(PNG.sync.read(screenshot), captured.pane, mark, crop, dpr);
+  await writeFile(join(out, `${prefix}-crop-screen.png`), PNG.sync.write(reference));
   const {difference, ...comparison} = compareSceneCameraPixels(crop, reference);
-  await writeFile(join(out, `${language}-crop-diff.png`), PNG.sync.write(difference));
-  observations.push({language, mark: saved.id, original, zoomed, panned, captured, comparison});
+  await writeFile(join(out, `${prefix}-crop-diff.png`), PNG.sync.write(difference));
   assert.ok(comparison.stable >= 100 && comparison.matching / comparison.stable >= .98,
     'stored crop must match the held compositor away from antialiasing and the annotation');
 
-  await wait(page, "!document.getElementById('request-changes').disabled");
-  await click(page, '#request-changes');
-  await wait(page, `fetch('/api/session').then(r => r.json()).then(s => s.feedback.some(row => row.id === ${JSON.stringify(saved.id)}))`);
-  const response = await fetch(origin + '/api/session');
-  assert.equal(response.status, 200);
-  const persisted = await response.json() as ReviewSession;
-  assert.equal(persisted.status, 'changes-requested');
-  const row = persisted.feedback.find(entry => entry.id === saved.id);
-  assert.ok(row);
-  const persistedMark = parseStageComment((row.context as {comment?: unknown} | undefined)?.comment);
-  assert.deepEqual(persistedMark, mark, 'the local session preserves the pin and stored evidence');
-  assert.deepEqual(await readFile(resolvedCropPath(mark.crop.path, stateDir)), bytes, 'stored PNG matches the captured bytes');
+  await wait(page, "!!document.getElementById('send-comments') && !document.getElementById('send-comments').hidden && !document.getElementById('send-comments').disabled");
+  await click(page, '#send-comments');
+  await wait(page, "document.getElementById('review-draft-state')?.dataset.saveState === 'saved' && document.getElementById('send-comments').disabled");
+  const sentBar = await page.evaluate<SentBarReading>(`(() => {
+    const send = document.getElementById('send-comments');
+    const state = document.getElementById('review-draft-state');
+    return {
+      sendDisabled: Boolean(send?.disabled),
+      saveState: state?.dataset.saveState ?? null,
+      stateText: state?.textContent?.trim() ?? '',
+    };
+  })()`);
+  assert.deepEqual(sentBar, {
+    sendDisabled: true,
+    saveState: 'saved',
+    stateText: (language === 'ko' ? koCatalog : enCatalog)['Submitted'],
+  });
+  const sessionResponse = await fetch(origin + '/api/session');
+  assert.equal(sessionResponse.status, 200);
+  const untouchedSession = await sessionResponse.json() as ReviewSession;
+  assert.equal(untouchedSession.status, 'pending');
+  assert.deepEqual(untouchedSession.feedback, []);
+  const persisted = await readPackageComments(pkg, stateDir);
+  assert.ok(persisted);
+  assert.equal(persisted.schema, LOCAL_COMMENTS_SCHEMA);
+  assert.equal(persisted.sends.length, 1);
+  const send = persisted.sends[0]!;
+  assert.deepEqual(send.source, {
+    kind: 'package',
+    id: pkg.manifest.id,
+    revision: pkg.manifest.revision,
+    sourceHash,
+    reviewedSource: pkg.reviewedSource,
+  });
+  assert.equal(send.value.comments.length, 1);
+  const persistedComment = send.value.comments[0]!;
+  assert.equal(persistedComment.text, summary);
+  const anchor = persistedComment.anchor;
+  assert.ok(anchor && 'frameStart' in anchor && anchor.id === saved.id);
+  const persistedMark = parseStageComment((anchor.context as {comment?: unknown} | undefined)?.comment);
+  assert.deepEqual(persistedMark, mark, 'the local comment send preserves the pin and stored evidence');
+  assert.deepEqual(validateCommentCrop(persistedMark), bytes, 'stored PNG matches the captured bytes');
 
   await scrub(page, 2);
   await click(page, '#fit');
@@ -298,12 +349,16 @@ async function checkComment(page: InputCdpSession, language: 'en' | 'ko', stage:
     const rect = node.getBoundingClientRect();
     return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
   })()`);
-  near(pin.x, point.x, .75, 'repainted pin x');
-  near(pin.y, point.y, .75, 'repainted pin y');
-  await writeFile(join(out, `${language}-pin-replay.png`), await page.screenshot());
+  const pinDistance: PinDistance = {dpr, language, dx: Math.abs(pin.x - point.x), dy: Math.abs(pin.y - point.y)};
+  pinDistances.push(pinDistance);
+  near(pin.x, point.x, .75, `DPR ${dpr} repainted pin x`);
+  near(pin.y, point.y, .75, `DPR ${dpr} repainted pin y`);
+  observations.push({language, dpr, mark: saved.id, sendId: send.sendId, original, zoomed, panned, captured, comparison, pin, point, pinDistance});
+  await writeFile(join(out, `${prefix}-pin-replay.png`), await page.screenshot());
 }
 
-async function checkPlayFixedFallback(page: InputCdpSession, language: 'en' | 'ko', stage: Stage, sample: Sample, origin: string) {
+async function checkPlayFixedFallback(page: InputCdpSession, language: 'en' | 'ko', dpr: Dpr, stage: Stage, sample: Sample, origin: string) {
+  const prefix = artifactPrefix(language, dpr);
   const state = await scrub(page, sample.authored_time);
   assert.ok(state.canvas);
   const figure = state.slots.map(row => row.slot).filter(slot => slot.startsWith('actor:'));
@@ -316,12 +371,12 @@ async function checkPlayFixedFallback(page: InputCdpSession, language: 'en' | 'k
   const fallback = await mount('pan', 14);
   const pixels = ({png}: PlayCoverageFrame) => PNG.sync.read(Buffer.from(png.split(',')[1]!, 'base64'));
   const evidence = ({png: _png, ...metadata}: PlayCoverageFrame) => ({...metadata, pngSha256: sha256(Buffer.from(_png.split(',')[1]!, 'base64'))});
-  await json(`${language}-play-coverage.json`, {sample: sample.authored_time, fixed: evidence(fixed),
+  await json(`${prefix}-play-coverage.json`, {dpr, sample: sample.authored_time, fixed: evidence(fixed),
     admitted: evidence(admitted), fallback: evidence(fallback)});
   for (const [label, frame] of [['fixed', fixed], ['pan-admitted', admitted], ['pan-fallback', fallback]] as const) {
     assert.deepEqual(frame.backing, [stage.width, stage.height], 'one authored output pixel per backing pixel');
     near(frame.compiledSeconds ?? NaN, sample.compiled_time, 1e-9, label + ' Play phase');
-    await writeFile(join(out, `${language}-play-${label}.png`), Buffer.from(frame.png.split(',')[1]!, 'base64'));
+    await writeFile(join(out, `${prefix}-play-${label}.png`), Buffer.from(frame.png.split(',')[1]!, 'base64'));
   }
   assert.deepEqual([fixed.mode, fixed.refusal, admitted.mode, admitted.refusal, fallback.mode, fallback.refusal],
     ['fixed', null, 'pan', null, 'fixed', 'COMPOSED_BACKDROP_COVERAGE']);
@@ -333,11 +388,11 @@ async function checkPlayFixedFallback(page: InputCdpSession, language: 'en' | 'k
   assert.ok(!pixels(admitted).data.equals(fixedPixels.data), 'the admitted pointer control must visibly move');
   assert.ok(fallbackPixels.data.equals(fixedPixels.data), 'refused Pan paints exactly the held Fixed frame');
 
-  const actual = displayPixels(PNG.sync.read(await page.screenshot()), state.canvas, stage.width, stage.height);
+  const actual = displayPixels(PNG.sync.read(await page.screenshot()), state.canvas, stage.width, stage.height, dpr);
   const {difference, ...comparison} = compareSceneCameraPixels(actual, fallbackPixels);
-  await writeFile(join(out, `${language}-play-fallback-diff.png`), PNG.sync.write(difference));
+  await writeFile(join(out, `${prefix}-play-fallback-diff.png`), PNG.sync.write(difference));
   assert.ok(comparison.stable > 1000 && comparison.matching / comparison.stable >= .98, 'Review must display the Fixed fallback frame');
-  observations.push({operation, phase: sample.authored_time, comparison, margin, excursion, guard, fallback: evidence(fallback)});
+  observations.push({operation, dpr, phase: sample.authored_time, comparison, margin, excursion, guard, fallback: evidence(fallback)});
 }
 
 try {
@@ -362,103 +417,113 @@ try {
   page = await launchCdpSession(join(scratch, 'profile'), {sendDeadlineMs: 30000, browserArgs: ['--renderer-process-limit=2'],
     onEvent(event) {if (event.method === 'Runtime.exceptionThrown') errors.push(event.params);},
   });
-  await page.setViewport(1600, 1040);
-  for (const language of ['en', 'ko'] as const) {
-    let untracked: PNG | undefined;
-    for (const kind of ['direction', 'rig', 'legacy'] as const) {
-      operation = `${language} ${kind} open`;
-      const pkg = await loadReview(roots[kind]);
-      const stateDir = join(scratch, 'state-' + language + '-' + kind);
-      const context = await createReviewRequestContext(pkg, {port: 0, bundle: bundle.outputs[0],
-        stateDir, initialAnimation: kind === 'direction' ? 'idle' : 'shot'});
-      const server = Bun.serve({hostname: '127.0.0.1', port: 0, websocket: context.live.websocket,
-        async fetch(request, listener) {return (await context.handle(request, listener.port, listener))!;},
-      });
-      try {
-        const origin = `http://127.0.0.1:${server.port}`;
-        await page.goto(`${origin}/?lang=${language}`, language);
-        await wait(page, `${key}?.ready()`);
-        assert.equal((await reading(page)).modelHash, input.camera.model_sha256);
-        await page.evaluate("document.querySelector('[data-mode=playback]').click()");
-        await wait(page, "!document.getElementById('scrub').disabled");
-        await click(page, '#fit');
-        if (kind === 'direction') {
-          for (const {row, sample, pixels} of input.frames) {
-            operation = `${language} Parts raster ${row.path}`;
-            const state = await scrub(page, sample.authored_time);
-            assert.deepEqual([state.animation, state.language, state.dpr], ['idle', language, 1]);
-            const geometry = checkGeometry(state, stage, sample, operation);
-            const screenshot = await page.screenshot();
-            await writeFile(join(out, `${language}-review-${row.path}`), screenshot);
-            const actual = displayPixels(PNG.sync.read(screenshot), state.canvas!, stage.width, stage.height);
-            const {difference, ...comparison} = compareSceneCameraPixels(actual, pixels);
-            await writeFile(join(out, `${language}-output-${row.path}`), PNG.sync.write(actual));
-            await writeFile(join(out, `${language}-diff-${row.path}`), PNG.sync.write(difference));
-            observations.push({operation, sourceHash: pkg.sourceHash, state, geometry, comparison});
-            assert.ok(comparison.stable > 1000 && comparison.matching / comparison.stable >= .98, operation);
-          }
-          const idle = input.offGrid.tracks.idle.samples;
-          for (const label of ['named-open-between-rows', 'step-hold', 'step-jump', 'before-seam', 'unwrapped-end']) {
-            operation = `${language} idle ${label}`;
-            const sample = idle[label]!;
-            const state = await scrub(page, sample.authored_time);
-            observations.push({operation, state, geometry: checkGeometry(state, stage, sample, operation)});
-          }
-          operation = `${language} live loop seam`;
-          await scrub(page, 3.9);
-          await page.evaluate(`${key}.armWrap()`);
-          await click(page, '#play');
-          await wait(page, `!!${key}.wrap()`);
-          await click(page, '#play');
-          const wrap: Wrap = await page.evaluate<Wrap>(`${key}.wrap()`);
-          observations.push({operation, wrap});
-          assert.ok(wrap.before.phase && wrap.after.phase && wrap.before.trackTime !== null && wrap.after.trackTime !== null);
-          assert.ok(wrap.before.phase.authored > 3.8 && wrap.after.phase.authored < .2);
-          assert.ok(wrap.after.trackTime > wrap.before.trackTime, 'live repeat keeps the unwrapped compiled transport');
-          const evidenceFrame = input.frames[1]!.sample;
-          operation = `${language} Play Fixed fallback frame`;
-          await checkPlayFixedFallback(page, language, stage, evidenceFrame, origin);
-          operation = `${language} pin/crop/replay on the Fixed frame`;
-          await checkComment(page, language, stage, evidenceFrame, pkg.sourceHash, origin, stateDir);
-        } else {
-          if (kind === 'rig') {
-            for (const label of ['moving-model-key', 'named-open-between-rows', 'unwrapped-end']) {
-              operation = `${language} shot ${label}`;
-              const sample = input.offGrid.tracks.shot.samples[label]!;
-              const state = await scrub(page, sample.authored_time);
-              assert.deepEqual([state.animation, state.duration], ['shot', input.camera.tracks.shot.duration]);
-              observations.push({operation, state, geometry: checkGeometry(state, stage, sample, operation)});
-              assert.ok(Math.abs((state.phase?.compiled ?? NaN) - state.time) > 1e-8, 'compiled clock must differ');
-            }
-          }
-          operation = `${language} ${kind} untracked clip`;
-          await choose(page, 'actor:body_turn');
-          const state = await scrub(page, .5);
-          assert.equal(state.animation, 'actor:body_turn');
-          assert.equal(state.phase, null);
+  for (const dpr of dprs) {
+    await page.setViewport(1600, 1040, dpr);
+    for (const language of ['en', 'ko'] as const) {
+      const prefix = artifactPrefix(language, dpr);
+      let untracked: PNG | undefined;
+      for (const kind of ['direction', 'rig', 'legacy'] as const) {
+        operation = `dpr ${dpr} ${language} ${kind} open`;
+        const pkg = await loadReview(roots[kind]);
+        const stateDir = join(scratch, `state-dpr${dpr}-${language}-${kind}`);
+        const context = await createReviewRequestContext(pkg, {port: 0, bundle: bundle.outputs[0],
+          stateDir, initialAnimation: kind === 'direction' ? 'idle' : 'shot'});
+        const server = Bun.serve({hostname: '127.0.0.1', port: 0, websocket: context.live.websocket,
+          async fetch(request, listener) {return (await context.handle(request, listener.port, listener))!;},
+        });
+        try {
+          const origin = `http://127.0.0.1:${server.port}`;
+          await page.goto(`${origin}/?lang=${language}`, language);
+          await wait(page, `${key}?.ready()`);
+          assert.equal((await reading(page)).modelHash, input.camera.model_sha256);
+          await page.evaluate("document.querySelector('[data-mode=playback]').click()");
+          await wait(page, "!document.getElementById('scrub').disabled");
           await click(page, '#fit');
-          await settle(page);
-          const screenshot = await page.screenshot();
-          await writeFile(join(out, `${language}-${kind}-untracked.png`), screenshot);
-          const pane = (await reading(page)).pane;
-          const capture = displayPixels(PNG.sync.read(screenshot), pane, Math.round(pane.width), Math.round(pane.height));
-          if (kind === 'rig') untracked = capture;
-          else {
-            assert.ok(untracked);
-            assert.deepEqual([capture.width, capture.height], [untracked.width, untracked.height]);
-            assert.ok(capture.data.equals(untracked.data), 'untracked take must paint the model-only view');
+          if (kind === 'direction') {
+            for (const {row, sample, pixels} of input.frames) {
+              operation = `dpr ${dpr} ${language} Parts raster ${row.path}`;
+              const state = await scrub(page, sample.authored_time);
+              assert.deepEqual([state.animation, state.language, state.dpr], ['idle', language, dpr]);
+              const geometry = checkGeometry(state, stage, sample, operation);
+              const screenshot = await page.screenshot();
+              await writeFile(join(out, `${prefix}-review-${row.path}`), screenshot);
+              const actual = displayPixels(PNG.sync.read(screenshot), state.canvas!, stage.width, stage.height, dpr);
+              const {difference, ...comparison} = compareSceneCameraPixels(actual, pixels);
+              await writeFile(join(out, `${prefix}-output-${row.path}`), PNG.sync.write(actual));
+              await writeFile(join(out, `${prefix}-diff-${row.path}`), PNG.sync.write(difference));
+              observations.push({operation, dpr, sourceHash: pkg.sourceHash, state, geometry, comparison});
+              assert.ok(comparison.stable > 1000 && comparison.matching / comparison.stable >= .98, operation);
+            }
+            const idle = input.offGrid.tracks.idle.samples;
+            for (const label of ['named-open-between-rows', 'step-hold', 'step-jump', 'before-seam', 'unwrapped-end']) {
+              operation = `dpr ${dpr} ${language} idle ${label}`;
+              const sample = idle[label]!;
+              const state = await scrub(page, sample.authored_time);
+              observations.push({operation, dpr, state, geometry: checkGeometry(state, stage, sample, operation)});
+            }
+            operation = `dpr ${dpr} ${language} live loop seam`;
+            await scrub(page, 3.9);
+            await page.evaluate(`${key}.armWrap()`);
+            await click(page, '#play');
+            await wait(page, `!!${key}.wrap()`);
+            await click(page, '#play');
+            const wrap: Wrap = await page.evaluate<Wrap>(`${key}.wrap()`);
+            observations.push({operation, dpr, wrap});
+            assert.ok(wrap.before.phase && wrap.after.phase && wrap.before.trackTime !== null && wrap.after.trackTime !== null);
+            assert.ok(wrap.before.phase.authored > 3.8 && wrap.after.phase.authored < .2);
+            assert.ok(wrap.after.trackTime > wrap.before.trackTime, 'live repeat keeps the unwrapped compiled transport');
+            const evidenceFrame = input.frames[1]!.sample;
+            operation = `dpr ${dpr} ${language} Play Fixed fallback frame`;
+            await checkPlayFixedFallback(page, language, dpr, stage, evidenceFrame, origin);
+            operation = `dpr ${dpr} ${language} pin/crop/replay on the Fixed frame`;
+            await checkComment(page, language, dpr, stage, evidenceFrame, pkg, origin, stateDir);
+          } else {
+            if (kind === 'rig') {
+              for (const label of ['moving-model-key', 'named-open-between-rows', 'unwrapped-end']) {
+                operation = `dpr ${dpr} ${language} shot ${label}`;
+                const sample = input.offGrid.tracks.shot.samples[label]!;
+                const state = await scrub(page, sample.authored_time);
+                assert.deepEqual([state.animation, state.duration, state.dpr], ['shot', input.camera.tracks.shot.duration, dpr]);
+                observations.push({operation, dpr, state, geometry: checkGeometry(state, stage, sample, operation)});
+                assert.ok(Math.abs((state.phase?.compiled ?? NaN) - state.time) > 1e-8, 'compiled clock must differ');
+              }
+            }
+            operation = `dpr ${dpr} ${language} ${kind} untracked clip`;
+            await choose(page, 'actor:body_turn');
+            const state = await scrub(page, .5);
+            assert.equal(state.animation, 'actor:body_turn');
+            assert.equal(state.phase, null);
+            assert.equal(state.dpr, dpr);
+            await click(page, '#fit');
+            await settle(page);
+            const screenshot = await page.screenshot();
+            await writeFile(join(out, `${prefix}-${kind}-untracked.png`), screenshot);
+            const pane = (await reading(page)).pane;
+            const capture = displayPixels(PNG.sync.read(screenshot), pane, Math.round(pane.width * dpr), Math.round(pane.height * dpr), dpr);
+            if (kind === 'rig') untracked = capture;
+            else {
+              assert.ok(untracked);
+              assert.deepEqual([capture.width, capture.height], [untracked.width, untracked.height]);
+              assert.ok(capture.data.equals(untracked.data), 'untracked take must paint the model-only view');
+            }
+            observations.push({operation, dpr, sourceHash: pkg.sourceHash, state});
           }
-          observations.push({operation, sourceHash: pkg.sourceHash, state});
+        } finally {
+          context.stop();
+          server.stop(true);
         }
-      } finally {
-        context.stop();
-        server.stop(true);
+        await json('report.json', {dprs, pinDistances, observations, errors});
       }
-      await json('report.json', {observations, errors});
     }
   }
   assert.deepEqual(errors, []);
-  console.log('SCENE_CAMERA_BROWSER_PASS', JSON.stringify({languages: 2, producerRasters: input.frames.length * 2, observations: observations.length}));
+  console.log('SCENE_CAMERA_BROWSER_PASS', JSON.stringify({
+    dprs,
+    languages: 2,
+    producerRasters: input.frames.length * 2 * dprs.length,
+    observations: observations.length,
+    pinDistances,
+  }));
 } catch (error) {
   await json('failure.json', {operation, error: String(error), observations, errors,
     body: await page?.evaluate('document.body.innerText').catch(() => null)});

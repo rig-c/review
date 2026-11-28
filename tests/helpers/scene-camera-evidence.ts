@@ -107,11 +107,11 @@ export function near(actual: number, expected: number, tolerance: number, label:
 }
 
 /** Read the compositor at the centre of each authored output pixel. */
-export function displayPixels(image: PNG, rect: Rect, width: number, height: number): PNG {
+export function displayPixels(image: PNG, rect: Rect, width: number, height: number, scale = 1): PNG {
   const output = new PNG({width, height});
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-    const sx = Math.floor(rect.x + (x + 0.5) * rect.width / width);
-    const sy = Math.floor(rect.y + (y + 0.5) * rect.height / height);
+    const sx = Math.floor((rect.x + (x + 0.5) * rect.width / width) * scale);
+    const sy = Math.floor((rect.y + (y + 0.5) * rect.height / height) * scale);
     assert.ok(sx >= 0 && sy >= 0 && sx < image.width && sy < image.height, 'outside compositor capture');
     const offset = (sy * image.width + sx) * 4;
     image.data.copy(output.data, (y * width + x) * 4, offset, offset + 4);
